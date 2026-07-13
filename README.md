@@ -1,6 +1,6 @@
 # dirtree
 
-`dirtree` is a terminal directory-tree browser: progressive-disclosure navigation, a background-indexed fuzzy-finder jump mode, and a syntax-highlighted file preview pane, all in a single dependency-free binary.
+`dirtree` is a terminal directory-tree browser: progressive-disclosure navigation, a background-indexed fuzzy-finder jump mode, a syntax-highlighted file preview pane, and live refresh as files change on disk, all in a single dependency-free binary.
 
 The spec was derived from a working Python/curses prototype (iterated on directly in a terminal, feature by feature, against real usage) and generalized so it can be reimplemented in any language, with no assumption of a particular runtime. The implementation here is Go, using `tcell` for terminal rendering — see "Language and Dependencies" in `CLAUDE.md` for the rationale.
 
@@ -29,14 +29,15 @@ This installs from the [`nitti/homebrew-dirtree`](https://github.com/nitti/homeb
 - [`specs/SPEC.md`](specs/SPEC.md) — full behavioral specification: CLI, data model, traversal/ignore rules, navigation, background indexing, jump mode, preview pane, layout, rendering conventions, keybindings, resize handling.
 - [`specs/TESTING.md`](specs/TESTING.md) — acceptance criteria, expressed as test cases the implementation must satisfy.
 - `cmd/dirtree/` — CLI entry point (argument parsing, path resolution, startup error handling, `--version`).
-- `internal/tree/` — the lazily-loaded node model, flattening, and navigation semantics (spec §2, §5).
+- `internal/tree/` — the lazily-loaded node model, flattening, navigation semantics, and the refresh/merge logic behind live updates (spec §2, §5, §6a).
 - `internal/ignore/` — the dependency-free `.gitignore`/`.dirtreeignore` pattern subset (spec §3).
-- `internal/index/` — the background full-tree index used by jump mode (spec §6).
+- `internal/index/` — the background full-tree index used by jump mode, including live rebuilds (spec §6, §6a).
 - `internal/match/` — the shared substring/glob query-matching rule (spec §7).
 - `internal/preview/` — file reading, best-effort syntax highlighting, and line wrapping for the preview pane (spec §8).
 - `internal/layout/` — the pure split-view/popup layout math (spec §9).
 - `internal/spinner/` — the delayed-loading-indicator timing/frame logic (spec §10).
-- `internal/ui/` — the tcell-backed terminal-rendering layer (draw loop, input handling, resize polling); not unit-tested, verified manually in a real terminal.
+- `internal/watch/` — the `fsnotify`-backed, debounced filesystem-change watcher driving live refresh (spec §6a); OS-facility-adjacent like `internal/ui`, verified manually.
+- `internal/ui/` — the tcell-backed terminal-rendering layer (draw loop, input handling, resize polling, wiring the watcher to tree/index refresh); not unit-tested, verified manually in a real terminal.
 - `.goreleaser.yaml` / `.github/workflows/release.yml` — cross-compiles and publishes a GitHub Release plus an updated Homebrew cask on every `vX.Y.Z` tag push.
 
 ## Build and run
@@ -68,7 +69,7 @@ This cross-compiles `darwin`/`linux` × `amd64`/`arm64` binaries, attaches them 
 
 ## Status
 
-Implemented in Go with `tcell`. The pure-logic layers (`internal/tree`, `internal/ignore`, `internal/index`, `internal/match`, `internal/preview`, `internal/layout`, `internal/spinner`) have automated test coverage per `specs/TESTING.md`. The `internal/ui` terminal-rendering layer has been verified by building the binary and exercising the CLI's error path (non-directory argument); full interactive verification (navigation, jump mode, preview split/popup, resize behavior, escape responsiveness) inside a real terminal/multiplexer session is still outstanding.
+Implemented in Go with `tcell`. The pure-logic layers (`internal/tree`, `internal/ignore`, `internal/index`, `internal/match`, `internal/preview`, `internal/layout`, `internal/spinner`) have automated test coverage per `specs/TESTING.md`, including the live-refresh merge/fallback logic in `internal/tree` and `internal/index`. The `internal/ui` terminal-rendering layer has been verified by building the binary and exercising the CLI's error path (non-directory argument); full interactive verification (navigation, jump mode, preview split/popup, resize behavior, escape responsiveness, and live refresh as files change on disk) inside a real terminal/multiplexer session is still outstanding.
 
 ## Non-negotiable constraints
 

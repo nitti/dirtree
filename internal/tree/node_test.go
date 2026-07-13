@@ -448,3 +448,125 @@ func TestRevealPathOutsideRoot(t *testing.T) {
 		t.Fatal("expected reveal of path outside root to return nil")
 	}
 }
+
+// --- Live refresh (§6a) ---
+
+func TestRefreshTreeAddsNewEntry(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+	if findChild(root, "new.txt") != nil {
+		t.Fatal("fixture should not yet contain new.txt")
+	}
+	must(t, os.WriteFile(filepath.Join(rootPath, "new.txt"), []byte("z"), 0o644))
+
+	RefreshTree(root, rootPath, nil)
+
+	if findChild(root, "new.txt") == nil {
+		t.Fatal("expected refresh to pick up newly-created new.txt")
+	}
+}
+
+func TestRefreshTreeRemovesDeletedEntry(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+	must(t, os.Remove(filepath.Join(rootPath, "a.txt")))
+
+	RefreshTree(root, rootPath, nil)
+
+	if findChild(root, "a.txt") != nil {
+		t.Fatal("expected refresh to drop deleted a.txt")
+	}
+}
+
+func TestRefreshTreePreservesIdentityAndExpandState(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+	bDir := findChild(root, "B_dir")
+	bDir.Expand(rootPath, nil)
+	nested := findChild(bDir, "nested.txt")
+
+	// unrelated change elsewhere in the tree
+	must(t, os.WriteFile(filepath.Join(rootPath, "new.txt"), []byte("z"), 0o644))
+	RefreshTree(root, rootPath, nil)
+
+	refreshedB := findChild(root, "B_dir")
+	if refreshedB != bDir {
+		t.Fatal("expected B_dir node identity to be preserved across refresh")
+	}
+	if !refreshedB.Expanded {
+		t.Fatal("expected B_dir to remain expanded across refresh")
+	}
+	if findChild(refreshedB, "nested.txt") != nested {
+		t.Fatal("expected nested.txt node identity to be preserved across refresh")
+	}
+}
+
+func TestRefreshTreeOnlyTouchesLoadedDirectories(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+	aDir := findChild(root, "a_dir") // never expanded/loaded
+
+	must(t, os.RemoveAll(filepath.Join(rootPath, "a_dir", "deep")))
+	RefreshTree(root, rootPath, nil)
+
+	if aDir.Loaded() {
+		t.Fatal("expected never-expanded a_dir to remain unloaded after refresh")
+	}
+}
+
+func TestNearestSurvivingReturnsSelfWhenPresent(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+	target := findChild(root, "a.txt")
+	if got := NearestSurviving(target); got != target {
+		t.Fatal("expected NearestSurviving to return the node itself when still present")
+	}
+}
+
+func TestNearestSurvivingFallsBackToParentWhenDeleted(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+	bDir := findChild(root, "B_dir")
+	bDir.Expand(rootPath, nil)
+	nested := findChild(bDir, "nested.txt")
+
+	must(t, os.Remove(filepath.Join(rootPath, "B_dir", "nested.txt")))
+	RefreshTree(root, rootPath, nil)
+
+	got := NearestSurviving(nested)
+	if got != bDir {
+		t.Fatalf("expected fallback to surviving parent B_dir, got %v", got)
+	}
+}
+
+func TestNearestSurvivingFallsBackToRootWhenWholeSubtreeDeleted(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+	aDir := findChild(root, "a_dir")
+	aDir.Expand(rootPath, nil)
+	deep := findChild(aDir, "deep")
+	deep.Expand(rootPath, nil)
+	leaf := findChild(deep, "leaf.txt")
+
+	must(t, os.RemoveAll(filepath.Join(rootPath, "a_dir")))
+	RefreshTree(root, rootPath, nil)
+
+	got := NearestSurviving(leaf)
+	if got != root {
+		t.Fatalf("expected fallback all the way to root, got %v", got)
+	}
+}
+
+func TestRefreshTreeIgnoresIgnoredEntries(t *testing.T) {
+	rootPath := buildFixture(t)
+	must(t, os.WriteFile(filepath.Join(rootPath, ".gitignore"), []byte("*.log\n"), 0o644))
+	ig := ignore.LoadAll(rootPath)
+	root := NewRoot(rootPath, ig)
+
+	must(t, os.WriteFile(filepath.Join(rootPath, "new.log"), []byte("z"), 0o644))
+	RefreshTree(root, rootPath, ig)
+
+	if findChild(root, "new.log") != nil {
+		t.Fatal("expected refresh to respect .gitignore for newly-created entries")
+	}
+}

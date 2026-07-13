@@ -121,6 +121,28 @@ func TestIndexSymlinkCycleTerminates(t *testing.T) {
 	}
 }
 
+func TestIndexRebuildPicksUpNewEntry(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o644))
+
+	idx := Start(root, nil)
+	waitDone(t, idx)
+
+	must(t, os.WriteFile(filepath.Join(root, "b.txt"), []byte("x"), 0o644))
+	idx.Rebuild(root, nil)
+	entries := waitDone(t, idx)
+
+	found := false
+	for _, e := range entries {
+		if e.RelPath == "b.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected Rebuild to pick up newly-created b.txt")
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
