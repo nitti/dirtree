@@ -8,7 +8,7 @@
 
 ## Language and Dependencies
 
-- No language has been chosen yet. Go and Rust are the natural fits (single static binary, mature terminal UI libraries), but the choice is open. Once made, record the choice and rationale in this file.
+- **Language: Go.** Terminal library: `tcell` (low-level cell-drawing API), chosen over higher-level Elm-architecture frameworks like `bubbletea` because it maps directly onto the spec's "recompute layout every frame from raw terminal dimensions" model (§11) rather than fighting it. Rationale: `CGO_ENABLED=0` gives a trivially reproducible static binary and the easiest cross-compile story for the "pulled into a container image by version" use case in Project Context; goroutines + channels map directly onto §6's background-index requirement (no shared mutable state between the UI and the indexer, enforced by simply never passing node pointers into the indexer goroutine); the `.gitignore` subset (§3) and shell-glob matching (§7) are small enough to hand-roll or cover with `path/filepath.Match`, needing no extra dependency.
 - **No required runtime dependencies**, ever. This is the whole point of generalizing the tool out of a Python prototype that needed `pygments`/`pathspec`. A statically-linked library compiled into the binary is fine (e.g. a vendored terminal-UI crate/module); a dependency that must be present on the target system at runtime (an interpreter, a dynamically loaded library, a package fetched at startup) is not acceptable.
 - Prefer the standard library or a small number of well-maintained, statically-linkable libraries for terminal handling over hand-rolling raw terminal escape sequences, unless a language's ecosystem genuinely lacks a good option.
 
