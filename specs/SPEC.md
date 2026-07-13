@@ -85,6 +85,22 @@ Jump mode (§7) needs to search the *entire* tree regardless of what's currently
 - The index-building process must not share mutable state with the interactive tree's node objects — it operates on raw paths only, so no locking is required between the UI thread/task and the indexing thread/task. (This is a correctness requirement, not a style preference: the prototype found that reusing the same mutable node objects across threads was a real data-race hazard and redesigned around it. Whatever concurrency model the implementation language provides — OS threads, green threads, async tasks — the two must not touch each other's mutable state.)
 - Track whether indexing has completed and how much time has elapsed since it started; both are needed for the delayed-loading-indicator behavior in §7 and §10.
 
+## 6a. Live refresh on filesystem changes
+
+The tree, and the background index (§6), must stay current as files and directories are added, moved, or deleted on disk underneath the running session — the user should not have to restart `dirtree` to see a change made by another process (an editor, `git checkout`, a build, etc.).
+
+- The implementation must watch, at minimum, every directory that has already been loaded (§2's lazy-loading sense: the root at startup, plus any directory the user has expanded or that jump mode has revealed since). A directory never visited does not need to be watched — it will simply reflect current disk state whenever it is eventually loaded, same as today.
+- Watching must not block or slow down interactive use; detected changes are applied asynchronously, the same way the background index (§6) is built without blocking the UI.
+- Because change notifications can arrive in rapid bursts (an editor's save-via-temp-file-and-rename is often 2-3 raw events; a multi-file operation like `git checkout` can be dozens), the implementation should coalesce a burst into a single refresh rather than re-scanning once per raw event — a short debounce window (on the order of a few hundred milliseconds) is sufficient and keeps this from being a performance or flicker problem on active directories.
+- **Applying a refresh:** re-list each already-loaded directory's contents and merge the result into the existing tree by path, rather than discarding and rebuilding it wholesale:
+  - An entry whose path is unchanged (same path, still the same kind — file vs. directory) keeps its existing node identity, and therefore keeps its expanded/collapsed state and any already-loaded subtree, exactly as if it had never been touched.
+  - An entry that no longer exists on disk is removed from the tree.
+  - A newly-appeared entry is added as a new node (collapsed if a directory, per §2's default), sorted into place per §4.
+  - This mirrors §5's existing "keep the previously-focused node selected by identity, not by index" rule — a refresh must not disturb selection or disclosure state for anything that didn't actually change.
+- **Selection after a refresh:** if the currently-selected node was deleted by the change, selection falls back to the nearest ancestor still present in the tree (walking up from the deleted node); the root is always present, so this always terminates somewhere visible.
+- The background index (§6) must eventually reflect the same change (so jump mode doesn't keep offering deleted paths or miss new ones). Re-triggering an index rebuild after a live-refresh is treated exactly like the initial index build for purposes of the delayed-loading-indicator (§10): a fast rebuild stays invisible, a slow one on a very large tree shows the same spinner/"indexing…" treatment a fresh build would.
+- This is best-effort: if the underlying OS change-notification facility is unavailable or exhausted (e.g. a platform inotify-instance/watch-count limit), the implementation must degrade gracefully — continue running with the tree simply not auto-refreshing — rather than failing startup or crashing.
+
 ## 7. Jump mode (fuzzy finder)
 
 Triggered by a dedicated key (`/` in the prototype) from the main tree view. While active:

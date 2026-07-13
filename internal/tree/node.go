@@ -7,6 +7,7 @@ package tree
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -108,6 +109,119 @@ func (n *Node) LoadChildren(rootPath string, ignorer Ignorer) {
 
 	sortEntries(children)
 	n.Children = children
+}
+
+// Loaded reports whether n's children have been listed at least once
+// (SPEC.md §2's lazy-loading rule), i.e. whether n is a candidate for
+// RefreshTree to re-list.
+func (n *Node) Loaded() bool {
+	return n.loaded
+}
+
+// RefreshTree re-lists every directory in the tree rooted at n that has
+// already been loaded at least once, merging each fresh listing into the
+// existing Children slice so that an entry whose path is unchanged keeps
+// its original Node object — and therefore its expanded state and any
+// already-loaded subtree — rather than being rebuilt from scratch. This
+// is what lets the UI live-refresh as files are added, moved, or removed
+// on disk (SPEC.md §6a) while preserving in-place selection and
+// disclosure state the same way expand/collapse already does (§5's
+// "keep it selected by identity" rule). Directories never visited by the
+// user are left alone: they'll pick up current disk state whenever they
+// are eventually expanded, same as today.
+func RefreshTree(n *Node, rootPath string, ignorer Ignorer) {
+	if !n.IsDir || !n.loaded {
+		return
+	}
+	n.refreshChildren(rootPath, ignorer)
+	for _, c := range n.Children {
+		RefreshTree(c, rootPath, ignorer)
+	}
+}
+
+// refreshChildren re-lists n's directory and merges the result into
+// n.Children by path: an entry present both before and after (with the
+// same directory-ness) reuses its existing *Node; anything else is a
+// fresh Node. Entries no longer present on disk are dropped.
+func (n *Node) refreshChildren(rootPath string, ignorer Ignorer) {
+	entries, err := os.ReadDir(n.Path)
+	if err != nil {
+		n.Err = err.Error()
+		n.Children = nil
+		return
+	}
+
+	if ignorer == nil {
+		ignorer = noopIgnorer{}
+	}
+
+	existing := make(map[string]*Node, len(n.Children))
+	for _, c := range n.Children {
+		existing[c.Path] = c
+	}
+
+	children := make([]*Node, 0, len(entries))
+	for _, e := range entries {
+		if e.Name() == ".git" {
+			continue
+		}
+		childPath := filepath.Join(n.Path, e.Name())
+		isDir := e.IsDir()
+		if !isDir && e.Type()&os.ModeSymlink != 0 {
+			if info, statErr := os.Stat(childPath); statErr == nil {
+				isDir = info.IsDir()
+			}
+		}
+		rel := relSlashPath(rootPath, childPath)
+		if ignorer.Match(rel, isDir) {
+			continue
+		}
+		if old, ok := existing[childPath]; ok && old.IsDir == isDir {
+			children = append(children, old)
+			continue
+		}
+		children = append(children, &Node{
+			Path:   childPath,
+			Name:   e.Name(),
+			Depth:  n.Depth + 1,
+			Parent: n,
+			IsDir:  isDir,
+		})
+	}
+
+	sortEntries(children)
+	n.Children = children
+	n.Err = ""
+}
+
+// stillInTree reports whether n is still reachable from the tree
+// structure, i.e. still present in its parent's current Children slice
+// (recursively up to the root, which is always present). A node dropped
+// by refreshChildren remains a valid Go object (anything still holding a
+// pointer to it, like the UI's current selection, won't crash) but stops
+// satisfying this check.
+func stillInTree(n *Node) bool {
+	if n.Parent == nil {
+		return true
+	}
+	if !slices.Contains(n.Parent.Children, n) {
+		return false
+	}
+	return stillInTree(n.Parent)
+}
+
+// NearestSurviving walks up from n through its ancestors, returning the
+// first one still reachable in the tree. Used after RefreshTree to
+// re-anchor the UI's selection when the previously-selected node was
+// deleted out from under it (SPEC.md §6a). The root is always reachable,
+// so this never returns nil.
+func NearestSurviving(n *Node) *Node {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if stillInTree(cur) {
+			return cur
+		}
+	}
+	return nil
 }
 
 // relSlashPath renders target relative to root as a POSIX slash path,

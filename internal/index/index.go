@@ -50,6 +50,29 @@ func Start(rootPath string, ignorer Ignorer) *Index {
 	return idx
 }
 
+// Rebuild re-walks rootPath in the background and atomically replaces
+// the index's entries once the walk completes, for the live-refresh
+// behavior in SPEC.md §6a: when the tree on disk changes, jump mode's
+// results should eventually reflect it too. It resets done/startTime the
+// same way Start does, so the existing delayed-loading-indicator logic
+// (SPEC.md §10) applies unchanged — a fast rebuild stays invisible, a
+// slow one (re-walking a huge tree) shows the same spinner/"indexing…"
+// state a fresh Start would.
+func (idx *Index) Rebuild(rootPath string, ignorer Ignorer) {
+	idx.mu.Lock()
+	idx.done = false
+	idx.startTime = time.Now()
+	idx.mu.Unlock()
+
+	go func() {
+		entries := build(rootPath, ignorer)
+		idx.mu.Lock()
+		idx.entries = entries
+		idx.done = true
+		idx.mu.Unlock()
+	}()
+}
+
 // Snapshot returns the current entries (nil if not yet done) and
 // whether building has completed.
 func (idx *Index) Snapshot() ([]Entry, bool) {

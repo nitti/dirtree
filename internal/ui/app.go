@@ -18,6 +18,7 @@ import (
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/tree"
+	"github.com/nitti/dirtree/internal/watch"
 )
 
 type mode int
@@ -32,6 +33,7 @@ const (
 	resizePollInterval = 100 * time.Millisecond
 	spinnerThreshold   = 250 * time.Millisecond
 	spinnerFPS         = 10.0
+	watchDebounce      = 300 * time.Millisecond
 	previewByteCap     = preview.DefaultByteCap
 	previewMaxWidth    = 120
 	minPreviewWidth    = 40
@@ -46,6 +48,7 @@ type App struct {
 	root     *tree.Node
 	ignorer  *ignore.Multi
 	idx      *index.Index
+	watcher  *watch.Watcher
 
 	mode     mode
 	selected *tree.Node
@@ -77,13 +80,57 @@ func New(rootPath string) *App {
 	root := tree.NewRoot(rootPath, ignorer)
 	idx := index.Start(rootPath, ignorer)
 
-	return &App{
+	// Live refresh (SPEC.md §6a) is best-effort: if the OS notification
+	// facility can't be initialized (e.g. inotify watch-limit exhausted),
+	// the app still runs, it just won't auto-refresh.
+	watcher, _ := watch.New(watchDebounce)
+
+	a := &App{
 		rootPath: rootPath,
 		root:     root,
 		ignorer:  ignorer,
 		idx:      idx,
+		watcher:  watcher,
 		selected: root,
 	}
+	a.syncWatches()
+	return a
+}
+
+// syncWatches adds an fs watch for every directory in the tree that has
+// been loaded at least once (i.e. every directory whose current contents
+// the UI could plausibly display), so RefreshTree's re-listing target
+// set matches what's actually being watched. Idempotent and cheap to
+// call after any action that might have loaded a new directory (expand,
+// jump-to reveal).
+func (a *App) syncWatches() {
+	if a.watcher == nil {
+		return
+	}
+	var walk func(n *tree.Node)
+	walk = func(n *tree.Node) {
+		if !n.IsDir || !n.Loaded() {
+			return
+		}
+		a.watcher.Add(n.Path)
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(a.root)
+}
+
+// handleFSChange reacts to a debounced filesystem-change signal from the
+// watcher (SPEC.md §6a): re-list every already-loaded directory, merging
+// by path so unaffected nodes keep their identity/expand state, re-anchor
+// the selection if the previously-selected node was deleted, kick off a
+// background index rebuild so jump mode eventually reflects the change
+// too, and pick up watches on any newly-loaded directories.
+func (a *App) handleFSChange() {
+	tree.RefreshTree(a.root, a.rootPath, a.ignorer)
+	a.selected = tree.NearestSurviving(a.selected)
+	a.idx.Rebuild(a.rootPath, a.ignorer)
+	a.syncWatches()
 }
 
 // Run configures the terminal and drives the main loop until the user
@@ -107,6 +154,10 @@ func (a *App) Run() error {
 
 	a.screen = screen
 
+	if a.watcher != nil {
+		defer a.watcher.Close()
+	}
+
 	events := make(chan tcell.Event, 16)
 	go func() {
 		for {
@@ -121,6 +172,11 @@ func (a *App) Run() error {
 	ticker := time.NewTicker(resizePollInterval)
 	defer ticker.Stop()
 
+	var watchEvents <-chan struct{}
+	if a.watcher != nil {
+		watchEvents = a.watcher.Events
+	}
+
 	a.draw()
 	for !a.quit {
 		select {
@@ -132,7 +188,19 @@ func (a *App) Run() error {
 				a.handleKey(e)
 			}
 			a.draw()
+		case <-watchEvents:
+			a.handleFSChange()
+			if a.mode == modeJump {
+				a.recomputeJumpMatches()
+			}
+			a.draw()
 		case <-ticker.C:
+			// Also catches the background index rebuild (kicked off by
+			// handleFSChange) finishing while jump mode is still open
+			// with an unchanged query, so matches don't go stale.
+			if a.mode == modeJump {
+				a.recomputeJumpMatches()
+			}
 			a.draw()
 		}
 	}
@@ -161,6 +229,7 @@ func (a *App) handleTreeKey(ev *tcell.EventKey) {
 		a.selected = flat[tree.MoveSelection(idx, 1, len(flat))]
 	case ev.Key() == tcell.KeyRight:
 		a.selected = a.selected.MoveRight(a.rootPath, a.ignorer)
+		a.syncWatches()
 	case ev.Key() == tcell.KeyLeft:
 		a.selected = a.selected.MoveLeft()
 	case ev.Rune() == ' ':
@@ -210,6 +279,7 @@ func (a *App) handleJumpKey(ev *tcell.EventKey) {
 			target := a.jumpMatches[a.jumpSelected]
 			if n := tree.RevealPath(a.root, a.rootPath, target.AbsPath, a.ignorer); n != nil {
 				a.selected = n
+				a.syncWatches()
 			}
 		}
 		a.mode = modeTree

@@ -65,6 +65,18 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - The index respects the same `.gitignore` exclusion rules as interactive listing.
 - A symlink cycle does not cause infinite recursion or non-termination (construct a symlink pointing back to an ancestor and confirm the walk still terminates and doesn't duplicate/loop that subtree).
 
+## Live refresh on filesystem changes
+
+- Refreshing after a new file/directory appears on disk adds it to the corresponding loaded node's children.
+- Refreshing after a file/directory is deleted removes it from the corresponding loaded node's children.
+- Refreshing an unrelated part of the tree preserves an already-expanded directory's node identity, its expanded state, and its own already-loaded children (verified by object identity, not just equal content) — a refresh must not disturb state for anything that didn't change.
+- Refreshing does not touch (and does not mark loaded) a directory that has never been expanded/loaded.
+- Refreshing respects the same `.gitignore`/`.dirtreeignore` exclusion rules as initial listing for newly-appeared entries.
+- If the currently-selected node still exists after a refresh, the selection-fallback helper returns that same node.
+- If the currently-selected node was deleted by the change, the selection-fallback helper returns its nearest surviving ancestor.
+- If an entire subtree containing the selection was deleted, the selection-fallback helper walks all the way up to the root (which always survives).
+- The background index rebuilds and reflects a newly-created path once the rebuild completes.
+
 ## Path display and reveal
 
 - `relative_display_path` renders a path relative to the root as a POSIX (forward-slash) string regardless of host path-separator conventions.
