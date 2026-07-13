@@ -1,0 +1,2 @@
+# Populate once a language/toolchain is chosen (e.g. Go's /bin, /dist;
+# Rust's /target). Nothing to ignore yet at spec-only stage.
