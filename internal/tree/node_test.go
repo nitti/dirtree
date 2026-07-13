@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nitti/dirtree/internal/ignore"
 )
 
 // buildFixture creates a small directory tree under a temp dir:
@@ -370,6 +372,22 @@ func TestGitDirNeverListed(t *testing.T) {
 	root := NewRoot(rootPath, nil)
 	if findChild(root, ".git") != nil {
 		t.Fatal("expected .git to never be listed")
+	}
+}
+
+func TestDirtreeIgnoreExcludesAcrossWholeApp(t *testing.T) {
+	rootPath := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(rootPath, "secret.env"), []byte("x"), 0o644))
+	must(t, os.WriteFile(filepath.Join(rootPath, "normal.txt"), []byte("x"), 0o644))
+	must(t, os.WriteFile(filepath.Join(rootPath, ".dirtreeignore"), []byte("*.env\n"), 0o644))
+
+	matcher := ignore.LoadAll(rootPath)
+	root := NewRoot(rootPath, matcher)
+	if findChild(root, "secret.env") != nil {
+		t.Fatal("expected .dirtreeignore pattern to exclude secret.env from the tree listing")
+	}
+	if findChild(root, "normal.txt") == nil {
+		t.Fatal("expected non-matching file to still be listed")
 	}
 }
 

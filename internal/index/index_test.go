@@ -90,6 +90,22 @@ func TestIndexRespectsGitignore(t *testing.T) {
 	}
 }
 
+func TestIndexRespectsDirtreeIgnore(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(root, ".dirtreeignore"), []byte("*.secret\n"), 0o644))
+	must(t, os.WriteFile(filepath.Join(root, "a.secret"), []byte("x"), 0o644))
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o644))
+
+	m := ignore.LoadAll(root)
+	idx := Start(root, m)
+	entries := waitDone(t, idx)
+	for _, e := range entries {
+		if e.RelPath == "a.secret" {
+			t.Fatal("expected .dirtreeignore'd file excluded from index")
+		}
+	}
+}
+
 func TestIndexSymlinkCycleTerminates(t *testing.T) {
 	root := t.TempDir()
 	must(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
