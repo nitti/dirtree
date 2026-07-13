@@ -1,0 +1,54 @@
+version: 2
+
+project_name: dirtree
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: dirtree
+    main: ./cmd/dirtree
+    binary: dirtree
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: dirtree
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - specs/SPEC.md
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^test:"
+      - "^ci:"
+      - "^docs:"
+
+homebrew_casks:
+  - name: dirtree
+    binaries:
+      - dirtree
+    repository:
+      owner: nitti
+      name: homebrew-dirtree
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/nitti/dirtree"
+    description: "Terminal directory-tree browser: progressive-disclosure navigation, fuzzy-finder jump mode, syntax-highlighted preview"

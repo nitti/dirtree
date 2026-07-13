@@ -10,7 +10,20 @@ import (
 	"github.com/nitti/dirtree/internal/ui"
 )
 
+// version, commit, and date are set via -ldflags at release build time
+// (see .goreleaser.yaml); they stay "dev" for a plain `go build`.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Printf("dirtree %s (commit %s, built %s)\n", version, commit, date)
+		return
+	}
+
 	path := "."
 	if len(os.Args) > 1 {
 		path = os.Args[1]

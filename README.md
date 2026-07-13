@@ -10,11 +10,25 @@ The spec was derived from a working Python/curses prototype (iterated on directl
 - **Cross-platform terminal UI** that behaves correctly inside terminal multiplexers (Zellij, tmux) that don't always deliver resize signals reliably.
 - **Usable as a released artifact** other projects can pull in by version (e.g. a container image build fetching a pinned release binary), not something that only lives copy-pasted inside one repo.
 
+## Installation
+
+**macOS or Linux, via Homebrew:**
+
+```
+brew install nitti/dirtree/dirtree
+```
+
+This installs from the [`nitti/homebrew-dirtree`](https://github.com/nitti/homebrew-dirtree) tap, which is kept up to date automatically on every tagged release.
+
+**Direct download:** grab a prebuilt binary (`darwin`/`linux`, `amd64`/`arm64`) from the [releases page](https://github.com/nitti/dirtree/releases), extract it, and put `dirtree` on your `PATH`.
+
+**From source:** see "Build and run" below.
+
 ## Contents
 
 - [`specs/SPEC.md`](specs/SPEC.md) — full behavioral specification: CLI, data model, traversal/ignore rules, navigation, background indexing, jump mode, preview pane, layout, rendering conventions, keybindings, resize handling.
 - [`specs/TESTING.md`](specs/TESTING.md) — acceptance criteria, expressed as test cases the implementation must satisfy.
-- `cmd/dirtree/` — CLI entry point (argument parsing, path resolution, startup error handling).
+- `cmd/dirtree/` — CLI entry point (argument parsing, path resolution, startup error handling, `--version`).
 - `internal/tree/` — the lazily-loaded node model, flattening, and navigation semantics (spec §2, §5).
 - `internal/ignore/` — the dependency-free `.gitignore` pattern subset (spec §3).
 - `internal/index/` — the background full-tree index used by jump mode (spec §6).
@@ -23,6 +37,7 @@ The spec was derived from a working Python/curses prototype (iterated on directl
 - `internal/layout/` — the pure split-view/popup layout math (spec §9).
 - `internal/spinner/` — the delayed-loading-indicator timing/frame logic (spec §10).
 - `internal/ui/` — the tcell-backed terminal-rendering layer (draw loop, input handling, resize polling); not unit-tested, verified manually in a real terminal.
+- `.goreleaser.yaml` / `.github/workflows/release.yml` — cross-compiles and publishes a GitHub Release plus an updated Homebrew cask on every `vX.Y.Z` tag push.
 
 ## Build and run
 
@@ -39,6 +54,17 @@ Or directly with `go`:
 go build -o dirtree ./cmd/dirtree
 ./dirtree [path]
 ```
+
+## Releasing
+
+Push a tag matching `vX.Y.Z` to trigger the release workflow:
+
+```
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+This cross-compiles `darwin`/`linux` × `amd64`/`arm64` binaries, attaches them (plus checksums) to a GitHub Release, and pushes an updated cask formula to `nitti/homebrew-dirtree`. Requires the `HOMEBREW_TAP_GITHUB_TOKEN` repository secret (a PAT scoped to `contents: write` on the tap repo only).
 
 ## Status
 
