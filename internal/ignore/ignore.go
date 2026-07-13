@@ -27,7 +27,18 @@ type Matcher struct {
 // an empty Matcher that matches nothing — never an error, per SPEC.md
 // §3's "never crash or block startup" requirement.
 func Load(rootDir string) *Matcher {
-	f, err := os.Open(filepath.Join(rootDir, ".gitignore"))
+	return loadFile(rootDir, ".gitignore")
+}
+
+// LoadDirtreeIgnore reads and parses a .dirtreeignore file directly
+// inside rootDir, using the same pattern syntax and "never crash or
+// block startup" tolerance as Load (SPEC.md §3).
+func LoadDirtreeIgnore(rootDir string) *Matcher {
+	return loadFile(rootDir, ".dirtreeignore")
+}
+
+func loadFile(rootDir, name string) *Matcher {
+	f, err := os.Open(filepath.Join(rootDir, name))
 	if err != nil {
 		return &Matcher{}
 	}
@@ -86,6 +97,52 @@ func (m *Matcher) Match(relPath string, isDir bool) bool {
 		}
 	}
 	return matched
+}
+
+// matcher is the subset of Matcher's behavior Multi depends on, so it
+// can compose Matcher values (including nil ones) without a separate
+// interface type in every caller.
+type matcher interface {
+	Match(relPath string, isDir bool) bool
+}
+
+// Multi combines several independently-loaded pattern sets (e.g.
+// .gitignore and .dirtreeignore) into one Ignorer. A path is excluded
+// if any one of them excludes it — the sets don't share negation
+// precedence with each other, only within themselves (SPEC.md §3).
+type Multi struct {
+	matchers []matcher
+}
+
+// NewMulti builds a Multi from any number of matchers (nil entries are
+// ignored).
+func NewMulti(matchers ...matcher) *Multi {
+	m := &Multi{}
+	for _, mm := range matchers {
+		if mm != nil {
+			m.matchers = append(m.matchers, mm)
+		}
+	}
+	return m
+}
+
+// Match reports whether relPath is excluded by any of the combined
+// pattern sets.
+func (m *Multi) Match(relPath string, isDir bool) bool {
+	for _, mm := range m.matchers {
+		if mm.Match(relPath, isDir) {
+			return true
+		}
+	}
+	return false
+}
+
+// LoadAll loads every ignore-pattern source dirtree honors directly
+// inside rootDir — currently .gitignore and .dirtreeignore, both using
+// the same pattern syntax — and combines them into a single Ignorer
+// (SPEC.md §3).
+func LoadAll(rootDir string) *Multi {
+	return NewMulti(Load(rootDir), LoadDirtreeIgnore(rootDir))
 }
 
 // matches tests a single rule against the candidate. tested is the

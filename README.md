@@ -16,7 +16,7 @@ The spec was derived from a working Python/curses prototype (iterated on directl
 - [`specs/TESTING.md`](specs/TESTING.md) — acceptance criteria, expressed as test cases the implementation must satisfy.
 - `cmd/dirtree/` — CLI entry point (argument parsing, path resolution, startup error handling).
 - `internal/tree/` — the lazily-loaded node model, flattening, and navigation semantics (spec §2, §5).
-- `internal/ignore/` — the dependency-free `.gitignore` pattern subset (spec §3).
+- `internal/ignore/` — the dependency-free `.gitignore`/`.dirtreeignore` pattern subset (spec §3).
 - `internal/index/` — the background full-tree index used by jump mode (spec §6).
 - `internal/match/` — the shared substring/glob query-matching rule (spec §7).
 - `internal/preview/` — file reading, best-effort syntax highlighting, and line wrapping for the preview pane (spec §8).

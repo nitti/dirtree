@@ -79,3 +79,58 @@ func TestMalformedGitignoreDoesNotCrash(t *testing.T) {
 	// Should not panic; result may or may not match, just must not raise.
 	_ = m.Match("anything", false)
 }
+
+func writeDirtreeIgnore(t *testing.T, dir, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, ".dirtreeignore"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDirtreeIgnoreUsesSamePatternSyntax(t *testing.T) {
+	dir := t.TempDir()
+	writeDirtreeIgnore(t, dir, "*.secret\n")
+	m := LoadDirtreeIgnore(dir)
+	if !m.Match("a.secret", false) {
+		t.Fatal("expected .dirtreeignore to exclude a.secret")
+	}
+	if m.Match("a.txt", false) {
+		t.Fatal("expected .dirtreeignore not to exclude a.txt")
+	}
+}
+
+func TestNoDirtreeIgnoreMeansNoFiltering(t *testing.T) {
+	dir := t.TempDir()
+	m := LoadDirtreeIgnore(dir)
+	if m.Match("anything", false) {
+		t.Fatal("expected no filtering without a .dirtreeignore")
+	}
+}
+
+func TestLoadAllCombinesBothFilesUnion(t *testing.T) {
+	dir := t.TempDir()
+	writeGitignore(t, dir, "*.log\n")
+	writeDirtreeIgnore(t, dir, "*.secret\n")
+	m := LoadAll(dir)
+	if !m.Match("a.log", false) {
+		t.Fatal("expected .gitignore pattern still excluded via LoadAll")
+	}
+	if !m.Match("a.secret", false) {
+		t.Fatal("expected .dirtreeignore pattern excluded via LoadAll")
+	}
+	if m.Match("a.txt", false) {
+		t.Fatal("expected non-matching path not excluded")
+	}
+}
+
+func TestLoadAllNegationsDoNotCrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	// .gitignore excludes *.log; .dirtreeignore tries to re-include one.
+	// Negation only applies within its own file's rule set.
+	writeGitignore(t, dir, "*.log\n")
+	writeDirtreeIgnore(t, dir, "!keep.log\n")
+	m := LoadAll(dir)
+	if !m.Match("keep.log", false) {
+		t.Fatal("expected a negation in .dirtreeignore not to re-include a path .gitignore excluded")
+	}
+}

@@ -49,6 +49,14 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - An anchored pattern (containing `/`, not just a trailing one) only matches from the root, not at arbitrary depth.
 - Ignored directories are excluded from listing entirely — their contents must not be enumerable through the tree even after attempting to expand them (verifies "never even enumerated," not just "hidden after listing").
 
+## `.dirtreeignore` exclusion
+
+- With no `.dirtreeignore` present, no additional filtering happens beyond `.git` and `.gitignore`.
+- A `.dirtreeignore` pattern uses the same syntax as `.gitignore` (glob, anchoring, directory-only, negation all behave identically).
+- A path matching either the `.gitignore` set or the `.dirtreeignore` set is excluded (union, not intersection).
+- A negation pattern in `.dirtreeignore` does not re-include a path excluded by a `.gitignore` pattern, and vice versa — negation precedence is scoped to a single file's own rule list, not across the two files.
+- The background full-tree index (§6) respects `.dirtreeignore` exclusions the same way it respects `.gitignore` ones — this is app-wide filtering, not jump-mode-only.
+
 ## Background full-tree index (`list_all_paths`-equivalent)
 
 - The index reaches into directories that are currently collapsed in the interactive tree (i.e. it does not depend on or mutate the interactive tree's expand/collapse state at all).
