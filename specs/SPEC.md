@@ -34,13 +34,17 @@ Each entry (a "node") has:
 
 ## 3. Traversal and ignore rules
 
-Two independent exclusion mechanisms apply identically to (a) normal directory listing/expansion and (b) the background full-tree index used by jump mode (§6):
+Three independent exclusion mechanisms apply identically to (a) normal directory listing/expansion and (b) the background full-tree index used by jump mode (§6):
 
 1. **Always skip `.git`** (exact name match on any path segment's immediate entry, not a pattern) — unconditionally, regardless of `.gitignore` contents. Git internals are never useful to browse or search and can be large.
 2. **`.gitignore`-aware filtering**, best-effort:
    - At root-node construction, look for a `.gitignore` file directly in the root path. If present and readable, parse it into an ignore-pattern set (see the matching algorithm below). If absent, unreadable, or pattern-parsing isn't implemented for a given rule, treat it as "no additional patterns" — never crash or block startup because of a malformed `.gitignore`.
    - When listing a directory's entries (or walking the full tree for the index), drop any entry that matches the loaded pattern set, so an ignored directory's contents are never even enumerated (not just hidden after listing).
    - Only the root's `.gitignore` needs to be honored. (The prototype did not walk nested `.gitignore` files in subdirectories; parity does not require it, though an implementation may choose to go further.)
+3. **`.dirtreeignore`-aware filtering**, an application-specific exclusion list independent of `.gitignore`, applied identically everywhere `.gitignore` is (tree listing, index walk — never just jump mode; a path either exists in the app or it doesn't):
+   - At root-node construction, look for a `.dirtreeignore` file directly in the root path, alongside the `.gitignore` lookup. Same syntax, same best-effort tolerance (missing/unreadable/malformed → "no additional patterns," never crash or block startup), same "only the root's file is honored" scope.
+   - A candidate path is excluded if it matches *either* the `.gitignore` pattern set *or* the `.dirtreeignore` pattern set. The two files' patterns don't interact with each other — a `!negation` in one cannot re-include a path the other excluded; negation precedence (§3's "later rules override earlier ones") only applies within a single file's own rule list.
+   - Rationale: this exists for exclusions that are about dirtree's own browsing noise (e.g. build output you don't want fuzzy-findable) rather than about what git tracks, so it shouldn't require touching a repo's actual `.gitignore` (or exist in a repo without one at all).
 
 **Minimal gitignore pattern semantics to implement** (a small, dependency-free subset — this does not need to be a full `git check-ignore` reimplementation, but must at least cover):
    - Blank lines and lines starting with `#` are ignored (comments).

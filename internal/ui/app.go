@@ -44,7 +44,7 @@ type App struct {
 	screen   tcell.Screen
 	rootPath string
 	root     *tree.Node
-	ignorer  *ignore.Matcher
+	ignorer  *ignore.Multi
 	idx      *index.Index
 
 	mode     mode
@@ -73,7 +73,7 @@ type App struct {
 // New builds a new App rooted at rootPath. It does not touch the
 // terminal yet; call Run to start the interactive session.
 func New(rootPath string) *App {
-	ignorer := ignore.Load(rootPath)
+	ignorer := ignore.LoadAll(rootPath)
 	root := tree.NewRoot(rootPath, ignorer)
 	idx := index.Start(rootPath, ignorer)
 
