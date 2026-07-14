@@ -18,9 +18,9 @@ var (
 	styleBadge    = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
 )
 
-// draw renders one frame. Only the tree explorer overlay and a
-// placeholder primary preview view exist this stage; the jump overlay,
-// open-files-list overlay, and the primary view's own content
+// draw renders one frame. The tree explorer and jump/fuzzy-picker
+// overlays and a placeholder primary preview view exist this stage;
+// the open-files-list overlay and the primary view's own content
 // rendering (gutter, wrapping, scrolling — SPEC.md §2.1) land in later
 // stages.
 func (a *App) draw() {
@@ -29,7 +29,7 @@ func (a *App) draw() {
 
 	switch a.overlay {
 	case overlayTree:
-		a.drawHeader(w, fmt.Sprintf("%s   [space] open+close  [a] open, keep open  [esc] close", a.rootPath))
+		a.drawHeader(w, fmt.Sprintf("%s   [space] open+close  [a] open, keep open  [/] jump  [esc] close", a.rootPath))
 		treeHeight := h - 1
 		if a.treeMessage != "" {
 			treeHeight--
@@ -39,12 +39,68 @@ func (a *App) draw() {
 			a.drawText(0, h-1, w, a.treeMessage, styleError)
 		}
 		a.drawBadge(w, h)
+	case overlayJump:
+		a.drawJump(w, h)
+		a.drawBadge(w, h)
 	default:
-		a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [q] quit")
+		a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [/] jump  [q] quit")
 		a.drawPreviewPlaceholder(w, h)
 	}
 
 	a.screen.Show()
+}
+
+// drawJump renders the jump/fuzzy-picker overlay (SPEC.md §4.2, §5.2):
+// a header showing the query and which of Enter/Space maps to which
+// action for the current entry point, and the flat, root-relative
+// match list (or an indexing/no-matches placeholder).
+func (a *App) drawJump(w, h int) {
+	enterLabel, spaceLabel := "reveal in tree", "open"
+	if a.jumpEntry == jumpFromPreview {
+		enterLabel, spaceLabel = "open", "reveal in tree"
+	}
+	a.drawHeader(w, fmt.Sprintf("/%s   [enter] %s  [space] %s  [esc] cancel", a.jumpQuery, enterLabel, spaceLabel))
+
+	listHeight := h - 1
+	if a.jumpMessage != "" {
+		listHeight--
+	}
+
+	_, done := a.idx.Snapshot()
+	switch {
+	case !done:
+		// SPEC.md §5.2: during the pre-threshold grace period this is
+		// indistinguishable from "still indexing" at the pure-decision
+		// level, so the match-list area stays blank either way rather
+		// than claiming "no matches" before indexing has even looked.
+		a.drawText(0, 1, w, centerPad("indexing…", w), styleNormal)
+	case len(a.jumpMatches) == 0:
+		a.drawText(0, 1, w, centerPad("no matches", w), styleNormal)
+	default:
+		if listHeight > 0 {
+			if a.jumpSelected < a.jumpScroll {
+				a.jumpScroll = a.jumpSelected
+			}
+			if a.jumpSelected >= a.jumpScroll+listHeight {
+				a.jumpScroll = a.jumpSelected - listHeight + 1
+			}
+		}
+		for row := range listHeight {
+			i := a.jumpScroll + row
+			if i >= len(a.jumpMatches) {
+				break
+			}
+			style := styleNormal
+			if i == a.jumpSelected {
+				style = styleSelected
+			}
+			a.drawText(0, 1+row, w, a.jumpMatches[i].RelPath, style)
+		}
+	}
+
+	if a.jumpMessage != "" {
+		a.drawText(0, h-1, w, a.jumpMessage, styleError)
+	}
 }
 
 func (a *App) previewHeaderText() string {
