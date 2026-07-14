@@ -42,7 +42,7 @@ Each entry in the open-files list (§2.2) has its own preview content and its ow
 
 The open-files list is the primary state the rest of the UI operates on: an ordered collection of files the user has opened during this session, plus which one (if any) is currently displayed in the primary preview view (§2.1).
 
-- **Ordering**: insertion order. A newly-opened file (one whose resolved absolute path is not already in the list) is appended to the end. Opening a file whose resolved absolute path already matches an existing entry does not create a duplicate or change that entry's position — see "open semantics" below.
+- **Ordering**: insertion order by default, but user-rearrangable — see the open-files list overlay's (§2.3) reorder keys. A newly-opened file (one whose resolved absolute path is not already in the list) is appended to the end regardless of any manual reordering already done. Opening a file whose resolved absolute path already matches an existing entry does not create a duplicate or change that entry's position — see "open semantics" below.
 - **Per-entry state**: absolute path, loaded preview content (§2.1's read/highlight results, loaded once at open time), and independent scroll/goto-line state (§2.1). Exactly one entry, or none, is the "displayed" entry at any time.
 - **Open semantics** (used by §3.4's Space/`a` and §4.2's open-into-list action): given a path,
   - if an entry for that resolved absolute path already exists in the list, do not read the file again or move the entry — just mark it as the displayed entry, preserving its existing scroll/goto state. (A file that failed to open never has an entry, per the next bullets, so any existing entry is by construction previously-successful and safe to display as-is.)
@@ -69,6 +69,7 @@ Triggered by `Tab` from the primary preview view (including the empty state). Wh
   - If the removed entry *was* the displayed entry, the displayed entry becomes the adjacent surviving entry (the one after it in list order, or the one before it if the removed entry was last); overlay selection follows the same entry.
   - If the list becomes empty as a result, there is no displayed entry; closing the overlay (or its own auto-close, see below) lands on the primary preview view's empty state (§2.1), which in turn auto-opens the tree explorer overlay exactly as it does on startup (§1).
   - The overlay itself stays open after an `x` removal (it does not auto-close), so multiple entries can be removed in a row; it only auto-closes if the removal just emptied the list entirely, per the previous bullet.
+- **Shift-Up / Shift-Down**: move the selected entry one position toward the top/bottom of the list, swapping it with its current neighbor; overlay selection follows the moved entry so repeated presses keep walking it further. Unlike Up/Down's navigation wraparound, reordering does **not** wrap — Shift-Up on the first entry and Shift-Down on the last entry are both no-ops. This only changes list order (§2.2); it does not change which entry is displayed, and does not affect any entry's stored scroll/goto state. The reordered position persists for the rest of the session (until the entry is removed or the app exits) exactly like an insertion-order position would.
 - **Escape**: close the overlay and return to the primary preview view unchanged — whatever was displayed before opening the overlay is still displayed (removals already performed via `x`, if any, are not undone; only the "make this one displayed" action of Enter is what Escape skips).
 - If the list is empty when the overlay is opened (a degenerate case reachable by escaping out of the auto-opened tree explorer on a fresh, file-less session and then pressing Tab), render an explanatory "no open files" message instead of a list, and only Escape is meaningful.
 
@@ -281,6 +282,7 @@ Terminal input libraries commonly buffer a short delay after receiving an Escape
 | Space | jump/fuzzy-picker | perform the other action on the selected match, exit overlay |
 | Escape | jump/fuzzy-picker | cancel, return to whichever screen it was opened from, unchanged |
 | Up / Down | open-files list | move selection, wraps at both ends |
+| Shift-Up / Shift-Down | open-files list | move selected entry toward top/bottom of the list (no wraparound) |
 | Enter | open-files list | display selected entry, close overlay |
 | `x` | open-files list | remove selected entry from the list |
 | Escape | open-files list | close overlay, return to preview unchanged |

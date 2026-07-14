@@ -41,6 +41,12 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Removing the last remaining entry via `x` results in no displayed entry (list is empty) and the overlay auto-closes to the primary preview view's empty state.
 - The open-files-list overlay's own selection index is clamped to a valid remaining index after an `x` removal (never left pointing past the end of the shrunken list).
 - Escape from the open-files-list overlay does not change which entry is displayed, but does not undo any `x` removals already performed during that overlay session.
+- Shift-Down on a non-last entry swaps it with its immediate successor and moves overlay selection to follow it to its new position.
+- Shift-Up on a non-first entry swaps it with its immediate predecessor and moves overlay selection to follow it to its new position.
+- Shift-Down on the last entry is a no-op: list order and overlay selection are both unchanged.
+- Shift-Up on the first entry is a no-op: list order and overlay selection are both unchanged.
+- Reordering via Shift-Up/Shift-Down does not change which entry is displayed and does not reset the moved entry's stored scroll/goto state.
+- Opening a new file after the list has been manually reordered still appends the new entry at the end, regardless of the manual reordering already applied to existing entries.
 
 ## Node / tree construction and flattening (§3.1)
 
@@ -176,6 +182,7 @@ The following require a real terminal (ideally inside a multiplexer like Zellij 
 - Tree explorer's Space opens a file and closes the explorer in one keystroke; `a` opens a file and leaves the explorer open, allowing several files to be queued before Escape.
 - Selecting a binary or unreadable file from the tree explorer (Space or `a`) or the picker's open-into-list action renders the corresponding failure message ("binary file, preview not available," or the OS error text) inline in that overlay without navigating away or adding an open-files entry.
 - The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Enter-to-display and `x`-to-remove, and its empty-list message renders when reachable.
+- Shift-Up/Shift-Down reordering is confirmed against a real terminal/multiplexer, since Shift+arrow key delivery is more library/terminal-dependent than plain arrow keys; if the target terminal library can't reliably distinguish Shift-Up/Shift-Down from plain Up/Down, note the fallback keys actually used here rather than silently shipping non-functional reordering.
 - The jump/fuzzy-picker overlay's header legend correctly reflects which of Enter/Space maps to which action depending on entry point (tree explorer vs. preview).
 - Tree-explorer split-view vs. popup layout flips correctly on live resize, with the preview pane visible-but-inert in split view.
 - Escape responsiveness (§6.3), resize handling via periodic polling (§6.2), and the spinner badge's visual distinctness (§5.2) per the checks above.
