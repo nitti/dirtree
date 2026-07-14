@@ -36,27 +36,14 @@ func styleFor(cat preview.Category) tcell.Style {
 	return styleNormal
 }
 
-// draw renders one frame. The tree explorer and jump/fuzzy-picker
-// overlays and a placeholder primary preview view exist this stage;
-// the open-files-list overlay and the primary view's own content
-// rendering (gutter, wrapping, scrolling — SPEC.md §2.1) land in later
-// stages.
+// draw renders one frame.
 func (a *App) draw() {
 	a.screen.Clear()
 	w, h := a.screen.Size()
 
 	switch a.overlay {
 	case overlayTree:
-		a.drawHeader(w, fmt.Sprintf("%s   [space] open+close  [a] open, keep open  [/] jump  [esc] close", a.rootPath))
-		treeHeight := h - 1
-		if a.treeMessage != "" {
-			treeHeight--
-		}
-		a.drawTree(0, 1, w, treeHeight)
-		if a.treeMessage != "" {
-			a.drawText(0, h-1, w, a.treeMessage, styleError)
-		}
-		a.drawBadge(w, h)
+		a.drawTreeOverlay(w, h)
 	case overlayJump:
 		a.drawJump(w, h)
 		a.drawBadge(w, h)
@@ -64,10 +51,113 @@ func (a *App) draw() {
 		a.drawOpenFiles(w, h)
 	default:
 		a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [tab] open files  [/] jump  [g] goto  [q] quit")
-		a.drawPreview(w, h)
+		a.drawPreview(0, 1, w, h-1)
 	}
 
 	a.screen.Show()
+}
+
+// drawTreeOverlay picks split-vs-popup layout (SPEC.md §5.1, recomputed
+// every frame so a live resize can flip between them) and renders the
+// tree explorer overlay accordingly.
+func (a *App) drawTreeOverlay(w, h int) {
+	treeWidth, previewWidth, split := a.computeSplitLayout(w)
+	if split {
+		a.drawTreeSplitView(w, h, treeWidth, previewWidth)
+	} else {
+		a.drawTreePopup(w, h)
+	}
+	a.drawBadge(w, h)
+}
+
+// drawTreeSplitView renders the wide-terminal layout (SPEC.md §5.1):
+// the tree explorer on the left, a vertical rule, and the primary
+// preview view — still visible, showing whatever it had, but read-only
+// (no goto-line prompt can be open while this overlay owns input) — on
+// the right.
+func (a *App) drawTreeSplitView(w, h, treeWidth, previewWidth int) {
+	a.drawHeader(w, fmt.Sprintf("%s   [space] open+close  [a] open, keep open  [/] jump  [esc] close", a.rootPath))
+
+	treeHeight := h - 1
+	if a.treeMessage != "" {
+		treeHeight--
+	}
+	a.drawTree(0, 1, treeWidth, treeHeight)
+	if a.treeMessage != "" {
+		a.drawText(0, h-1, treeWidth, a.treeMessage, styleError)
+	}
+
+	for y := 1; y < h; y++ {
+		a.screen.SetContent(treeWidth, y, '│', nil, styleNormal)
+	}
+
+	a.drawPreview(treeWidth+1, 1, previewWidth, h-1)
+}
+
+// drawTreePopup renders the narrow-terminal layout (SPEC.md §5.1): the
+// primary preview view rendered exactly as it would with no overlay
+// active ("unmodified, last-rendered"), with a centered, bordered
+// floating window containing the tree explorer on top.
+func (a *App) drawTreePopup(w, h int) {
+	a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [tab] open files  [/] jump  [g] goto  [q] quit")
+	a.drawPreview(0, 1, w, h-1)
+
+	popupW := min(max(w-2*popupMarginX, 10), w)
+	popupH := min(max(h-2*popupMarginY, 5), h)
+	x0 := (w - popupW) / 2
+	y0 := (h - popupH) / 2
+
+	a.drawBox(x0, y0, popupW, popupH, a.rootPath)
+	a.fillRect(x0+1, y0+1, popupW-2, popupH-2, styleNormal)
+
+	innerX, innerY := x0+1, y0+1
+	innerW, innerH := popupW-2, popupH-2
+	footerRow := innerH - 1
+	treeHeight := footerRow
+	if a.treeMessage != "" {
+		treeHeight--
+	}
+	a.drawTree(innerX, innerY, innerW, treeHeight)
+	if a.treeMessage != "" {
+		a.drawText(innerX, innerY+treeHeight, innerW, a.treeMessage, styleError)
+	}
+	a.drawText(innerX, innerY+footerRow, innerW, "[space] open+close  [a] open, keep open  [/] jump  [esc] close", styleNormal)
+}
+
+// drawBox draws a bordered rectangle with an optional title embedded in
+// the top border.
+func (a *App) drawBox(x0, y0, w, h int, title string) {
+	if w < 2 || h < 2 {
+		return
+	}
+	for x := 1; x < w-1; x++ {
+		a.screen.SetContent(x0+x, y0, '─', nil, styleNormal)
+		a.screen.SetContent(x0+x, y0+h-1, '─', nil, styleNormal)
+	}
+	for y := 1; y < h-1; y++ {
+		a.screen.SetContent(x0, y0+y, '│', nil, styleNormal)
+		a.screen.SetContent(x0+w-1, y0+y, '│', nil, styleNormal)
+	}
+	a.screen.SetContent(x0, y0, '┌', nil, styleNormal)
+	a.screen.SetContent(x0+w-1, y0, '┐', nil, styleNormal)
+	a.screen.SetContent(x0, y0+h-1, '└', nil, styleNormal)
+	a.screen.SetContent(x0+w-1, y0+h-1, '┘', nil, styleNormal)
+
+	if title != "" && w > 4 {
+		label := " " + title + " "
+		if len(label) > w-2 {
+			label = label[:w-2]
+		}
+		a.drawText(x0+1, y0, len(label), label, styleNormal)
+	}
+}
+
+// fillRect blanks a rectangle at style, used to erase whatever was
+// drawn underneath a popup before drawing its contents on top.
+func (a *App) fillRect(x0, y0, w, h int, style tcell.Style) {
+	for y := range h {
+		a.drawText(x0, y0+y, w, "", style)
+	}
 }
 
 // drawJump renders the jump/fuzzy-picker overlay (SPEC.md §4.2, §5.2):
@@ -175,26 +265,34 @@ func (a *App) previewHeaderText() string {
 }
 
 // drawPreview renders the primary preview view's content (SPEC.md
-// §2.1): a line-number gutter plus wrapped, highlighted rows for the
-// currently-displayed entry, or an explanatory empty-state message if
-// none is displayed. The goto-line prompt, when open, occupies the
-// bottom row.
-func (a *App) drawPreview(w, h int) {
+// §2.1) into the (x0, y0)-(x0+w, y0+h) rectangle: a line-number gutter
+// plus wrapped, highlighted rows for the currently-displayed entry, or
+// an explanatory empty-state message if none is displayed. The
+// goto-line prompt, when open, occupies the bottom row — reachable only
+// when this is the primary (non-overlaid) view, since the goto-line key
+// isn't handled while the tree explorer's split/popup overlay (§5.1) is
+// showing this read-only.
+func (a *App) drawPreview(x0, y0, w, h int) {
 	e := a.files.DisplayedEntry()
 	if e == nil {
 		msg := "no files open — press e to browse, / to search"
-		row := max(h/2, 1)
-		a.drawText(0, row, w, centerPad(msg, w), styleNormal)
+		row := y0 + max(h/2, 1)
+		a.drawText(x0, row, w, centerPad(msg, w), styleNormal)
 		return
 	}
 
-	a.ensurePreviewWrapped(e)
-	viewportHeight := a.previewViewportHeight()
 	gw := gutterWidth(len(e.Lines))
+	contentWidth := max(w-gw, 1)
+	a.ensurePreviewWrapped(e, contentWidth)
+
+	viewportHeight := h
+	if a.gotoPromptOpen {
+		viewportHeight--
+	}
 	digits := gw - 2
 
 	for row := range viewportHeight {
-		y := 1 + row
+		y := y0 + row
 		i := e.Scroll + row
 		if i >= len(e.Rows) {
 			break
@@ -204,12 +302,12 @@ func (a *App) drawPreview(w, h int) {
 		if dr.HasNumber {
 			numField = fmt.Sprintf("%*d", digits, dr.SourceLine+1)
 		}
-		a.drawText(0, y, gw, numField+"  ", styleNormal)
-		a.drawSegments(gw, y, w-gw, dr.Segments)
+		a.drawText(x0, y, gw, numField+"  ", styleNormal)
+		a.drawSegments(x0+gw, y, contentWidth, dr.Segments)
 	}
 
 	if a.gotoPromptOpen {
-		a.drawText(0, h-1, w, "goto line: "+a.gotoInput, styleNormal)
+		a.drawText(x0, y0+h-1, w, "goto line: "+a.gotoInput, styleNormal)
 	}
 }
 
