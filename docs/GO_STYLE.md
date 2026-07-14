@@ -14,7 +14,7 @@ Default to the official Go documentation (https://go.dev/doc/) and [Effective Go
 
 ## Errors
 
-- Wrap errors with `fmt.Errorf("...: %w", err)` when adding context; use `%v` only when deliberately discarding the ability to `errors.Is`/`errors.As` unwrap (rare — prefer `%w`).
+- Don't default to `%w`. Wrapping with `fmt.Errorf("...: %w", err)` exposes the wrapped error as part of your function's API — callers can now depend on `errors.Is`/`errors.As` reaching into it, which couples them to an error that may originate in a third-party package you don't control. Follow the decision guidance in https://go.dev/blog/go1.13-errors#whether-to-wrap: use `%w` only when a caller genuinely needs to programmatically inspect the underlying error; use `%v` (adding context without exposing the chain) as the default otherwise.
 - Error strings are lowercase, no trailing punctuation, and don't repeat the calling function's name (`revive`'s `error-strings` check enforces this).
 - Sentinel/wrapped error values are named `errXxx`; custom error types are named `XxxError` (`error-naming`).
 - `cmd/dirtree` is the only package allowed to call `os.Exit`. Everywhere else, return an `error` and let the caller decide.
