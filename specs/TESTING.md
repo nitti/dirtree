@@ -105,7 +105,6 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 ## Preview: reading, highlighting, wrapping
 
 - Reading a normal small text file returns its lines split correctly, preserving empty lines.
-- Reading a file containing a NUL byte returns the single "binary file" placeholder line instead of file content.
 - Reading a file above the byte cap returns truncated content plus a "truncated" marker line, and does not read past the cap.
 - Reading a nonexistent/unreadable file returns a single explanatory line rather than raising.
 - An empty file's read result is a single empty line, not an empty list.
@@ -115,6 +114,18 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Wrapping preserves segment/category boundaries where possible (a wrapped chunk keeps the category of the segment it came from).
 - `build_display_rows` assigns the source line number only to each source line's first wrapped row; continuation rows carry no line number.
 - `build_display_rows`'s returned line→display-row index correctly points at the first display row for every source line, including source lines that wrapped into multiple rows.
+
+## Binary-file detection at open time
+
+- Opening a path not already in the open-files list, whose read bytes contain a NUL byte, returns a "binary" result: no entry is created, and the previously-displayed entry (if any) is unaffected.
+- Opening a path not already in the open-files list, whose read bytes contain no NUL byte, returns an "opened" result and creates/displays an entry as normal — binary detection does not false-positive on ordinary text content.
+- Opening a path that already has an entry in the open-files list returns an "opened" result and reuses that entry without re-reading the file, regardless of current on-disk content (an existing entry is, by construction, never binary, since a binary open never creates one).
+- The binary check is derived from the same byte-cap-bounded read used for normal preview loading (§8) — it does not require a second, separate read of the file.
+- A read error (permission denied, nonexistent file) is reported as its own explanatory single-line entry (§8), distinct from a "binary" result — it still produces an "opened" result with that explanatory content, not a binary short-circuit.
+- Tree explorer's Space action on a binary file leaves the explorer open and selection unchanged (rather than its normal close-and-display), and does not add an entry to the open-files list.
+- Tree explorer's `a` action on a binary file behaves the same as Space's binary case (no entry added; explorer already stays open either way).
+- The jump/fuzzy-picker overlay's open-into-list action on a binary file leaves the overlay open and match selection unchanged (rather than exiting to the preview), and does not add an entry to the open-files list.
+- A "binary" result does not block subsequent input: the next open attempt (same or different path) from the same context proceeds normally, evaluated independently.
 
 ## Open files list
 
@@ -162,6 +173,7 @@ The following require a real terminal (ideally inside a multiplexer like Zellij 
 
 - Startup shows the empty preview state with the tree explorer auto-opened on top of it.
 - Tree explorer's Space opens a file and closes the explorer in one keystroke; `a` opens a file and leaves the explorer open, allowing several files to be queued before Escape.
+- Selecting a binary file from the tree explorer (Space or `a`) or the picker's open-into-list action renders the "binary file, preview not available" message inline in that overlay without navigating away or adding an open-files entry.
 - The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Enter-to-display and `x`-to-remove, and its empty-list message renders when reachable.
 - The jump/fuzzy-picker overlay's header legend correctly reflects which of Enter/Space maps to which action depending on entry point (tree explorer vs. preview).
 - Tree-explorer split-view vs. popup layout flips correctly on live resize, with the preview pane visible-but-inert in split view.

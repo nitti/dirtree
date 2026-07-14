@@ -77,8 +77,8 @@ State: a `selected` index into the current flattened/visible list, and a `scroll
   - On a directory that is collapsed with no parent (i.e. the root): no-op.
   - On a file: move selection to its parent directory **and collapse that parent**, in the same keypress (i.e. "go up and close" in one step, not two).
 - After any structural change (expand/collapse/move), if the previously-focused node object is still present in the newly-flattened list, keep it selected (find it by identity, not by recomputing an index formula) — this matters because expand/collapse changes how many rows precede a given node.
-- **Space**, when the current selection is a file (no-op on directories): open the file (§9's open semantics), then close the tree explorer overlay and display it in the primary preview view. This is the default, immediate "open and go" action.
-- **`a`**, when the current selection is a file (no-op on directories): open the file (§9's open semantics) exactly as Space does, but leave the tree explorer overlay open and selection unchanged, so several files can be queued up in a row before returning to the preview.
+- **Space**, when the current selection is a file (no-op on directories): open the file (§9's open semantics). If the result is "opened," close the tree explorer overlay and display it in the primary preview view — this is the default, immediate "open and go" action. If the result is "binary," see §9's binary-file signaling — the explorer stays open instead.
+- **`a`**, when the current selection is a file (no-op on directories): open the file (§9's open semantics) exactly as Space does, but on an "opened" result leave the tree explorer overlay open and selection unchanged, so several files can be queued up in a row before returning to the preview. A "binary" result behaves the same as it does for Space (§9) — the explorer already stays open either way, so the only visible effect is the inline message.
 - **`/`**: open the jump/fuzzy-picker overlay (§7) with this tree explorer as its entry context (default action on Enter: reveal-in-tree).
 - **Escape**: close the tree explorer overlay and return to the primary preview view unchanged (whatever was displayed, or the empty state, stays as it was).
 
@@ -127,8 +127,8 @@ A single overlay and a single shared matcher/index power two related workflows: 
   - Matching runs against the *entire tree's* index, not just currently-expanded/visible nodes or currently-open files — this mode is global regardless of any other UI state.
 - **While the background index has not finished building**: matches are empty/unavailable; render the delayed loading indicator described in §11 instead of "no matches" (don't claim there are no matches when you simply haven't looked yet).
 - A `selected` index into the current match list, with wraparound cycling: advance forward (Tab, or Down) or backward (Shift-Tab, or Up).
-- **Enter**, if there is at least one match: perform this entry point's default action (below) on the selected match, then exit the overlay.
-- **Space**, if there is at least one match: perform the *other* action (below) on the selected match, then exit the overlay. (I.e. Enter and Space always together cover both actions; which key maps to which action is the only thing that changes with entry point.)
+- **Enter**, if there is at least one match: perform this entry point's default action (below) on the selected match. Reveal-in-tree always exits the overlay; open-into-list exits the overlay only on an "opened" result, per §9's binary-file signaling.
+- **Space**, if there is at least one match: perform the *other* action (below) on the selected match, with the same exit behavior as Enter's for whichever action that is. (I.e. Enter and Space always together cover both actions; which key maps to which action is the only thing that changes with entry point.)
 - **Backspace**: remove the last character of the query; reset match-selection to the first match and reset scroll.
 - **Escape**: cancel the overlay and return to whichever screen it was opened from, unchanged (query and match selection are discarded; no action is performed).
 - Typing any other printable character appends it to the query (reset match-selection and scroll to the top, since the match set changes).
@@ -136,15 +136,14 @@ A single overlay and a single shared matcher/index power two related workflows: 
 **The two actions:**
 
 - **Reveal-in-tree**: resolve the selected match's path in the interactive tree — expanding every ancestor directory along the path from the root down to the match (regardless of each ancestor's prior expanded/collapsed state) so the match becomes visible in the tree explorer — then leave the tree explorer overlay open (opening it first if the picker was entered from preview) with that node selected and scrolled into view. If resolution fails (e.g. the path no longer exists — deleted after indexing but before the jump), exit the overlay without changing tree selection, landing back on the tree explorer (opening it if needed) unchanged.
-- **Open-into-list**: open the selected match's path per §9's open semantics (reusing an existing open-files entry if the path is already open), then close the tree explorer overlay if it was open, landing on the primary preview view with that file displayed.
+- **Open-into-list**: open the selected match's path per §9's open semantics (reusing an existing open-files entry if the path is already open). If the result is "opened," close the tree explorer overlay if it was open, landing on the primary preview view with that file displayed. If the result is "binary," see §9's binary-file signaling — this overlay stays open with the message shown inline instead of exiting.
 
 ## 8. File preview
 
 Each entry in the open-files list (§9) has its own preview content and its own scroll/goto-line state, computed and tracked independently — the mechanics below apply per open file, not globally.
 
-- **Reading**: read up to a fixed byte cap (1,000,000 bytes in the prototype — pick something in that neighborhood; it exists to keep memory/latency bounded on huge files, not to be a hard product requirement of that exact number) from the start of the file. This happens once, when the file is opened (§9); an already-open entry's content is not re-read on every display.
+- **Reading**: read up to a fixed byte cap (1,000,000 bytes in the prototype — pick something in that neighborhood; it exists to keep memory/latency bounded on huge files, not to be a hard product requirement of that exact number) from the start of the file. This happens once, when the file is opened (§9); an already-open entry's content is not re-read on every display. Binary-ness (§9's binary check) is determined from this same read, before deciding whether to create an open-files entry at all — a file found to be binary never reaches the rest of this section, since §9 short-circuits the open before an entry is created; the reading/highlighting/wrapping/scrolling described below only ever applies to non-binary entries that did get created.
   - If a read error occurs (permission denied, etc.), show a single explanatory line instead of crashing.
-  - If the read bytes contain a NUL byte, treat the file as binary and show a single "binary file, preview not available" line instead of attempting to render it.
   - Otherwise, decode as UTF-8, replacing invalid sequences rather than failing, and split into lines. If the file's actual size exceeds the byte cap, append a line noting the content was truncated at that many bytes.
   - An empty result set becomes a single empty line (so the preview always has at least one row to render).
 - **Syntax highlighting** (best-effort, must not require a runtime dependency):
@@ -165,9 +164,14 @@ The open-files list is the primary state the rest of the UI operates on: an orde
 - **Ordering**: insertion order. A newly-opened file (one whose resolved absolute path is not already in the list) is appended to the end. Opening a file whose resolved absolute path already matches an existing entry does not create a duplicate or change that entry's position — see "open semantics" below.
 - **Per-entry state**: absolute path, loaded preview content (§8's read/highlight results, loaded once at open time), and independent scroll/goto-line state (§8). Exactly one entry, or none, is the "displayed" entry at any time.
 - **Open semantics** (used by §5's Space/`a` and §7's open-into-list action): given a path,
-  - if an entry for that resolved absolute path already exists in the list, do not read the file again or move the entry — just mark it as the displayed entry, preserving its existing scroll/goto state.
-  - otherwise, read and highlight the file (§8), append a new entry at the end of the list with scroll reset to the top, and mark it as the displayed entry.
+  - if an entry for that resolved absolute path already exists in the list, do not read the file again or move the entry — just mark it as the displayed entry, preserving its existing scroll/goto state. (A file that is binary never has an entry, per the next bullet, so any existing entry is by construction non-binary and safe to display as-is.)
+  - otherwise, read up to the byte cap (§8) from the start of the file to determine binary-ness: if the read bytes contain a NUL byte, the open is a **binary result** — do not create an entry, do not change the currently-displayed entry (if any), and return that result to the caller instead of a displayable file. See "Binary-file signaling" below for what each caller does with it.
+  - otherwise (readable and not binary), continue reading/highlighting the file (§8), append a new entry at the end of the list with scroll reset to the top, and mark it as the displayed entry. This is an **opened result**.
 - **Displaying** an entry (making it the one shown in the primary preview view) never changes list order.
+- **Binary-file signaling**: an open call's result is one of "opened" (an entry now exists and is displayed) or "binary" (nothing changed). The two callers each handle a binary result by staying exactly where they were and surfacing a single "binary file, preview not available" message directly, in whatever form fits that context — the open-files list and primary preview view are untouched in this case, since no entry was created:
+  - From the tree explorer overlay (§5's Space or `a`): the explorer does **not** close (even for Space, whose normal behavior is to close and display) and selection does not move; the message is shown inline in the explorer (e.g. a transient status/footer line) instead.
+  - From the jump/fuzzy-picker overlay's open-into-list action (§7): the overlay does **not** exit and match selection does not move; the message is shown inline (e.g. in place of the header's keybinding legend, or an equivalent status line) instead of landing on the preview.
+  - The message is advisory only and does not block further input — the user can immediately navigate elsewhere or attempt to open a different file.
 
 ### Open-files list overlay
 
