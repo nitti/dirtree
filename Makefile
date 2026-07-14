@@ -1,7 +1,7 @@
 .PHONY: build run test vet fmt clean
 
 build:
-	go build -o dirtree ./cmd/dirtree
+	go build $(if $(TAGS),-tags $(TAGS)) -o dirtree ./cmd/dirtree
 
 run: build
 	./dirtree $(ARGS)

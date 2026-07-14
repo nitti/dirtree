@@ -23,6 +23,18 @@ func waitDone(t *testing.T, idx *Index) []Entry {
 	return nil
 }
 
+func TestSinceDoneReportsFalseUntilBuildFinishes(t *testing.T) {
+	root := t.TempDir()
+	idx := Start(root, nil)
+	if _, done := idx.SinceDone(); done {
+		t.Fatal("expected SinceDone to report not-done immediately after Start")
+	}
+	waitDone(t, idx)
+	if elapsed, done := idx.SinceDone(); !done || elapsed < 0 {
+		t.Fatalf("expected SinceDone to report done with a non-negative elapsed duration, got done=%v elapsed=%v", done, elapsed)
+	}
+}
+
 func TestIndexReachesIntoCollapsedDirs(t *testing.T) {
 	root := t.TempDir()
 	must(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
