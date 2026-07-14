@@ -32,3 +32,40 @@ func Frame(elapsed time.Duration, fps float64, frames []rune) rune {
 	}
 	return frames[idx]
 }
+
+// CompletionPhase describes what, if anything, the "indexing complete"
+// completion message should show at a given point after indexing
+// finished.
+type CompletionPhase int
+
+const (
+	// CompletionHidden means nothing should be drawn.
+	CompletionHidden CompletionPhase = iota
+	// CompletionMessage means the full message should be drawn.
+	CompletionMessage
+	// CompletionFading means the message is mid fade-out; see the
+	// hiddenPrefix return value of Completion for how much of it.
+	CompletionFading
+)
+
+// Completion computes the completion-message phase and, while fading,
+// how many of the message's leading runes have faded away, for
+// sinceDone elapsed since indexing finished. The message is shown in
+// full for displayDuration, then fades out over fadeDuration by
+// disappearing left-to-right — the earliest runes vanish first while
+// the message's right edge/anchor stays put — until nothing remains.
+func Completion(sinceDone, displayDuration, fadeDuration time.Duration, messageLen int) (CompletionPhase, int) {
+	if sinceDone < displayDuration {
+		return CompletionMessage, 0
+	}
+	fadeElapsed := sinceDone - displayDuration
+	if fadeElapsed >= fadeDuration {
+		return CompletionHidden, messageLen
+	}
+	if fadeDuration <= 0 {
+		return CompletionHidden, messageLen
+	}
+	frac := float64(fadeElapsed) / float64(fadeDuration)
+	hidden := int(frac * float64(messageLen))
+	return CompletionFading, hidden
+}

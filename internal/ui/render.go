@@ -14,6 +14,7 @@ var (
 	styleSelected = tcell.StyleDefault.Reverse(true)
 	styleHeader   = tcell.StyleDefault.Background(tcell.ColorDarkBlue).Foreground(tcell.ColorWhite)
 	styleError    = tcell.StyleDefault.Foreground(tcell.ColorRed)
+	styleBadge    = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
 )
 
 var categoryStyles = map[preview.Category]tcell.Style{
@@ -67,11 +68,26 @@ func (a *App) drawHeader(w int, text string) {
 }
 
 func (a *App) drawSpinnerBadge(w, h int) {
-	frame, ok := a.spinnerVisible()
+	text, hiddenPrefix, ok := a.badgeText()
 	if !ok {
 		return
 	}
-	a.screen.SetContent(w-2, h-1, frame, nil, styleNormal)
+	runes := []rune(text)
+	// Anchor the badge's right edge at w-2, same corner the
+	// single-character spinner used, so the animated frame character
+	// (the message's last rune while running) lands in the same spot
+	// it always has; a fading completion message shrinks from the left
+	// without that anchor moving.
+	startX := w - 2 - len(runes)
+	if startX < 0 {
+		startX = 0
+	}
+	for i, r := range runes {
+		if i < hiddenPrefix {
+			continue
+		}
+		a.screen.SetContent(startX+i, h-1, r, nil, styleBadge)
+	}
 }
 
 // drawTree renders the flattened tree within the given rectangle.

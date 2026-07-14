@@ -33,6 +33,7 @@ type Index struct {
 	entries   []Entry
 	done      bool
 	startTime time.Time
+	doneTime  time.Time
 }
 
 // Start kicks off building the index in a background goroutine and
@@ -45,6 +46,7 @@ func Start(rootPath string, ignorer Ignorer) *Index {
 		idx.mu.Lock()
 		idx.entries = entries
 		idx.done = true
+		idx.doneTime = time.Now()
 		idx.mu.Unlock()
 	}()
 	return idx
@@ -69,6 +71,7 @@ func (idx *Index) Rebuild(rootPath string, ignorer Ignorer) {
 		idx.mu.Lock()
 		idx.entries = entries
 		idx.done = true
+		idx.doneTime = time.Now()
 		idx.mu.Unlock()
 	}()
 }
@@ -85,6 +88,20 @@ func (idx *Index) Snapshot() ([]Entry, bool) {
 // started, for the delayed-loading-indicator logic in SPEC.md §10.
 func (idx *Index) Elapsed() time.Duration {
 	return time.Since(idx.startTime)
+}
+
+// SinceDone returns how much wall-clock time has passed since indexing
+// last finished, and whether it has finished at all — used to drive the
+// "indexing complete" completion message and its fade-out in SPEC.md
+// §10. The duration is meaningless (and reported as 0) while indexing
+// is still running.
+func (idx *Index) SinceDone() (time.Duration, bool) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	if !idx.done {
+		return 0, false
+	}
+	return time.Since(idx.doneTime), true
 }
 
 // build walks rootPath depth-first, applying the same skip/ignore rules

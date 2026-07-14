@@ -30,15 +30,19 @@ const (
 )
 
 const (
-	resizePollInterval = 100 * time.Millisecond
-	spinnerThreshold   = 250 * time.Millisecond
-	spinnerFPS         = 10.0
-	watchDebounce      = 300 * time.Millisecond
-	previewByteCap     = preview.DefaultByteCap
-	previewMaxWidth    = 120
-	minPreviewWidth    = 40
-	minTreePaneWidth   = 20
-	maxTreePaneWidth   = 60
+	resizePollInterval        = 100 * time.Millisecond
+	spinnerThreshold          = 250 * time.Millisecond
+	spinnerFPS                = 10.0
+	completionDisplayDuration = 2 * time.Second
+	completionFadeDuration    = 400 * time.Millisecond
+	completionMessage         = "indexing complete"
+	debugMinSpinnerDuration   = 2 * time.Second
+	watchDebounce             = 300 * time.Millisecond
+	previewByteCap            = preview.DefaultByteCap
+	previewMaxWidth           = 120
+	minPreviewWidth           = 40
+	minTreePaneWidth          = 20
+	maxTreePaneWidth          = 60
 )
 
 // App holds all interactive state for a running session.
@@ -502,4 +506,47 @@ func (a *App) spinnerVisible() (rune, bool) {
 		return ' ', false
 	}
 	return spinner.Frame(elapsed, spinnerFPS, spinner.DefaultFrames), true
+}
+
+// badgeText returns what the bottom-right status badge should show
+// this frame: the running spinner, the transient "indexing complete"
+// message (full or mid fade-out), or nothing. hiddenPrefix is how many
+// of text's leading runes should be skipped when drawing, to animate
+// the message fading away left-to-right while its right edge stays
+// anchored in place.
+//
+// spinner.DebugAlwaysShow (a build-time-only escape hatch, never set in
+// a shipped build) bypasses only the perceptibility threshold, not the
+// completed-index check, so the spinner appears the instant indexing
+// starts instead of waiting out the threshold. It also holds the
+// spinner on screen for at least debugMinSpinnerDuration even if
+// indexing genuinely finishes sooner (real directories usually do, in
+// microseconds) — otherwise the spinner would flash for a single frame
+// and disappear before it's visible at all. Indexing still gets to
+// finish and hand off to the completion message and its fade-out below
+// once that minimum has elapsed, so both animations can be watched on
+// demand without needing a genuinely slow index.
+func (a *App) badgeText() (text string, hiddenPrefix int, ok bool) {
+	_, done := a.idx.Snapshot()
+	elapsed := a.idx.Elapsed()
+	sinceDone, realDone := a.idx.SinceDone()
+
+	if spinner.DebugAlwaysShow && realDone {
+		doneAt := max(elapsed-sinceDone, debugMinSpinnerDuration)
+		done = elapsed >= doneAt
+		sinceDone = elapsed - doneAt
+	}
+
+	if !done && (spinner.DebugAlwaysShow || spinner.ShouldShow(done, elapsed, spinnerThreshold)) {
+		frame := spinner.Frame(elapsed, spinnerFPS, spinner.DefaultFrames)
+		return "indexing " + string(frame), 0, true
+	}
+	if !done {
+		return "", 0, false
+	}
+	phase, faded := spinner.Completion(sinceDone, completionDisplayDuration, completionFadeDuration, len(completionMessage))
+	if phase == spinner.CompletionHidden {
+		return "", 0, false
+	}
+	return completionMessage, faded, true
 }
