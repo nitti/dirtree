@@ -32,11 +32,11 @@ const (
 const (
 	resizePollInterval        = 100 * time.Millisecond
 	spinnerThreshold          = 250 * time.Millisecond
+	spinnerMinDisplayDuration = 1 * time.Second
 	spinnerFPS                = 10.0
 	completionDisplayDuration = 2 * time.Second
 	completionFadeDuration    = 400 * time.Millisecond
 	completionMessage         = "indexing complete"
-	debugMinSpinnerDuration   = 2 * time.Second
 	watchDebounce             = 300 * time.Millisecond
 	previewByteCap            = preview.DefaultByteCap
 	previewMaxWidth           = 120
@@ -57,6 +57,24 @@ type App struct {
 	mode     mode
 	selected *tree.Node
 	scroll   int
+
+	// badgeSkipMinDuration is set once the user opens jump mode while
+	// indexing is already done, so they've directly seen indexing is
+	// ready (jump mode shows real matches immediately once done). It
+	// tells the bottom-right badge to skip its minimum-display-duration
+	// floor and jump straight to the completion step, rather than keep
+	// pretending indexing is still running for a UI element the user has
+	// already seen is finished. badgeSkipElapsedAt records a.idx.Elapsed()
+	// at the moment the skip happened, and the badge treats that instant
+	// as indexing's completion time — not the index's real (possibly
+	// long-past) completion time — so the completion message/fade
+	// sequence starts fresh from when the user opened jump mode instead
+	// of potentially already being past its display+fade window. Both
+	// reset whenever a new indexing cycle starts (handleFSChange's
+	// Rebuild), since the flash-prevention floor is meaningful again for
+	// that fresh run.
+	badgeSkipMinDuration bool
+	badgeSkipElapsedAt   time.Duration
 
 	// jump mode
 	jumpQuery    string
@@ -134,6 +152,8 @@ func (a *App) handleFSChange() {
 	tree.RefreshTree(a.root, a.rootPath, a.ignorer)
 	a.selected = tree.NearestSurviving(a.selected)
 	a.idx.Rebuild(a.rootPath, a.ignorer)
+	a.badgeSkipMinDuration = false
+	a.badgeSkipElapsedAt = 0
 	a.syncWatches()
 }
 
@@ -245,6 +265,10 @@ func (a *App) handleTreeKey(ev *tcell.EventKey) {
 		a.jumpQuery = ""
 		a.jumpSelected = 0
 		a.recomputeJumpMatches()
+		if _, done := a.idx.Snapshot(); done && !a.badgeSkipMinDuration {
+			a.badgeSkipMinDuration = true
+			a.badgeSkipElapsedAt = a.idx.Elapsed()
+		}
 	case ev.Rune() == 'q', ev.Key() == tcell.KeyEscape:
 		a.quit = true
 	}
@@ -510,40 +534,92 @@ func (a *App) spinnerVisible() (rune, bool) {
 
 // badgeText returns what the bottom-right status badge should show
 // this frame: the running spinner, the transient "indexing complete"
-// message (full or mid fade-out), or nothing. hiddenPrefix is how many
-// of text's leading runes should be skipped when drawing, to animate
-// the message fading away left-to-right while its right edge stays
-// anchored in place.
-//
-// spinner.DebugAlwaysShow (a build-time-only escape hatch, never set in
-// a shipped build) bypasses only the perceptibility threshold, not the
-// completed-index check, so the spinner appears the instant indexing
-// starts instead of waiting out the threshold. It also holds the
-// spinner on screen for at least debugMinSpinnerDuration even if
-// indexing genuinely finishes sooner (real directories usually do, in
-// microseconds) — otherwise the spinner would flash for a single frame
-// and disappear before it's visible at all. Indexing still gets to
-// finish and hand off to the completion message and its fade-out below
-// once that minimum has elapsed, so both animations can be watched on
-// demand without needing a genuinely slow index.
+// message (full or mid fade-out), or nothing.
 func (a *App) badgeText() (text string, hiddenPrefix int, ok bool) {
-	_, done := a.idx.Snapshot()
 	elapsed := a.idx.Elapsed()
-	sinceDone, realDone := a.idx.SinceDone()
+	sinceDone, done := a.idx.SinceDone()
+	return badgeDecision(elapsed, sinceDone, done, spinner.DebugAlwaysShow, a.badgeSkipMinDuration, a.badgeSkipElapsedAt)
+}
 
-	if spinner.DebugAlwaysShow && realDone {
-		doneAt := max(elapsed-sinceDone, debugMinSpinnerDuration)
+// badgeDecision is badgeText's terminal-free decision logic, kept as a
+// pure function of elapsed/sinceDone durations so it can be unit tested
+// without waiting on real indexing timing. hiddenPrefix is how many of
+// text's leading runes should be skipped when drawing, to animate the
+// completion message fading away left-to-right while its right edge
+// stays anchored in place.
+//
+// The full sequence: nothing is shown until indexing has been running
+// long enough to be perceptible (spinnerThreshold); then the spinner
+// shows, guaranteed visible for at least spinnerMinDisplayDuration even
+// if indexing genuinely finishes sooner (real directories often do, in
+// microseconds — without this floor the spinner could cross the
+// threshold and complete in the same frame, an unreadable flash); then
+// it hands off to the "indexing complete" message for
+// completionDisplayDuration; then that message fades out over
+// completionFadeDuration. If indexing finishes before ever crossing
+// spinnerThreshold, none of this is shown at all — the spinner was
+// never perceptible, so announcing its completion would be exactly the
+// flashing-chrome-for-instant-work distraction the threshold exists to
+// avoid.
+//
+// debugAlwaysShow (spinner.DebugAlwaysShow: a build-time-only escape
+// hatch, never set in a shipped build) bypasses only spinnerThreshold —
+// the spinner appears the instant indexing starts — while every other
+// timing above (the minimum display duration, the completion message,
+// the fade-out) behaves exactly as it would otherwise, so the full
+// sequence can be watched on demand without needing a genuinely slow
+// index.
+//
+// skipMinDuration (App.badgeSkipMinDuration) drops the minimum-display-
+// duration floor entirely, jumping straight to the completion step as
+// of skipElapsedAt (App.badgeSkipElapsedAt: a.idx.Elapsed() at the
+// moment the skip happened) rather than the index's real completion
+// time — which may already be well past the completion message's
+// display+fade window (e.g. debug mode had been artificially holding
+// the spinner via the minimum-display-duration floor for a while
+// before the skip), in which case using the real completion time would
+// make the badge vanish immediately instead of visibly transitioning.
+// Treating the skip's own moment as the completion instant instead
+// means the display+fade sequence always restarts fresh right when the
+// skip happens. This is set once the user opens jump mode while
+// indexing is already done — jump mode shows real matches immediately
+// in that case, so the user has already directly seen indexing is
+// ready, and continuing to hold the badge on a "still indexing"
+// spinner they've just seen is finished would be actively misleading
+// rather than a perceptibility safeguard.
+func badgeDecision(elapsed, sinceDone time.Duration, done, debugAlwaysShow, skipMinDuration bool, skipElapsedAt time.Duration) (text string, hiddenPrefix int, ok bool) {
+	// doneAt is the wall-clock time since indexing started at which it
+	// actually finished; meaningless (and unused) while still running.
+	doneAt := elapsed - sinceDone
+
+	var crossedThreshold bool
+	switch {
+	case debugAlwaysShow:
+		crossedThreshold = true
+	case done:
+		crossedThreshold = doneAt >= spinnerThreshold
+	default:
+		crossedThreshold = elapsed >= spinnerThreshold
+	}
+	if !crossedThreshold {
+		return "", 0, false
+	}
+
+	if done {
+		if skipMinDuration {
+			doneAt = skipElapsedAt
+		} else {
+			doneAt = max(doneAt, spinnerMinDisplayDuration)
+		}
 		done = elapsed >= doneAt
 		sinceDone = elapsed - doneAt
 	}
 
-	if !done && (spinner.DebugAlwaysShow || spinner.ShouldShow(done, elapsed, spinnerThreshold)) {
+	if !done {
 		frame := spinner.Frame(elapsed, spinnerFPS, spinner.DefaultFrames)
 		return "indexing " + string(frame), 0, true
 	}
-	if !done {
-		return "", 0, false
-	}
+
 	phase, faded := spinner.Completion(sinceDone, completionDisplayDuration, completionFadeDuration, len(completionMessage))
 	if phase == spinner.CompletionHidden {
 		return "", 0, false

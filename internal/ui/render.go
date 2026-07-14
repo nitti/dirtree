@@ -39,6 +39,7 @@ func (a *App) draw() {
 	case modeJump:
 		a.drawHeader(w, fmt.Sprintf("/%s   [tab] next  [enter] jump  [esc] cancel", a.jumpQuery))
 		a.drawJumpMatches(0, 1, w, h-1)
+		a.drawSpinnerBadge(w, h)
 	case modePreview:
 		a.ensurePreviewWrapped()
 		treeWidth, previewPaneWidth, split := a.computeSplitLayout(w)
