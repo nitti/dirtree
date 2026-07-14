@@ -167,3 +167,47 @@ func TestBuildDisplayRowsFirstRowIndex(t *testing.T) {
 		t.Fatalf("expected line 1's first row at index 2, got %d", firstRow[1])
 	}
 }
+
+func TestLoadBinaryFileFails(t *testing.T) {
+	path := writeTemp(t, []byte("abc\x00def"))
+	res := Load(path, DefaultByteCap)
+	if !res.Failed || res.Message != "binary file, preview not available" {
+		t.Fatalf("expected failed binary result, got %+v", res)
+	}
+}
+
+func TestLoadNonexistentFileFails(t *testing.T) {
+	res := Load(filepath.Join(t.TempDir(), "nope.txt"), DefaultByteCap)
+	if !res.Failed || res.Message == "" {
+		t.Fatalf("expected failed result with a message, got %+v", res)
+	}
+}
+
+func TestLoadOrdinaryFileSucceeds(t *testing.T) {
+	path := writeTemp(t, []byte("package main\n\nfunc main() {}\n"))
+	res := Load(path, DefaultByteCap)
+	if res.Failed {
+		t.Fatalf("expected success, got failed result: %+v", res)
+	}
+	if len(res.Lines) != 3 {
+		t.Fatalf("expected 3 lines, got %v", res.Lines)
+	}
+	if len(res.Segs) != len(res.Lines) {
+		t.Fatalf("expected one segment list per line, got %d segs for %d lines", len(res.Segs), len(res.Lines))
+	}
+}
+
+func TestLoadFallsBackToPlainTextWhenNoRulesMatch(t *testing.T) {
+	path := writeTemp(t, []byte("just some text\n"))
+	res := Load(path, DefaultByteCap)
+	if res.Failed {
+		t.Fatalf("expected success, got failed result: %+v", res)
+	}
+	for _, segs := range res.Segs {
+		for _, s := range segs {
+			if s.Category != CategoryText {
+				t.Fatalf("expected plain-text fallback category, got %v", s.Category)
+			}
+		}
+	}
+}
