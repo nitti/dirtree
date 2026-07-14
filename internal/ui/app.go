@@ -95,6 +95,10 @@ type App struct {
 	// preview view and both overlays' open actions operate on.
 	files *openfiles.List
 
+	// open-files-list overlay state (SPEC.md §2.3)
+	openFilesSelected int
+	openFilesScroll   int
+
 	badgeSkip spinner.MinDurationSkip
 
 	quit bool
@@ -247,10 +251,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleTreeKey(ev)
 	case overlayJump:
 		a.handleJumpKey(ev)
+	case overlayOpenFiles:
+		a.handleOpenFilesKey(ev)
 	case overlayNone:
 		a.handlePreviewKey(ev)
-		// overlayOpenFiles is not reachable yet (stage 4); no key
-		// handling exists for it.
 	}
 }
 
@@ -263,6 +267,9 @@ func (a *App) handlePreviewKey(ev *tcell.EventKey) {
 	switch {
 	case ev.Rune() == 'e':
 		a.overlay = overlayTree
+	case ev.Key() == tcell.KeyTab:
+		a.overlay = overlayOpenFiles
+		a.openFilesSelected = max(a.files.Displayed, 0)
 	case ev.Rune() == '/':
 		a.openJump(jumpFromPreview)
 	case ev.Rune() == 'q', ev.Key() == tcell.KeyEscape:
@@ -320,6 +327,52 @@ func (a *App) treeOpen(keepOpen bool) {
 	a.treeMessage = ""
 	if !keepOpen {
 		a.overlay = overlayNone
+	}
+}
+
+// handleOpenFilesKey implements the open-files-list overlay's input
+// handling (SPEC.md §2.3). Shift-Up/Shift-Down (reorder) are checked
+// ahead of plain Up/Down (navigate) since tcell reports them as the
+// same Key with ModShift set, not a distinct key.
+func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
+	n := len(a.files.Entries)
+	shift := ev.Modifiers()&tcell.ModShift != 0
+
+	switch {
+	case ev.Key() == tcell.KeyEscape:
+		a.overlay = overlayNone
+	case ev.Key() == tcell.KeyUp && shift:
+		if n > 0 {
+			a.openFilesSelected = a.files.MoveUp(a.openFilesSelected)
+		}
+	case ev.Key() == tcell.KeyDown && shift:
+		if n > 0 {
+			a.openFilesSelected = a.files.MoveDown(a.openFilesSelected)
+		}
+	case ev.Key() == tcell.KeyUp:
+		if n > 0 {
+			a.openFilesSelected = tree.MoveSelection(a.openFilesSelected, -1, n)
+		}
+	case ev.Key() == tcell.KeyDown:
+		if n > 0 {
+			a.openFilesSelected = tree.MoveSelection(a.openFilesSelected, 1, n)
+		}
+	case ev.Key() == tcell.KeyEnter:
+		if n > 0 {
+			a.files.Display(a.openFilesSelected)
+			a.overlay = overlayNone
+		}
+	case ev.Rune() == 'x':
+		if n > 0 {
+			a.openFilesSelected = a.files.Remove(a.openFilesSelected)
+			if len(a.files.Entries) == 0 {
+				// SPEC.md §2.3: emptying the list auto-closes the
+				// overlay to the primary preview view's empty state,
+				// which in turn auto-opens the tree explorer exactly
+				// as it does on startup (§1).
+				a.overlay = overlayTree
+			}
+		}
 	}
 }
 

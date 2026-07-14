@@ -42,8 +42,10 @@ func (a *App) draw() {
 	case overlayJump:
 		a.drawJump(w, h)
 		a.drawBadge(w, h)
+	case overlayOpenFiles:
+		a.drawOpenFiles(w, h)
 	default:
-		a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [/] jump  [q] quit")
+		a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [tab] open files  [/] jump  [q] quit")
 		a.drawPreviewPlaceholder(w, h)
 	}
 
@@ -100,6 +102,50 @@ func (a *App) drawJump(w, h int) {
 
 	if a.jumpMessage != "" {
 		a.drawText(0, h-1, w, a.jumpMessage, styleError)
+	}
+}
+
+// drawOpenFiles renders the open-files-list overlay (SPEC.md §2.3):
+// every entry in list order as its root-relative, slash-delimited
+// path, the currently-displayed entry marked distinctly, or an
+// explanatory message if the list is empty.
+func (a *App) drawOpenFiles(w, h int) {
+	a.drawHeader(w, "open files   [enter] display  [x] remove  [shift-up/down] reorder  [esc] close")
+
+	entries := a.files.Entries
+	listHeight := h - 1
+	if listHeight < 1 {
+		return
+	}
+
+	if len(entries) == 0 {
+		a.drawText(0, 1, w, centerPad("no open files", w), styleNormal)
+		return
+	}
+
+	if a.openFilesSelected < a.openFilesScroll {
+		a.openFilesScroll = a.openFilesSelected
+	}
+	if a.openFilesSelected >= a.openFilesScroll+listHeight {
+		a.openFilesScroll = a.openFilesSelected - listHeight + 1
+	}
+
+	for row := range listHeight {
+		i := a.openFilesScroll + row
+		if i >= len(entries) {
+			break
+		}
+		style := styleNormal
+		if i == a.openFilesSelected {
+			style = styleSelected
+		}
+		label := tree.RelativeDisplayPath(a.rootPath, entries[i].Path)
+		if i == a.files.Displayed {
+			label = "* " + label
+		} else {
+			label = "  " + label
+		}
+		a.drawText(0, 1+row, w, label, style)
 	}
 }
 
