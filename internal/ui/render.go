@@ -6,6 +6,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/tree"
 )
@@ -17,6 +18,23 @@ var (
 	styleError    = tcell.StyleDefault.Foreground(tcell.ColorRed)
 	styleBadge    = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
 )
+
+var categoryStyles = map[preview.Category]tcell.Style{
+	preview.CategoryComment:  tcell.StyleDefault.Foreground(tcell.ColorGray),
+	preview.CategoryString:   tcell.StyleDefault.Foreground(tcell.ColorGreen),
+	preview.CategoryNumber:   tcell.StyleDefault.Foreground(tcell.ColorPurple),
+	preview.CategoryKeyword:  tcell.StyleDefault.Foreground(tcell.ColorTeal).Bold(true),
+	preview.CategoryFunction: tcell.StyleDefault.Foreground(tcell.ColorBlue),
+	preview.CategoryOperator: tcell.StyleDefault.Foreground(tcell.ColorYellow),
+	preview.CategoryText:     tcell.StyleDefault,
+}
+
+func styleFor(cat preview.Category) tcell.Style {
+	if s, ok := categoryStyles[cat]; ok {
+		return s
+	}
+	return styleNormal
+}
 
 // draw renders one frame. The tree explorer and jump/fuzzy-picker
 // overlays and a placeholder primary preview view exist this stage;
@@ -45,8 +63,8 @@ func (a *App) draw() {
 	case overlayOpenFiles:
 		a.drawOpenFiles(w, h)
 	default:
-		a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [tab] open files  [/] jump  [q] quit")
-		a.drawPreviewPlaceholder(w, h)
+		a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [tab] open files  [/] jump  [g] goto  [q] quit")
+		a.drawPreview(w, h)
 	}
 
 	a.screen.Show()
@@ -156,17 +174,71 @@ func (a *App) previewHeaderText() string {
 	return "(no file open)"
 }
 
-// drawPreviewPlaceholder stands in for the primary preview view's real
-// content rendering (SPEC.md §2.1), which lands in stage 5.
-func (a *App) drawPreviewPlaceholder(w, h int) {
-	var msg string
-	if e := a.files.DisplayedEntry(); e != nil {
-		msg = fmt.Sprintf("%s (%d lines) — preview rendering not yet implemented", e.Path, len(e.Lines))
-	} else {
-		msg = "no files open — press e to browse, / to search"
+// drawPreview renders the primary preview view's content (SPEC.md
+// §2.1): a line-number gutter plus wrapped, highlighted rows for the
+// currently-displayed entry, or an explanatory empty-state message if
+// none is displayed. The goto-line prompt, when open, occupies the
+// bottom row.
+func (a *App) drawPreview(w, h int) {
+	e := a.files.DisplayedEntry()
+	if e == nil {
+		msg := "no files open — press e to browse, / to search"
+		row := max(h/2, 1)
+		a.drawText(0, row, w, centerPad(msg, w), styleNormal)
+		return
 	}
-	row := max(h/2, 1)
-	a.drawText(0, row, w, centerPad(msg, w), styleNormal)
+
+	a.ensurePreviewWrapped(e)
+	viewportHeight := a.previewViewportHeight()
+	gw := gutterWidth(len(e.Lines))
+	digits := gw - 2
+
+	for row := range viewportHeight {
+		y := 1 + row
+		i := e.Scroll + row
+		if i >= len(e.Rows) {
+			break
+		}
+		dr := e.Rows[i]
+		numField := strings.Repeat(" ", digits)
+		if dr.HasNumber {
+			numField = fmt.Sprintf("%*d", digits, dr.SourceLine+1)
+		}
+		a.drawText(0, y, gw, numField+"  ", styleNormal)
+		a.drawSegments(gw, y, w-gw, dr.Segments)
+	}
+
+	if a.gotoPromptOpen {
+		a.drawText(0, h-1, w, "goto line: "+a.gotoInput, styleNormal)
+	}
+}
+
+// drawSegments draws seg fragments left to right starting at (x, y),
+// each in its category's style (SPEC.md §2.1), clipped and padded with
+// spaces to exactly w columns.
+func (a *App) drawSegments(x, y, w int, segs []preview.Segment) {
+	col := 0
+	for _, seg := range segs {
+		style := styleFor(seg.Category)
+		for _, r := range seg.Text {
+			if col >= w {
+				return
+			}
+			a.screen.SetContent(x+col, y, r, nil, style)
+			col++
+		}
+	}
+	for ; col < w; col++ {
+		a.screen.SetContent(x+col, y, ' ', nil, styleNormal)
+	}
+}
+
+// gutterWidth returns the gutter column width for a file with numLines
+// source lines: wide enough for the largest line number, plus a
+// two-column separator (SPEC.md §2.1).
+func gutterWidth(numLines int) int {
+	digits := max(len(fmt.Sprintf("%d", numLines)), 1)
+	return digits + 2
 }
 
 func centerPad(s string, w int) string {
