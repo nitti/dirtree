@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt clean
+.PHONY: build run test vet fmt lint clean
 
 build:
 	go build $(if $(TAGS),-tags $(TAGS)) -o dirtree ./cmd/dirtree
@@ -14,6 +14,9 @@ vet:
 
 fmt:
 	gofmt -l .
+
+lint:
+	golangci-lint run
 
 clean:
 	rm -f dirtree

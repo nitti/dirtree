@@ -28,6 +28,7 @@ This installs from the [`nitti/homebrew-dirtree`](https://github.com/nitti/homeb
 
 - [`specs/SPEC.md`](specs/SPEC.md) — full behavioral specification: CLI, data model, traversal/ignore rules, navigation, background indexing, jump mode, preview pane, layout, rendering conventions, keybindings, resize handling.
 - [`specs/TESTING.md`](specs/TESTING.md) — acceptance criteria, expressed as test cases the implementation must satisfy.
+- [`docs/GO_STYLE.md`](docs/GO_STYLE.md) — Go-specific style and architecture rules (layering, error conventions, concurrency, tooling), enforced via `.golangci.yml` and `make lint`.
 - `cmd/dirtree/` — CLI entry point (argument parsing, path resolution, startup error handling, `--version`).
 - `internal/tree/` — the lazily-loaded node model, flattening, navigation semantics, and the refresh/merge logic behind live updates (spec §3.1, §3.4, §6.1).
 - `internal/ignore/` — the dependency-free `.gitignore`/`.dirtreeignore` pattern subset (spec §3.2).
@@ -47,6 +48,7 @@ make build          # builds ./dirtree
 make run             # builds and runs against .
 make run ARGS=/path  # builds and runs against a specific path
 make test            # runs the unit test suite
+make lint            # runs golangci-lint (see docs/GO_STYLE.md)
 ```
 
 Or directly with `go`:

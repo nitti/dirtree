@@ -209,7 +209,7 @@ func (a *App) drawPreviewPopup(w, h int) {
 	drawTextClipped(a.screen, px, py+ph-1, pw, "[g] goto  [q]/[esc] close", styleHeader)
 }
 
-func (a *App) drawGotoPrompt(w, h int) {
+func (a *App) drawGotoPrompt(_, h int) {
 	prompt := "goto line: " + a.gotoInput
 	drawText(a.screen, 0, h-1, prompt, styleHeader)
 }

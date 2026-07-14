@@ -42,7 +42,7 @@ func loadFile(rootDir, name string) *Matcher {
 	if err != nil {
 		return &Matcher{}
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	m := &Matcher{}
 	scanner := bufio.NewScanner(f)

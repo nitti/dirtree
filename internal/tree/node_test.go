@@ -114,7 +114,7 @@ func TestPermissionErrorYieldsZeroChildrenAndErrString(t *testing.T) {
 	rootPath := t.TempDir()
 	noperm := filepath.Join(rootPath, "noperm")
 	must(t, os.Mkdir(noperm, 0o000))
-	defer os.Chmod(noperm, 0o755)
+	defer func() { _ = os.Chmod(noperm, 0o755) }()
 
 	root := NewRoot(rootPath, nil)
 	var n *Node
@@ -394,7 +394,7 @@ func TestDirtreeIgnoreExcludesAcrossWholeApp(t *testing.T) {
 // --- Path display and reveal ---
 
 func TestRelativeDisplayPathIsPosix(t *testing.T) {
-	rootPath := filepath.Join(t.TempDir())
+	rootPath := t.TempDir()
 	target := filepath.Join(rootPath, "a", "b", "c.txt")
 	rel := RelativeDisplayPath(rootPath, target)
 	if rel != "a/b/c.txt" {

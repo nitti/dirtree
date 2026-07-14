@@ -27,6 +27,10 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
       - name: go build
         run: go build ./...
 

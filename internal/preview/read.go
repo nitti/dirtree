@@ -24,7 +24,7 @@ func ReadLines(path string, cap int64) []string {
 	if err != nil {
 		return []string{fmt.Sprintf("(could not read file: %v)", err)}
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 // highlighted text fragment (SPEC.md §8).
 type Category string
 
+// Display categories for a highlighted text fragment.
 const (
 	CategoryText     Category = "text"
 	CategoryComment  Category = "comment"
