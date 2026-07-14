@@ -1,0 +1,42 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - bodyclose
+    - gocritic
+    - revive
+    - unconvert
+    - misspell
+  settings:
+    revive:
+      rules:
+        - name: package-comments
+        - name: exported
+        - name: error-strings
+        - name: error-naming
+        - name: unused-parameter
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+  exclusions:
+    rules:
+      # UI/watch/index layers touch OS facilities (terminal, filesystem
+      # watches) that legitimately fire-and-forget or defer-close without
+      # checking every error; see docs/GO_STYLE.md.
+      - path: internal/ui/
+        linters:
+          - errcheck
+      - path: internal/watch/
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
