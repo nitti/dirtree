@@ -34,11 +34,12 @@ This installs from the [`nitti/homebrew-dirtree`](https://github.com/nitti/homeb
 - `internal/ignore/` — the dependency-free `.gitignore`/`.dirtreeignore` pattern subset (spec §3.2).
 - `internal/index/` — the background full-tree index used by jump mode, including live rebuilds (spec §4.1, §6.1).
 - `internal/match/` — the shared substring/glob query-matching rule (spec §4.2).
-- `internal/preview/` — file reading, best-effort syntax highlighting, and line wrapping for the preview pane (spec §2.1).
+- `internal/preview/` — file reading (`Load`, distinguishing a failed open from a successful one per spec §2.2), best-effort syntax highlighting, and line wrapping for the preview pane (spec §2.1).
+- `internal/openfiles/` — the open-files list: per-entry scroll/goto state, open/reuse/fail semantics, and the list-overlay's remove/reorder operations (spec §2.2, §2.3).
 - `internal/layout/` — the pure split-view/popup layout math (spec §5.1).
-- `internal/spinner/` — the delayed-loading-indicator timing/frame logic (spec §5.2).
+- `internal/spinner/` — the delayed-loading-indicator timing/frame logic, including the minimum-display-duration skip and the full badge decision sequence (spec §5.2).
 - `internal/watch/` — the `fsnotify`-backed, debounced filesystem-change watcher driving live refresh (spec §6.1); OS-facility-adjacent like `internal/ui`, verified manually.
-- `internal/ui/` — the tcell-backed terminal-rendering layer (draw loop, input handling, resize polling, wiring the watcher to tree/index refresh); not unit-tested, verified manually in a real terminal.
+- `internal/ui/` — the tcell-backed terminal-rendering layer (draw loop, input handling, resize polling, wiring the watcher to tree/index refresh). Currently a placeholder stub (`New`/`Run` only) pending the staged rebuild described below; not unit-tested even once rebuilt, verified manually in a real terminal.
 - `.goreleaser.yaml` / `.github/workflows/release.yml` — cross-compiles and publishes a GitHub Release plus an updated Homebrew cask on every `vX.Y.Z` tag push.
 
 ## Build and run
@@ -71,9 +72,17 @@ This cross-compiles `darwin`/`linux` × `amd64`/`arm64` binaries, attaches them 
 
 ## Status
 
-The implementation in this repo currently reflects an earlier design: tree view as the primary screen with a single file preview opened on demand (split or popup). `specs/SPEC.md` has since been redrafted around a different model — a running list of open file previews as the primary view, with the tree browser (§3), an open-files switcher (§2.3), and a unified jump/fuzzy-picker (§4) all becoming overlays reachable from it (§5.1 covers the resulting view model). The code has not yet been updated to match; that reimplementation is expected in a future session. Until then, treat `specs/SPEC.md`/`specs/TESTING.md` as the target design and the code below as the prior generation it supersedes.
+`specs/SPEC.md` was redrafted around a different primary-view model than the original implementation: a running list of open file previews as the primary view, with the tree browser (§3), an open-files switcher (§2.3), and a unified jump/fuzzy-picker (§4) all becoming overlays reachable from it (§5.1 covers the resulting view model). The reimplementation against that spec is underway in stages (each stage sized to land as its own reviewable change):
 
-The pure-logic layers (`internal/tree`, `internal/ignore`, `internal/index`, `internal/match`, `internal/preview`, `internal/layout`, `internal/spinner`) have automated test coverage for the prior design. The `internal/ui` terminal-rendering layer has been verified by building the binary and exercising the CLI's error path (non-directory argument); full interactive verification (navigation, jump mode, preview split/popup, resize behavior, escape responsiveness, and live refresh as files change on disk) inside a real terminal/multiplexer session is still outstanding, and now moot pending the reimplementation against the new spec.
+1. **Done.** Core open-files data layer: `internal/openfiles` (open/reuse/fail semantics, remove/reorder), `preview.Load`'s failed-vs-opened result type, and `spinner`'s minimum-display-duration-skip/badge-decision logic — all pure, all unit-tested. The prior `internal/ui` (built around the old "tree explorer is primary" model) was removed and replaced with a placeholder stub so the binary still builds; it does not yet implement the interactive UI.
+2. Tree explorer overlay wiring (Space/`a` open semantics with inline failure messaging, `/` into jump mode).
+3. Jump/fuzzy-picker overlay wiring (both entry points, reveal-in-tree and open-into-list actions).
+4. Open-files list overlay (`Tab`): list rendering, Enter/x/Shift-Up/Shift-Down/Escape.
+5. Primary preview view: per-entry scroll/goto restore, empty state, `Tab`/`e`/`/`/`q` wiring.
+6. Layout & rendering: header content per overlay, tree explorer's dual split/popup, badge rendering, gutter/wrap, selection highlight.
+7. System behaviors & polish: resize polling, escape timeout, live-refresh integration, manual terminal/multiplexer verification pass.
+
+The pure-logic layers (`internal/tree`, `internal/ignore`, `internal/index`, `internal/match`, `internal/preview`, `internal/openfiles`, `internal/layout`, `internal/spinner`) have automated test coverage. `internal/ui` is currently a stub (`Run` returns "not yet implemented"); running the binary will build but exit with that error until stage 2+ lands.
 
 ## Non-negotiable constraints
 
