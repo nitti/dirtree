@@ -22,6 +22,7 @@ import (
 
 	"github.com/nitti/dirtree/internal/ignore"
 	"github.com/nitti/dirtree/internal/index"
+	"github.com/nitti/dirtree/internal/layout"
 	"github.com/nitti/dirtree/internal/match"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
@@ -63,6 +64,14 @@ const (
 	completionMessage         = "indexing complete"
 	watchDebounce             = 300 * time.Millisecond
 	previewByteCap            = preview.DefaultByteCap
+
+	// Tree explorer split/popup layout (SPEC.md §5.1).
+	previewMaxWidth  = 120 // preview pane's own width cap in split view
+	minPreviewWidth  = 40  // minimum usable preview width for the split-vs-popup threshold
+	minTreePaneWidth = 20
+	maxTreePaneWidth = 60
+	popupMarginX     = 4
+	popupMarginY     = 2
 )
 
 // App holds all interactive state for a running session.
@@ -327,7 +336,7 @@ func (a *App) scrollPreview(delta int) {
 	if e == nil {
 		return
 	}
-	a.ensurePreviewWrapped(e)
+	a.ensurePreviewWrapped(e, a.computedPreviewWidth())
 	e.Scroll = clamp(e.Scroll+delta, 0, a.maxPreviewScroll(e, a.previewViewportHeight()))
 }
 
@@ -339,7 +348,7 @@ func (a *App) gotoLine(input string) {
 	if input == "" || e == nil {
 		return
 	}
-	a.ensurePreviewWrapped(e)
+	a.ensurePreviewWrapped(e, a.computedPreviewWidth())
 	n := 0
 	for _, r := range input {
 		n = n*10 + int(r-'0')
@@ -364,9 +373,13 @@ func (a *App) previewViewportHeight() int {
 }
 
 // computedPreviewWidth returns the content width (in columns) available
-// to the preview's wrapped text at the primary preview view's current
-// full-terminal-width rendering. The split/popup layout and its
-// preview-pane width cap (SPEC.md §5.1) land in stage 6.
+// to the preview's wrapped text at the primary preview view when no
+// overlay is active (full terminal width). This is only used by the
+// scroll/goto-line key handlers, which are only reachable in that
+// context (SPEC.md §5.1: the preview pane is read-only, with a
+// narrower width, while the tree explorer's split-view overlay is
+// active — drawPreview computes that width itself from the layout it's
+// given, independently of this helper).
 func (a *App) computedPreviewWidth() int {
 	w, _ := a.screen.Size()
 	e := a.files.DisplayedEntry()
@@ -376,13 +389,11 @@ func (a *App) computedPreviewWidth() int {
 	return max(w-gutterWidth(len(e.Lines)), 1)
 }
 
-// ensurePreviewWrapped recomputes e's wrapped display rows if the
-// available width has changed since they were last computed (SPEC.md
-// §2.1: "wrapping must be recomputed whenever the available width
-// changes"), caching the result on the entry so it's not redone every
-// frame.
-func (a *App) ensurePreviewWrapped(e *openfiles.Entry) {
-	width := a.computedPreviewWidth()
+// ensurePreviewWrapped recomputes e's wrapped display rows if width has
+// changed since they were last computed (SPEC.md §2.1: "wrapping must
+// be recomputed whenever the available width changes"), caching the
+// result on the entry so it's not redone every frame.
+func (a *App) ensurePreviewWrapped(e *openfiles.Entry, width int) {
 	if e.RowsWidth == width && e.Rows != nil {
 		return
 	}
@@ -655,4 +666,39 @@ func indexOf(list []*tree.Node, n *tree.Node) int {
 		}
 	}
 	return 0
+}
+
+// treePaneWidth returns the tree explorer pane's width for split view
+// (SPEC.md §5.1): wide enough to fit the longest currently-visible
+// row's rendered label (indentation + expand marker + name), clamped
+// to [minTreePaneWidth, maxTreePaneWidth].
+func (a *App) treePaneWidth() int {
+	flat := a.root.Flatten()
+	lengths := make([]int, len(flat))
+	for i, n := range flat {
+		lengths[i] = n.Depth*2 + 2 + len(n.Name) // indent + marker + name, matching treeLabel
+	}
+	return layout.ComputeTreePaneWidth(lengths, minTreePaneWidth, maxTreePaneWidth)
+}
+
+// computeSplitLayout decides split-vs-popup and, for split view, the
+// tree-pane and preview-pane widths to render, per SPEC.md §5.1: the
+// preview pane's own width is capped at previewMaxWidth; once the
+// terminal is wide enough that the preview would exceed that cap, the
+// extra width grows the tree pane (up to its own max) instead of
+// stretching the preview further.
+func (a *App) computeSplitLayout(termWidth int) (treeWidth, previewPaneWidth int, split bool) {
+	baseTreeWidth := a.treePaneWidth()
+	if !layout.ShouldSplitView(termWidth, baseTreeWidth, minPreviewWidth) {
+		return baseTreeWidth, 0, false
+	}
+
+	natural := termWidth - baseTreeWidth - 1
+	if natural <= previewMaxWidth {
+		return baseTreeWidth, natural, true
+	}
+
+	leftover := natural - previewMaxWidth
+	treeWidth = min(baseTreeWidth+leftover, maxTreePaneWidth)
+	return treeWidth, previewMaxWidth, true
 }
