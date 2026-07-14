@@ -7,13 +7,11 @@
 //
 // The interactive UI is being rebuilt in stages against SPEC.md's
 // open-files-primary-view redesign (see README.md's Status section for
-// the full plan). This stage wires the tree explorer overlay's own
-// navigation and its Space/`a` open actions (§3.4), and the
-// jump/fuzzy-picker overlay (§4) from both entry points, against the
-// new internal/openfiles list (§2.2). The open-files-list overlay
-// (§2.3), the primary preview view's own content rendering (§2.1), and
-// the tree explorer's dual split/popup layout (§5.1) are not wired yet
-// and land in later stages.
+// the full plan). This stage adds the primary preview view's own
+// content rendering, scrolling, and goto-line (§2.1); the tree
+// explorer (§3.4), jump/fuzzy-picker (§4), and open-files-list (§2.3)
+// overlays already worked from earlier stages. The tree explorer's
+// dual split/popup layout (§5.1) is not wired yet and lands in stage 6.
 package ui
 
 import (
@@ -98,6 +96,12 @@ type App struct {
 	// open-files-list overlay state (SPEC.md §2.3)
 	openFilesSelected int
 	openFilesScroll   int
+
+	// primary preview view's goto-line prompt state (SPEC.md §2.1);
+	// scroll and the wrapped-row cache live per-entry on
+	// openfiles.Entry instead, since they're tracked per open file.
+	gotoPromptOpen bool
+	gotoInput      string
 
 	badgeSkip spinner.MinDurationSkip
 
@@ -264,6 +268,11 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 // wires the keys needed to reach/leave the tree explorer and jump
 // overlays and to quit (SPEC.md §7).
 func (a *App) handlePreviewKey(ev *tcell.EventKey) {
+	if a.gotoPromptOpen {
+		a.handleGotoPromptKey(ev)
+		return
+	}
+
 	switch {
 	case ev.Rune() == 'e':
 		a.overlay = overlayTree
@@ -274,7 +283,121 @@ func (a *App) handlePreviewKey(ev *tcell.EventKey) {
 		a.openJump(jumpFromPreview)
 	case ev.Rune() == 'q', ev.Key() == tcell.KeyEscape:
 		a.quit = true
+	case ev.Key() == tcell.KeyUp:
+		a.scrollPreview(-1)
+	case ev.Key() == tcell.KeyDown:
+		a.scrollPreview(1)
+	case ev.Key() == tcell.KeyPgUp:
+		a.scrollPreview(-a.previewViewportHeight())
+	case ev.Key() == tcell.KeyPgDn:
+		a.scrollPreview(a.previewViewportHeight())
+	case ev.Rune() == 'g':
+		if a.files.DisplayedEntry() != nil {
+			a.gotoPromptOpen = true
+			a.gotoInput = ""
+		}
 	}
+}
+
+// handleGotoPromptKey handles input while the goto-line prompt is open
+// (SPEC.md §2.1): only digits and backspace are accepted, Enter jumps
+// to the entered line, Escape cancels without changing scroll.
+func (a *App) handleGotoPromptKey(ev *tcell.EventKey) {
+	switch {
+	case ev.Key() == tcell.KeyEscape:
+		a.gotoPromptOpen = false
+	case ev.Key() == tcell.KeyEnter:
+		a.gotoLine(a.gotoInput)
+		a.gotoPromptOpen = false
+	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
+		if len(a.gotoInput) > 0 {
+			a.gotoInput = a.gotoInput[:len(a.gotoInput)-1]
+		}
+	case ev.Rune() >= '0' && ev.Rune() <= '9':
+		a.gotoInput += string(ev.Rune())
+	}
+}
+
+// scrollPreview scrolls the currently-displayed entry by delta display
+// rows (SPEC.md §2.1), clamped so it never goes negative or past the
+// point where the last display row would leave the viewport. A no-op
+// at the empty state (no displayed entry).
+func (a *App) scrollPreview(delta int) {
+	e := a.files.DisplayedEntry()
+	if e == nil {
+		return
+	}
+	a.ensurePreviewWrapped(e)
+	e.Scroll = clamp(e.Scroll+delta, 0, a.maxPreviewScroll(e, a.previewViewportHeight()))
+}
+
+// gotoLine jumps the currently-displayed entry's scroll to the source
+// line's first display row (SPEC.md §2.1), clamped to [1, total source
+// lines]. A no-op if input is empty or there's no displayed entry.
+func (a *App) gotoLine(input string) {
+	e := a.files.DisplayedEntry()
+	if input == "" || e == nil {
+		return
+	}
+	a.ensurePreviewWrapped(e)
+	n := 0
+	for _, r := range input {
+		n = n*10 + int(r-'0')
+	}
+	n = clamp(n, 1, len(e.Lines))
+	if row, ok := e.FirstRow[n-1]; ok {
+		e.Scroll = clamp(row, 0, a.maxPreviewScroll(e, a.previewViewportHeight()))
+	}
+}
+
+func (a *App) maxPreviewScroll(e *openfiles.Entry, viewportHeight int) int {
+	return max(len(e.Rows)-viewportHeight, 0)
+}
+
+func (a *App) previewViewportHeight() int {
+	_, h := a.screen.Size()
+	height := h - 1 // header row
+	if a.gotoPromptOpen {
+		height--
+	}
+	return height
+}
+
+// computedPreviewWidth returns the content width (in columns) available
+// to the preview's wrapped text at the primary preview view's current
+// full-terminal-width rendering. The split/popup layout and its
+// preview-pane width cap (SPEC.md §5.1) land in stage 6.
+func (a *App) computedPreviewWidth() int {
+	w, _ := a.screen.Size()
+	e := a.files.DisplayedEntry()
+	if e == nil {
+		return w
+	}
+	return max(w-gutterWidth(len(e.Lines)), 1)
+}
+
+// ensurePreviewWrapped recomputes e's wrapped display rows if the
+// available width has changed since they were last computed (SPEC.md
+// §2.1: "wrapping must be recomputed whenever the available width
+// changes"), caching the result on the entry so it's not redone every
+// frame.
+func (a *App) ensurePreviewWrapped(e *openfiles.Entry) {
+	width := a.computedPreviewWidth()
+	if e.RowsWidth == width && e.Rows != nil {
+		return
+	}
+	e.Rows, e.FirstRow = preview.BuildDisplayRows(e.Segs, width)
+	e.RowsWidth = width
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // handleTreeKey implements the tree explorer overlay's navigation and
