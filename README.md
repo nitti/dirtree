@@ -39,7 +39,7 @@ This installs from the [`nitti/homebrew-dirtree`](https://github.com/nitti/homeb
 - `internal/layout/` — the pure split-view/popup layout math (spec §5.1).
 - `internal/spinner/` — the delayed-loading-indicator timing/frame logic, including the minimum-display-duration skip and the full badge decision sequence (spec §5.2).
 - `internal/watch/` — the `fsnotify`-backed, debounced filesystem-change watcher driving live refresh (spec §6.1); OS-facility-adjacent like `internal/ui`, verified manually.
-- `internal/ui/` — the tcell-backed terminal-rendering layer (draw loop, input handling, resize polling, wiring the watcher to tree/index refresh). Currently a placeholder stub (`New`/`Run` only) pending the staged rebuild described below; not unit-tested even once rebuilt, verified manually in a real terminal.
+- `internal/ui/` — the tcell-backed terminal-rendering layer (draw loop, input handling, resize polling, wiring the watcher to tree/index refresh). Being rebuilt in stages against the new spec (see Status below); not unit-tested, verified manually in a real terminal.
 - `.goreleaser.yaml` / `.github/workflows/release.yml` — cross-compiles and publishes a GitHub Release plus an updated Homebrew cask on every `vX.Y.Z` tag push.
 
 ## Build and run
@@ -75,14 +75,14 @@ This cross-compiles `darwin`/`linux` × `amd64`/`arm64` binaries, attaches them 
 `specs/SPEC.md` was redrafted around a different primary-view model than the original implementation: a running list of open file previews as the primary view, with the tree browser (§3), an open-files switcher (§2.3), and a unified jump/fuzzy-picker (§4) all becoming overlays reachable from it (§5.1 covers the resulting view model). The reimplementation against that spec is underway in stages (each stage sized to land as its own reviewable change):
 
 1. **Done.** Core open-files data layer: `internal/openfiles` (open/reuse/fail semantics, remove/reorder), `preview.Load`'s failed-vs-opened result type, and `spinner`'s minimum-display-duration-skip/badge-decision logic — all pure, all unit-tested. The prior `internal/ui` (built around the old "tree explorer is primary" model) was removed and replaced with a placeholder stub so the binary still builds; it does not yet implement the interactive UI.
-2. Tree explorer overlay wiring (Space/`a` open semantics with inline failure messaging, `/` into jump mode).
+2. **Done.** Tree explorer overlay wiring: `internal/ui` rebuilt with a real (if simplified — full-width, no split/popup yet) draw loop; the tree explorer auto-opens on startup, supports the full §3.4 navigation set, and Space/`a` open files through `internal/openfiles` with inline failure messaging in the explorer's footer, per §2.2's open-failure signaling. `/` into jump mode is not wired yet (stage 3), nor is the primary preview view's real content (stage 5) — it currently renders a placeholder ("`<path>` (`<n>` lines) — preview rendering not yet implemented").
 3. Jump/fuzzy-picker overlay wiring (both entry points, reveal-in-tree and open-into-list actions).
 4. Open-files list overlay (`Tab`): list rendering, Enter/x/Shift-Up/Shift-Down/Escape.
 5. Primary preview view: per-entry scroll/goto restore, empty state, `Tab`/`e`/`/`/`q` wiring.
 6. Layout & rendering: header content per overlay, tree explorer's dual split/popup, badge rendering, gutter/wrap, selection highlight.
 7. System behaviors & polish: resize polling, escape timeout, live-refresh integration, manual terminal/multiplexer verification pass.
 
-The pure-logic layers (`internal/tree`, `internal/ignore`, `internal/index`, `internal/match`, `internal/preview`, `internal/openfiles`, `internal/layout`, `internal/spinner`) have automated test coverage. `internal/ui` is currently a stub (`Run` returns "not yet implemented"); running the binary will build but exit with that error until stage 2+ lands.
+The pure-logic layers (`internal/tree`, `internal/ignore`, `internal/index`, `internal/match`, `internal/preview`, `internal/openfiles`, `internal/layout`, `internal/spinner`) have automated test coverage. `internal/ui` is hand-verified in a real terminal (tmux) as of stage 2 for what's implemented so far (tree navigation, expand/collapse, Space/`a` open actions, `e` to reopen the explorer, quit); the jump overlay, open-files overlay, and real preview content are not yet reachable.
 
 ## Non-negotiable constraints
 
