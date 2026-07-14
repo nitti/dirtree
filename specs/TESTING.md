@@ -2,7 +2,7 @@
 
 These are the behaviors the pure-logic layer's unit suite must lock down — no terminal/rendering tests, since that layer isn't practically unit-testable. Treat each bullet as a required test case in the implementation, regardless of test framework. Group names below mirror the spec sections in `SPEC.md` they correspond to; they are not meant to prescribe file/module layout.
 
-Wherever these tests reference "the tree," they mean the pure navigation/model layer described in `SPEC.md` §2 and §5 — keep that layer free of any terminal-rendering dependency in the implementation, the same way the prototype kept its model code free of direct terminal-library calls, so all of the below is testable without a real terminal.
+Wherever these tests reference "the tree," they mean the pure navigation/model layer described in `SPEC.md` §2 and §9 — keep that layer free of any terminal-rendering dependency in the implementation, the same way the prototype kept its model code free of direct terminal-library calls, so all of the below is testable without a real terminal.
 
 ## Node / tree construction and flattening
 
@@ -19,18 +19,6 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Expanding a collapsed directory loads its children (if not already loaded) and marks it expanded.
 - Collapsing marks a directory not-expanded regardless of prior state (idempotent).
 - Toggle expands a collapsed directory and collapses an expanded one.
-
-## Right-arrow / left-arrow semantics (tree explorer)
-
-- Right on a collapsed directory expands it and returns the same node (selection doesn't move).
-- Right on an expanded directory with children returns its first child.
-- Right on an expanded directory with zero children returns the same node.
-- Right on a file returns the same node (no-op).
-- Left on an expanded directory collapses it and returns the same node.
-- Left on a collapsed directory with a parent returns the parent.
-- Left on a collapsed directory with no parent (root) returns the same node.
-- Left on a file returns its parent **and** that parent ends up collapsed, in one call — this is the "jump to parent and close it" combined behavior; verify both the returned node and the parent's `expanded` state.
-- Left on a file whose parent is the root behaves the same way (parent has no further parent, but still gets collapsed).
 
 ## Selection movement
 
@@ -55,7 +43,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - A `.dirtreeignore` pattern uses the same syntax as `.gitignore` (glob, anchoring, directory-only, negation all behave identically).
 - A path matching either the `.gitignore` set or the `.dirtreeignore` set is excluded (union, not intersection).
 - A negation pattern in `.dirtreeignore` does not re-include a path excluded by a `.gitignore` pattern, and vice versa — negation precedence is scoped to a single file's own rule list, not across the two files.
-- The background full-tree index (§6) respects `.dirtreeignore` exclusions the same way it respects `.gitignore` ones — this is app-wide filtering, not limited to the jump/fuzzy-picker mode.
+- The background full-tree index (§5) respects `.dirtreeignore` exclusions the same way it respects `.gitignore` ones — this is app-wide filtering, not limited to the jump/fuzzy-picker mode.
 
 ## Background full-tree index (`list_all_paths`-equivalent)
 
@@ -93,15 +81,6 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Filtering the flat full-path index matches on any path segment, including a directory-name component, not just the leaf/file name — e.g. a query matching a middle directory's name returns files nested under it.
 - A query that legitimately matches the same relative path only once returns exactly one result even when the same basename recurs at multiple nesting depths elsewhere in the tree (regression case: verify the matcher isn't accidentally treating differently-nested-but-distinctly-pathed matches as duplicates of each other, and isn't failing to de-duplicate a genuinely repeated symlinked/aliased path either way — assert against a known-good expected set built directly from the fixture layout).
 
-## Jump/fuzzy-picker mode: entry-point action wiring
-
-- Opening the picker from the tree explorer and pressing Enter on a match performs reveal-in-tree (expands ancestors, leaves tree explorer open with the match selected).
-- Opening the picker from the tree explorer and pressing Space on a match performs open-into-list (opens/reuses the open-files entry, closes tree explorer, lands on preview showing it).
-- Opening the picker from the primary preview view and pressing Enter on a match performs open-into-list.
-- Opening the picker from the primary preview view and pressing Space on a match performs reveal-in-tree (opens the tree explorer overlay if it wasn't already open, with the match selected).
-- Reveal-in-tree resolution failure (path no longer exists) exits the overlay without changing tree selection, regardless of which key/entry-point triggered it.
-- Escape from either entry point returns to the exact screen the overlay was opened from (tree explorer stays open and unchanged; preview view's displayed entry, or empty state, is unchanged) without performing either action.
-
 ## Preview: reading, highlighting, wrapping
 
 - Reading a normal small text file returns its lines split correctly, preserving empty lines.
@@ -120,8 +99,8 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Opening a path not already in the open-files list, whose read bytes contain a NUL byte, returns a "binary" result: no entry is created, and the previously-displayed entry (if any) is unaffected.
 - Opening a path not already in the open-files list, whose read bytes contain no NUL byte, returns an "opened" result and creates/displays an entry as normal — binary detection does not false-positive on ordinary text content.
 - Opening a path that already has an entry in the open-files list returns an "opened" result and reuses that entry without re-reading the file, regardless of current on-disk content (an existing entry is, by construction, never binary, since a binary open never creates one).
-- The binary check is derived from the same byte-cap-bounded read used for normal preview loading (§8) — it does not require a second, separate read of the file.
-- A read error (permission denied, nonexistent file) is reported as its own explanatory single-line entry (§8), distinct from a "binary" result — it still produces an "opened" result with that explanatory content, not a binary short-circuit.
+- The binary check is derived from the same byte-cap-bounded read used for normal preview loading (§7) — it does not require a second, separate read of the file.
+- A read error (permission denied, nonexistent file) is reported as its own explanatory single-line entry (§7), distinct from a "binary" result — it still produces an "opened" result with that explanatory content, not a binary short-circuit.
 - Tree explorer's Space action on a binary file leaves the explorer open and selection unchanged (rather than its normal close-and-display), and does not add an entry to the open-files list.
 - Tree explorer's `a` action on a binary file behaves the same as Space's binary case (no entry added; explorer already stays open either way).
 - The jump/fuzzy-picker overlay's open-into-list action on a binary file leaves the overlay open and match selection unchanged (rather than exiting to the preview), and does not add an entry to the open-files list.
@@ -138,6 +117,27 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Removing the last remaining entry via `x` results in no displayed entry (list is empty) and the overlay auto-closes to the primary preview view's empty state.
 - The open-files-list overlay's own selection index is clamped to a valid remaining index after an `x` removal (never left pointing past the end of the shrunken list).
 - Escape from the open-files-list overlay does not change which entry is displayed, but does not undo any `x` removals already performed during that overlay session.
+
+## Right-arrow / left-arrow semantics (tree explorer)
+
+- Right on a collapsed directory expands it and returns the same node (selection doesn't move).
+- Right on an expanded directory with children returns its first child.
+- Right on an expanded directory with zero children returns the same node.
+- Right on a file returns the same node (no-op).
+- Left on an expanded directory collapses it and returns the same node.
+- Left on a collapsed directory with a parent returns the parent.
+- Left on a collapsed directory with no parent (root) returns the same node.
+- Left on a file returns its parent **and** that parent ends up collapsed, in one call — this is the "jump to parent and close it" combined behavior; verify both the returned node and the parent's `expanded` state.
+- Left on a file whose parent is the root behaves the same way (parent has no further parent, but still gets collapsed).
+
+## Jump/fuzzy-picker mode: entry-point action wiring
+
+- Opening the picker from the tree explorer and pressing Enter on a match performs reveal-in-tree (expands ancestors, leaves tree explorer open with the match selected).
+- Opening the picker from the tree explorer and pressing Space on a match performs open-into-list (opens/reuses the open-files entry, closes tree explorer, lands on preview showing it).
+- Opening the picker from the primary preview view and pressing Enter on a match performs open-into-list.
+- Opening the picker from the primary preview view and pressing Space on a match performs reveal-in-tree (opens the tree explorer overlay if it wasn't already open, with the match selected).
+- Reveal-in-tree resolution failure (path no longer exists) exits the overlay without changing tree selection, regardless of which key/entry-point triggered it.
+- Escape from either entry point returns to the exact screen the overlay was opened from (tree explorer stays open and unchanged; preview view's displayed entry, or empty state, is unchanged) without performing either action.
 
 ## Layout computation
 
@@ -177,4 +177,4 @@ The following require a real terminal (ideally inside a multiplexer like Zellij 
 - The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Enter-to-display and `x`-to-remove, and its empty-list message renders when reachable.
 - The jump/fuzzy-picker overlay's header legend correctly reflects which of Enter/Space maps to which action depending on entry point (tree explorer vs. preview).
 - Tree-explorer split-view vs. popup layout flips correctly on live resize, with the preview pane visible-but-inert in split view.
-- Escape responsiveness (§13), resize handling via periodic polling (§12), and the spinner badge's visual distinctness (§11) per the checks above.
+- Escape responsiveness (§14), resize handling via periodic polling (§13), and the spinner badge's visual distinctness (§12) per the checks above.
