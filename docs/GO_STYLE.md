@@ -4,7 +4,7 @@ These rules are enforced by `.golangci.yml` (`make lint`) where a linter can cat
 
 ## Baseline
 
-Default to the official Go documentation (https://go.dev/doc/) and [Effective Go](https://go.dev/doc/effective_go) for anything not called out below — naming conventions, formatting, control-flow idioms, interface design, etc. The rules in this file only exist to record project-specific decisions that go beyond, or narrow a choice within, that baseline (e.g. this project's package layering, or a house rule on error wrapping); they are not a replacement for it.
+Default to the official Go documentation (https://go.dev/doc/), [Effective Go](https://go.dev/doc/effective_go), and the [Google Go Style Guide](https://google.github.io/styleguide/go/) for anything not called out below — naming conventions, formatting, control-flow idioms, interface design, etc. Where Effective Go and the Google guide differ, the Google guide's [decisions](https://google.github.io/styleguide/go/decisions) take precedence as the more specific, actively maintained reference. The rules in this file only exist to record project-specific decisions that go beyond, or narrow a choice within, that baseline (e.g. this project's package layering, or a house rule on error wrapping); they are not a replacement for it.
 
 ## Layering
 
