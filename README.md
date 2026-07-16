@@ -6,7 +6,7 @@ The spec was derived from a working Python/curses prototype (iterated on directl
 
 ## Goals
 
-- **Single static binary, no required runtime dependencies.** No interpreter, no package manager, no dynamically-loaded libraries needed at runtime. Optional-but-desired features (syntax highlighting, `.gitignore` parsing) must be implemented directly rather than delegated to an external library the binary depends on.
+- **Single static binary, no required runtime dependencies.** No interpreter, no package manager, no dynamically-loaded libraries needed at runtime. Optional-but-desired features (syntax highlighting, `.gitignore` parsing) may use a statically-linked library compiled into the binary (e.g. syntax highlighting uses `chroma`), but must never depend on something present only on the target system at runtime.
 - **Cross-platform terminal UI** that behaves correctly inside terminal multiplexers (Zellij, tmux) that don't always deliver resize signals reliably.
 - **Usable as a released artifact** other projects can pull in by version (e.g. a container image build fetching a pinned release binary), not something that only lives copy-pasted inside one repo.
 
