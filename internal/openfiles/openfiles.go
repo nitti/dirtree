@@ -5,11 +5,14 @@
 // so it's unit-testable.
 package openfiles
 
-import "github.com/nitti/dirtree/internal/preview"
+import (
+	"github.com/nitti/dirtree/internal/find"
+	"github.com/nitti/dirtree/internal/preview"
+)
 
 // Entry is one open file: its resolved absolute path, loaded preview
-// content, and its own independent scroll/goto-line state (SPEC.md
-// §2.1, §2.2).
+// content, and its own independent scroll/goto-line/in-file-find state
+// (SPEC.md §2.1, §2.2, §2.4).
 type Entry struct {
 	Path  string
 	Lines []string
@@ -27,6 +30,28 @@ type Entry struct {
 	Rows      []preview.DisplayRow
 	FirstRow  map[int]int
 	RowsWidth int
+
+	// In-file find state (SPEC.md §2.4), independent per entry like
+	// scroll/goto-line above. FindQuery is the last executed search
+	// ("" means no active find); FindMatches is every match it found,
+	// in source order; FindCurrent indexes the currently-highlighted
+	// match into FindMatches (-1 if there are none); FindWrapNote is a
+	// transient "wrapped to top/bottom" note set by the most recent
+	// next/previous step that crossed an end of the match list, cleared
+	// by the next step that doesn't.
+	FindQuery    string
+	FindMatches  []find.Match
+	FindCurrent  int
+	FindWrapNote string
+
+	// CopyMode strips the preview's line-number gutter and syntax-color
+	// styling for this entry specifically (SPEC.md §2.1), so a terminal
+	// mouse selection over its content grabs exactly the file's own
+	// characters. Per entry rather than global, like the rest of this
+	// struct's state, so switching files doesn't carry a copy-mode
+	// preference that had nothing to do with the file you're switching
+	// to.
+	CopyMode bool
 }
 
 // Outcome is the result of an open attempt (SPEC.md §2.2).
@@ -86,7 +111,7 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 		return OpenResult{Outcome: Failed, Message: res.Message}
 	}
 
-	e := &Entry{Path: path, Lines: res.Lines, Segs: res.Segs}
+	e := &Entry{Path: path, Lines: res.Lines, Segs: res.Segs, FindCurrent: -1}
 	l.Entries = append(l.Entries, e)
 	l.Displayed = len(l.Entries) - 1
 	return OpenResult{Outcome: Opened, Entry: e}

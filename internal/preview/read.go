@@ -39,9 +39,41 @@ func readCapped(path string, cap int64) (data []byte, truncated bool, err error)
 	return buf[:n], info.Size() > cap, nil
 }
 
-// linesFromBytes decodes data as UTF-8 (replacing invalid sequences)
-// and splits it into lines per SPEC.md §8, appending a truncation
-// marker line if the read was capped short of the file's actual size.
+// tabWidth is the fixed tab-stop width tabs are expanded to (SPEC.md
+// §8), matching the common terminal/`less` default rather than any
+// particular editor's configurable indent width.
+const tabWidth = 8
+
+// expandTabs replaces each tab in line with spaces up to the next
+// tab-stop column (SPEC.md §8): raw tab runes are otherwise rendered as
+// a single narrow column rather than the width a terminal would
+// actually give them, visibly breaking alignment for any tab-indented
+// file. Tab stops are computed in rune columns, resetting at the start
+// of each line (line has no embedded newlines by construction, since
+// this runs per already-split line).
+func expandTabs(line string) string {
+	if !strings.Contains(line, "\t") {
+		return line
+	}
+	var b strings.Builder
+	col := 0
+	for _, r := range line {
+		if r == '\t' {
+			spaces := tabWidth - (col % tabWidth)
+			b.WriteString(strings.Repeat(" ", spaces))
+			col += spaces
+			continue
+		}
+		b.WriteRune(r)
+		col++
+	}
+	return b.String()
+}
+
+// linesFromBytes decodes data as UTF-8 (replacing invalid sequences),
+// splits it into lines, and expands tabs (SPEC.md §8), appending a
+// truncation marker line if the read was capped short of the file's
+// actual size.
 func linesFromBytes(data []byte, truncated bool, cap int64) []string {
 	text := decodeUTF8Lenient(data)
 	lines := strings.Split(text, "\n")
@@ -53,6 +85,9 @@ func linesFromBytes(data []byte, truncated bool, cap int64) []string {
 	}
 	if len(lines) == 0 {
 		lines = []string{""}
+	}
+	for i, l := range lines {
+		lines[i] = expandTabs(l)
 	}
 	if truncated {
 		lines = append(lines, fmt.Sprintf("(truncated at %d bytes)", cap))

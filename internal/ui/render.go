@@ -2,21 +2,53 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/tree"
 )
 
 var (
-	styleNormal   = tcell.StyleDefault
-	styleSelected = tcell.StyleDefault.Reverse(true)
-	styleHeader   = tcell.StyleDefault.Background(tcell.ColorDarkBlue).Foreground(tcell.ColorWhite)
-	styleError    = tcell.StyleDefault.Foreground(tcell.ColorRed)
-	styleBadge    = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
+	styleNormal      = tcell.StyleDefault
+	styleSelected    = tcell.StyleDefault.Reverse(true)
+	styleHeader      = tcell.StyleDefault.Background(tcell.ColorDarkBlue).Foreground(tcell.ColorWhite)
+	styleFileTitle   = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
+	styleError       = tcell.StyleDefault.Foreground(tcell.ColorRed)
+	styleBadge       = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
+	styleFindMatch   = tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
+	styleFindCurrent = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack).Bold(true)
+	// styleCopyModeTitle replaces styleFileTitle whenever copy mode
+	// (SPEC.md §2.1) is active, so the file title bar itself makes copy
+	// mode's on/off state visually unmistakable, not just the legend
+	// text.
+	styleCopyModeTitle = tcell.StyleDefault.Background(tcell.ColorDarkGreen).Foreground(tcell.ColorWhite)
+)
+
+const (
+	previewLegend = "[b] browse  [tab] open files  [o] quick open  [s] search  [q] quit"
+	browserLegend = "[return] open  [/] jump to file  [o] quick open  [s] search  [b/esc] close"
+	// fileLegend lists actions specific to the currently-displayed file
+	// (as opposed to app-wide navigation), shown in the file title bar
+	// rather than the global menu bar (§5.2) — new file-specific actions
+	// belong here going forward.
+	fileLegend = "[g] goto line  [/] find  [c] copy mode"
+	// fileLegendCopyModeOn replaces fileLegend once copy mode is active
+	// (§2.1): goto-line and find are omitted since the point of copy
+	// mode is a screen with nothing on it but the file's own text, and
+	// scrolling/goto/find remain reachable via their own keys regardless
+	// of whether they're listed here, the same way arrow-key scrolling
+	// already is.
+	fileLegendCopyModeOn = "[c] normal view"
+	findLegend           = "[n] next  [N] prev  [esc] clear"
+	// findLegendNoMatches is shown instead of findLegend when a find's
+	// query matched nothing — there's no next/previous to step between,
+	// but esc still clears it back to the idle file title bar.
+	findLegendNoMatches = "[esc] clear"
 )
 
 var categoryStyles = map[preview.Category]tcell.Style{
@@ -56,8 +88,9 @@ func (a *App) draw() {
 		a.drawSearch(w, h)
 		a.drawBadge(w, h)
 	default:
-		a.drawHeader(w, a.previewHeaderText()+"   [B] browse  [tab] open files  [O] quick open  [s] search  [g] goto  [q] quit")
-		a.drawPreview(0, 1, w, h-1)
+		a.drawHeader(w, a.menuBarText(w, previewLegend))
+		titleRows := a.drawFileTitleBar(0, 1, w, true)
+		a.drawPreview(0, 1+titleRows, w, h-1-titleRows)
 	}
 
 	a.screen.Show()
@@ -82,7 +115,7 @@ func (a *App) drawBrowserOverlay(w, h int) {
 // goto-line prompt can be open while this overlay owns input) — on the
 // right.
 func (a *App) drawBrowserSplitView(w, h, browserWidth, previewWidth int) {
-	a.drawHeader(w, fmt.Sprintf("%s   [space] open+close  [a] open, keep open  [/] jump to file  [s] search  [B/esc] close", a.rootPath))
+	a.drawHeader(w, a.menuBarText(w, browserLegend))
 
 	browserHeight := h - 1
 	if a.browserMessage != "" {
@@ -97,7 +130,8 @@ func (a *App) drawBrowserSplitView(w, h, browserWidth, previewWidth int) {
 		a.screen.SetContent(browserWidth, y, '│', nil, styleNormal)
 	}
 
-	a.drawPreview(browserWidth+1, 1, previewWidth, h-1)
+	titleRows := a.drawFileTitleBar(browserWidth+1, 1, previewWidth, false)
+	a.drawPreview(browserWidth+1, 1+titleRows, previewWidth, h-1-titleRows)
 }
 
 // drawBrowserPopup renders the narrow-terminal layout (SPEC.md §5.1):
@@ -105,15 +139,16 @@ func (a *App) drawBrowserSplitView(w, h, browserWidth, previewWidth int) {
 // active ("unmodified, last-rendered"), with a centered, bordered
 // floating window containing the browser on top.
 func (a *App) drawBrowserPopup(w, h int) {
-	a.drawHeader(w, a.previewHeaderText()+"   [B] browse  [tab] open files  [O] quick open  [s] search  [g] goto  [q] quit")
-	a.drawPreview(0, 1, w, h-1)
+	a.drawHeader(w, a.menuBarText(w, previewLegend))
+	titleRows := a.drawFileTitleBar(0, 1, w, false)
+	a.drawPreview(0, 1+titleRows, w, h-1-titleRows)
 
 	popupW := min(max(w-2*popupMarginX, 10), w)
 	popupH := min(max(h-2*popupMarginY, 5), h)
 	x0 := (w - popupW) / 2
 	y0 := (h - popupH) / 2
 
-	a.drawBox(x0, y0, popupW, popupH, a.rootPath)
+	a.drawBox(x0, y0, popupW, popupH, a.rootLabel())
 	a.fillRect(x0+1, y0+1, popupW-2, popupH-2, styleNormal)
 
 	innerX, innerY := x0+1, y0+1
@@ -127,7 +162,7 @@ func (a *App) drawBrowserPopup(w, h int) {
 	if a.browserMessage != "" {
 		a.drawText(innerX, innerY+browserHeight, innerW, a.browserMessage, styleError)
 	}
-	a.drawText(innerX, innerY+footerRow, innerW, "[space] open+close  [a] open, keep open  [/] jump to file  [s] search  [B/esc] close", styleNormal)
+	a.drawText(innerX, innerY+footerRow, innerW, browserLegend, styleNormal)
 }
 
 // drawBox draws a bordered rectangle with an optional title embedded in
@@ -167,19 +202,19 @@ func (a *App) fillRect(x0, y0, w, h int, style tcell.Style) {
 }
 
 // drawQuickOpen renders the quick open overlay (SPEC.md §4.2, §5.2): a
-// header showing the query and its single action (Enter opens the
+// header showing the query and its single action (Return opens the
 // selected match), and the shared flat match list.
 func (a *App) drawQuickOpen(w, h int) {
-	a.drawHeader(w, fmt.Sprintf("%s   [enter] open  [O/esc] cancel", a.finderQuery))
+	a.drawHeader(w, headerText(w, a.finderQuery, "[return] open  [esc] cancel"))
 	a.drawFinderList(w, h)
 }
 
 // drawJumpToFile renders the jump-to-file overlay (SPEC.md §4.3, §5.2):
-// a header showing the query and its single action (Enter reveals the
+// a header showing the query and its single action (Return reveals the
 // selected match in the browser), and the shared flat match list. This
 // replaces the browser view it was opened from.
 func (a *App) drawJumpToFile(w, h int) {
-	a.drawHeader(w, fmt.Sprintf("%s   [enter] reveal in browser  [esc] cancel", a.finderQuery))
+	a.drawHeader(w, headerText(w, a.finderQuery, "[return] reveal in browser  [esc] cancel"))
 	a.drawFinderList(w, h)
 }
 
@@ -235,7 +270,7 @@ func (a *App) drawFinderList(w, h int) {
 // path, the currently-displayed entry marked distinctly, or an
 // explanatory message if the list is empty.
 func (a *App) drawOpenFiles(w, h int) {
-	a.drawHeader(w, "open files   [enter] display  [x] remove  [shift-up/down] reorder  [esc] close")
+	a.drawHeader(w, headerText(w, "open files", "[return] display  [x] remove  [shift-up/down] reorder  [esc] close"))
 
 	entries := a.files.Entries
 	listHeight := h - 1
@@ -279,7 +314,7 @@ func (a *App) drawOpenFiles(w, h int) {
 // as its root-relative path plus its first matching line's number and
 // text), or a placeholder while there's nothing to show yet.
 func (a *App) drawSearch(w, h int) {
-	a.drawHeader(w, fmt.Sprintf("search: %s   [enter] open  [esc] cancel", a.searchQuery))
+	a.drawHeader(w, headerText(w, "search: "+a.searchQuery, "[return] open  [esc] cancel"))
 
 	listHeight := h - 1
 	if a.searchMessage != "" {
@@ -331,11 +366,116 @@ func (a *App) drawSearch(w, h int) {
 	}
 }
 
-func (a *App) previewHeaderText() string {
-	if e := a.files.DisplayedEntry(); e != nil {
-		return e.Path
+// rootLabel renders the tree root path for display, abbreviated with
+// shell-style shortcuts (e.g. "~/dirtree" instead of "/Users/x/dirtree")
+// to keep it short in the menu bar and popup title.
+func (a *App) rootLabel() string {
+	return shellAbbreviate(a.rootPath)
+}
+
+// shellAbbreviate rewrites path's home-directory prefix, if any, to
+// "~", the common shell shortcut, to save space when displaying it.
+func shellAbbreviate(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
 	}
-	return "(no file open)"
+	if path == home {
+		return "~"
+	}
+	if rest, ok := strings.CutPrefix(path, home+string(os.PathSeparator)); ok {
+		return "~" + string(os.PathSeparator) + rest
+	}
+	return path
+}
+
+// menuBarText composes the top menu bar's content (SPEC.md §5.2): the
+// tree root path left-aligned and a short keybinding legend
+// right-aligned, with at least one space of separation between them.
+// The root path is dropped when the terminal is too narrow to fit both
+// alongside each other, re-evaluated every frame so a live resize can
+// bring it back; the legend always takes priority since it's what
+// makes the app usable.
+func (a *App) menuBarText(w int, legend string) string {
+	return headerText(w, a.rootLabel(), legend)
+}
+
+// headerText left-aligns left and right-aligns legend within w columns,
+// with at least one space of separation between them (SPEC.md §5.2's
+// header/title bar convention, applied everywhere a header combines
+// some left-hand content with a keybinding legend). If they don't both
+// fit with that minimum separation, left is dropped entirely, since the
+// legend is what makes the overlay usable and always takes priority.
+func headerText(w int, left, legend string) string {
+	leftLen, legendLen := len([]rune(left)), len([]rune(legend))
+	if gap := w - leftLen - legendLen; gap >= 1 {
+		return left + strings.Repeat(" ", gap) + legend
+	}
+	return legend
+}
+
+// drawFileTitleBar renders the currently-displayed file's own title bar
+// (its root-relative path) in the row above the preview content, when a
+// file is displayed. Returns the number of rows it occupied (0 or 1) so
+// callers can shrink the preview's rectangle accordingly.
+// interactive is false while the browser overlay owns input (SPEC.md
+// §5.1: the preview pane is read-only in that case, accepting neither
+// scrolling nor goto-line), in which case file-specific action keys
+// like goto-line don't apply and their legend is omitted rather than
+// advertising a key that won't do anything right now.
+func (a *App) drawFileTitleBar(x0, y0, w int, interactive bool) int {
+	e := a.files.DisplayedEntry()
+	if e == nil {
+		return 0
+	}
+	rel := tree.RelativeDisplayPath(a.rootPath, e.Path)
+
+	// copyModeTag prefixes rel whenever e is in copy mode, so that state
+	// is always legible in this row regardless of which case below fires
+	// (find status/prompt text otherwise has no room to also mention
+	// it) — the row's own distinct style (below) reinforces this further.
+	left := rel
+	if e.CopyMode {
+		left = "[copy mode] " + rel
+	}
+
+	var text string
+	switch {
+	case interactive && a.findPromptOpen:
+		text = headerText(w, "/"+a.findInput, "[return] search  [esc] cancel")
+	case !interactive:
+		text = left
+	case e.FindQuery != "" && len(e.FindMatches) > 0:
+		text = headerText(w, left, findStatusText(e)+"  "+findLegend)
+	case e.FindQuery != "":
+		text = headerText(w, left, findStatusText(e)+"  "+findLegendNoMatches)
+	case e.CopyMode:
+		text = headerText(w, left, fileLegendCopyModeOn)
+	default:
+		text = headerText(w, rel, fileLegend)
+	}
+
+	style := styleFileTitle
+	if e.CopyMode {
+		style = styleCopyModeTitle
+	}
+	a.drawText(x0, y0, w, text, style)
+	return 1
+}
+
+// findStatusText renders in-file find's live status (SPEC.md §2.4): the
+// query, how many matches it found and which one is current, and a
+// transient note when the most recent next/previous step wrapped
+// around either end of the match list.
+func findStatusText(e *openfiles.Entry) string {
+	if len(e.FindMatches) == 0 {
+		return "/" + e.FindQuery + "  no matches"
+	}
+	status := fmt.Sprintf("/%s  %d/%d", e.FindQuery, e.FindCurrent+1, len(e.FindMatches))
+	if e.FindWrapNote != "" {
+		status += " (" + e.FindWrapNote + ")"
+	}
+	return status
 }
 
 // drawPreview renders the primary preview view's content (SPEC.md
@@ -349,13 +489,13 @@ func (a *App) previewHeaderText() string {
 func (a *App) drawPreview(x0, y0, w, h int) {
 	e := a.files.DisplayedEntry()
 	if e == nil {
-		msg := "no files open — press B to browse, O to quick-open, s to search contents"
+		msg := "no files open — press b to browse, o to quick-open, s to search contents"
 		row := y0 + max(h/2, 1)
 		a.drawText(x0, row, w, centerPad(msg, w), styleNormal)
 		return
 	}
 
-	gw := gutterWidth(len(e.Lines))
+	gw := previewGutterWidth(e)
 	contentWidth := max(w-gw, 1)
 	a.ensurePreviewWrapped(e, contentWidth)
 
@@ -372,12 +512,14 @@ func (a *App) drawPreview(x0, y0, w, h int) {
 			break
 		}
 		dr := e.Rows[i]
-		numField := strings.Repeat(" ", digits)
-		if dr.HasNumber {
-			numField = fmt.Sprintf("%*d", digits, dr.SourceLine+1)
+		if gw > 0 {
+			numField := strings.Repeat(" ", digits)
+			if dr.HasNumber {
+				numField = fmt.Sprintf("%*d", digits, dr.SourceLine+1)
+			}
+			a.drawText(x0, y, gw, numField+"  ", styleNormal)
 		}
-		a.drawText(x0, y, gw, numField+"  ", styleNormal)
-		a.drawSegments(x0+gw, y, contentWidth, dr.Segments)
+		a.drawSegments(x0+gw, y, contentWidth, dr.Segments, findHighlightsForRow(e, dr), e.CopyMode)
 	}
 
 	if a.gotoPromptOpen {
@@ -385,24 +527,85 @@ func (a *App) drawPreview(x0, y0, w, h int) {
 	}
 }
 
+// findHighlight is one in-file find match's column range within a
+// single wrapped display row, in row-relative rune columns (SPEC.md
+// §2.4) — Current picks styleFindCurrent over styleFindMatch so the
+// active match stands out from the rest.
+type findHighlight struct {
+	Start, End int
+	Current    bool
+}
+
+// findHighlightsForRow returns row's portion of every in-file find
+// match that overlaps it, converting each match's source-line-relative
+// column range (found against e.Lines, independent of wrapping) into
+// row-relative columns via the row's ColStart — a match split across
+// two wrapped rows by a mid-token wrap naturally yields one highlight
+// per row it touches.
+func findHighlightsForRow(e *openfiles.Entry, row preview.DisplayRow) []findHighlight {
+	if len(e.FindMatches) == 0 {
+		return nil
+	}
+	rowLen := preview.SegmentsRuneLen(row.Segments)
+	var out []findHighlight
+	for i, m := range e.FindMatches {
+		if m.Line != row.SourceLine {
+			continue
+		}
+		start := m.Col - row.ColStart
+		end := start + m.Len
+		if end <= 0 || start >= rowLen {
+			continue
+		}
+		start = max(start, 0)
+		end = min(end, rowLen)
+		out = append(out, findHighlight{Start: start, End: end, Current: i == e.FindCurrent})
+	}
+	return out
+}
+
 // drawSegments draws seg fragments left to right starting at (x, y),
 // each in its category's style (SPEC.md §2.1), clipped and padded with
-// spaces to exactly w columns.
-func (a *App) drawSegments(x, y, w int, segs []preview.Segment) {
+// spaces to exactly w columns — unless copy mode is active, in which
+// case every fragment uses the plain style instead, since copy mode's
+// whole point is a screen with nothing on it but the file's own
+// characters. Any column covered by a highlights entry (SPEC.md §2.4's
+// in-file find) still overrides that with the find-match style, copy
+// mode or not — it's not literal selectable text either way, so it
+// doesn't undermine copy mode's purpose, and staying visible there is
+// more useful than not.
+func (a *App) drawSegments(x, y, w int, segs []preview.Segment, highlights []findHighlight, plain bool) {
 	col := 0
 	for _, seg := range segs {
-		style := styleFor(seg.Category)
+		style := styleNormal
+		if !plain {
+			style = styleFor(seg.Category)
+		}
 		for _, r := range seg.Text {
 			if col >= w {
 				return
 			}
-			a.screen.SetContent(x+col, y, r, nil, style)
+			a.screen.SetContent(x+col, y, r, nil, highlightStyleAt(col, highlights, style))
 			col++
 		}
 	}
 	for ; col < w; col++ {
 		a.screen.SetContent(x+col, y, ' ', nil, styleNormal)
 	}
+}
+
+// highlightStyleAt returns the find-match style covering col, if any,
+// else base.
+func highlightStyleAt(col int, highlights []findHighlight, base tcell.Style) tcell.Style {
+	for _, h := range highlights {
+		if col >= h.Start && col < h.End {
+			if h.Current {
+				return styleFindCurrent
+			}
+			return styleFindMatch
+		}
+	}
+	return base
 }
 
 // gutterWidth returns the gutter column width for a file with numLines

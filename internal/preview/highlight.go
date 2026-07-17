@@ -116,16 +116,20 @@ func Highlight(path string, lines []string) [][]Segment {
 
 	for _, tok := range iter.Tokens() {
 		cat := categoryFor(tok.Type)
-		for part := range strings.SplitSeq(tok.Value, "\n") {
+		parts := strings.Split(tok.Value, "\n")
+		for i, part := range parts {
 			if part != "" {
 				flush(part, cat)
 			}
 			// A "\n" in the token stream ends the current source line;
-			// strings.Split yields one extra part per newline, so every
-			// separator (not just the last part) advances lineIdx.
-		}
-		if n := strings.Count(tok.Value, "\n"); n > 0 {
-			lineIdx += n
+			// advance lineIdx immediately (not after the whole token) so
+			// that any text after the newline — e.g. the leading
+			// indentation of a "\n    "-shaped whitespace token — is
+			// flushed to the new line, not appended to the one that just
+			// ended.
+			if i < len(parts)-1 {
+				lineIdx++
+			}
 		}
 	}
 
