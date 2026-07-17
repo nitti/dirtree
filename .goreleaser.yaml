@@ -47,7 +47,7 @@ homebrew_casks:
       - dirtree
     repository:
       owner: nitti
-      name: homebrew-nitti
+      name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Casks
     homepage: "https://github.com/nitti/dirtree"

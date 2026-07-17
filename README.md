@@ -15,10 +15,10 @@ The spec was derived from a working Python/curses prototype (iterated on directl
 **macOS or Linux, via Homebrew:**
 
 ```
-brew install nitti/nitti/dirtree
+brew install nitti/tap/dirtree
 ```
 
-This installs from the [`nitti/homebrew-nitti`](https://github.com/nitti/homebrew-nitti) tap, which is kept up to date automatically on every tagged release.
+This installs from the [`nitti/homebrew-tap`](https://github.com/nitti/homebrew-tap) tap, which is kept up to date automatically on every tagged release.
 
 **Direct download:** grab a prebuilt binary (`darwin`/`linux`, `amd64`/`arm64`) from the [releases page](https://github.com/nitti/dirtree/releases), extract it, and put `dirtree` on your `PATH`.
 
@@ -69,7 +69,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-This cross-compiles `darwin`/`linux` × `amd64`/`arm64` binaries, attaches them (plus checksums) to a GitHub Release, and pushes an updated cask formula to `nitti/homebrew-nitti`. Requires the `HOMEBREW_TAP_GITHUB_TOKEN` repository secret (a PAT scoped to `contents: write` on the tap repo only).
+This cross-compiles `darwin`/`linux` × `amd64`/`arm64` binaries, attaches them (plus checksums) to a GitHub Release, and pushes an updated cask formula to `nitti/homebrew-tap`. Requires the `HOMEBREW_TAP_GITHUB_TOKEN` repository secret (a PAT scoped to `contents: write` on the tap repo only).
 
 ## Status
 
