@@ -2,7 +2,7 @@
 
 These are the behaviors the pure-logic layer's unit suite must lock down — no terminal/rendering tests, since that layer isn't practically unit-testable. Treat each bullet as a required test case in the implementation, regardless of test framework. Group names below mirror the spec sections in `SPEC.md` they correspond to; they are not meant to prescribe file/module layout.
 
-Groups are ordered the same way `SPEC.md` is: primary view (§2) first, then the tree explorer (§3), then the jump/fuzzy-picker mode (§4), then layout/rendering (§5), then the system behaviors that cut across all of them (§6).
+Groups are ordered the same way `SPEC.md` is: primary view (§2) first, then the browser (§3), then quick open and jump to file (§4), then layout/rendering (§5), then the system behaviors that cut across all of them (§6).
 
 Wherever these tests reference "the tree," they mean the pure navigation/model layer described in `SPEC.md` §3.1 and §3.4 — keep that layer free of any terminal-rendering dependency in the implementation, the same way the prototype kept its model code free of direct terminal-library calls, so all of the below is testable without a real terminal.
 
@@ -25,9 +25,9 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Opening a path not already in the open-files list, whose read succeeds and whose bytes contain no NUL byte, returns an "opened" result and creates/displays an entry as normal — neither failure check false-positives on ordinary readable text content.
 - Opening a path that already has an entry in the open-files list returns an "opened" result and reuses that entry without re-reading the file, regardless of current on-disk content (an existing entry is, by construction, never a "failed" open, since a failed open never creates one).
 - Both the read-error check and the binary check are derived from the same byte-cap-bounded read used for normal preview loading (§2.1) — determining either does not require a second, separate read of the file.
-- Tree explorer's Space action on a path that fails to open (read error or binary) leaves the explorer open and selection unchanged (rather than its normal close-and-display), and does not add an entry to the open-files list.
-- Tree explorer's `a` action on a path that fails to open behaves the same as Space's failure case (no entry added; explorer already stays open either way).
-- The jump/fuzzy-picker overlay's open-into-list action on a path that fails to open leaves the overlay open and match selection unchanged (rather than exiting to the preview), and does not add an entry to the open-files list.
+- The browser's Space action on a path that fails to open (read error or binary) leaves the browser open and selection unchanged (rather than its normal close-and-display), and does not add an entry to the open-files list.
+- The browser's `a` action on a path that fails to open behaves the same as Space's failure case (no entry added; browser already stays open either way).
+- Quick open's open action on a path that fails to open leaves the overlay open and match selection unchanged (rather than exiting to the preview), and does not add an entry to the open-files list.
 - A "failed" result does not block subsequent input: the next open attempt (same or different path) from the same context proceeds normally, evaluated independently.
 
 ## Open files list (§2.2, §2.3)
@@ -80,7 +80,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - A `.dirtreeignore` pattern uses the same syntax as `.gitignore` (glob, anchoring, directory-only, negation all behave identically).
 - A path matching either the `.gitignore` set or the `.dirtreeignore` set is excluded (union, not intersection).
 - A negation pattern in `.dirtreeignore` does not re-include a path excluded by a `.gitignore` pattern, and vice versa — negation precedence is scoped to a single file's own rule list, not across the two files.
-- The background full-tree index (§4.1) respects `.dirtreeignore` exclusions the same way it respects `.gitignore` ones — this is app-wide filtering, not limited to the jump/fuzzy-picker mode.
+- The background full-tree index (§4.1) respects `.dirtreeignore` exclusions the same way it respects `.gitignore` ones — this is app-wide filtering, not limited to quick open or jump to file.
 
 ## Right-arrow / left-arrow semantics (§3.4)
 
@@ -111,8 +111,8 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 
 ## Background full-tree index (`list_all_paths`-equivalent) (§4.1)
 
-- The index reaches into directories that are currently collapsed in the tree explorer (i.e. it does not depend on or mutate the tree explorer's expand/collapse state at all).
-- Building the index does not mutate the tree explorer's node objects (no shared state — assert the tree's structure is bit-for-bit unchanged after an index build).
+- The index reaches into directories that are currently collapsed in the browser (i.e. it does not depend on or mutate the browser's expand/collapse state at all).
+- Building the index does not mutate the browser's node objects (no shared state — assert the tree's structure is bit-for-bit unchanged after an index build).
 - The index is sorted by root-relative slash-delimited path, case-insensitively.
 - The index respects the same `.gitignore` exclusion rules as interactive listing.
 - A symlink cycle does not cause infinite recursion or non-termination (construct a symlink pointing back to an ancestor and confirm the walk still terminates and doesn't duplicate/loop that subtree).
@@ -125,20 +125,20 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Filtering the flat full-path index matches on any path segment, including a directory-name component, not just the leaf/file name — e.g. a query matching a middle directory's name returns files nested under it.
 - A query that legitimately matches the same relative path only once returns exactly one result even when the same basename recurs at multiple nesting depths elsewhere in the tree (regression case: verify the matcher isn't accidentally treating differently-nested-but-distinctly-pathed matches as duplicates of each other, and isn't failing to de-duplicate a genuinely repeated symlinked/aliased path either way — assert against a known-good expected set built directly from the fixture layout).
 
-## Jump/fuzzy-picker mode: entry-point action wiring (§4.2)
+## Quick open and jump to file: single-action wiring (§4.2, §4.3)
 
-- Opening the picker from the tree explorer and pressing Enter on a match performs reveal-in-tree (expands ancestors, leaves tree explorer open with the match selected).
-- Opening the picker from the tree explorer and pressing Space on a match performs open-into-list (opens/reuses the open-files entry, closes tree explorer, lands on preview showing it).
-- Opening the picker from the primary preview view and pressing Enter on a match performs open-into-list.
-- Opening the picker from the primary preview view and pressing Space on a match performs reveal-in-tree (opens the tree explorer overlay if it wasn't already open, with the match selected).
-- Reveal-in-tree resolution failure (path no longer exists) exits the overlay without changing tree selection, regardless of which key/entry-point triggered it.
-- Escape from either entry point returns to the exact screen the overlay was opened from (tree explorer stays open and unchanged; preview view's displayed entry, or empty state, is unchanged) without performing either action.
+- Opening quick open from the primary preview view and pressing Enter on a match opens/reuses the corresponding open-files entry, closes quick open, and lands on the preview showing it.
+- Opening jump to file from the browser and pressing Enter on a match expands every ancestor down to it and leaves the browser open with the match selected — jump to file has no other trigger and no other action.
+- Jump to file's resolution failure (path no longer exists) exits the overlay without changing browser selection.
+- Escape from quick open returns to the primary preview view's displayed entry (or empty state) unchanged, without opening anything.
+- Escape from jump to file returns to the browser, unchanged, without changing selection.
+- Neither overlay exposes the other's action: quick open never reveals in the browser, and jump to file never opens a file into the list.
 
 ## Layout computation (§5.1)
 
 - `compute_tree_pane_width` returns at least the configured minimum even for a very short/empty node list.
 - `compute_tree_pane_width` grows to fit the longest currently-visible label, up to the configured maximum, and clamps at that maximum for a pathologically long name.
-- `should_split_view` returns true only when total width is at least tree-explorer-pane width + minimum preview width + the separator column; false just under that threshold (boundary-test both sides of the inequality).
+- `should_split_view` returns true only when total width is at least browser-pane width + minimum preview width + the separator column; false just under that threshold (boundary-test both sides of the inequality).
 
 ## Indexing-delay / spinner-suppression logic (§5.2)
 
@@ -153,14 +153,14 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Once indexing has crossed the perceptibility threshold but finishes before the minimum display duration has elapsed, the badge keeps showing the spinner (not the completion message) until that minimum duration is reached (boundary-test at exactly the minimum).
 - Once indexing has run at least as long as the minimum display duration before finishing, the badge shows the completion message immediately upon completion (no extension needed).
 - The bottom-right badge stops showing anything once the completion message's display+fade window has fully elapsed.
-- Debug-only always-show mode is a build-time switch (`-tags spinnerdebug`), not something exercised by the normal automated test suite; manual verification is to build once without the tag and confirm the badge behaves normally (threshold-suppressed, then spinner, then completion message + fade), then build with `-tags spinnerdebug` on a small directory and confirm: the spinner appears immediately (threshold bypassed) even though real indexing finishes almost instantly, stays visible for the same minimum display duration as the non-debug path, then hands off to the same completion message and fade; the jump/fuzzy-picker overlay's indexing-blocked behavior is unaffected either way.
+- Debug-only always-show mode is a build-time switch (`-tags spinnerdebug`), not something exercised by the normal automated test suite; manual verification is to build once without the tag and confirm the badge behaves normally (threshold-suppressed, then spinner, then completion message + fade), then build with `-tags spinnerdebug` on a small directory and confirm: the spinner appears immediately (threshold bypassed) even though real indexing finishes almost instantly, stays visible for the same minimum display duration as the non-debug path, then hands off to the same completion message and fade; quick open's and jump to file's indexing-blocked behavior is unaffected either way.
 - The bottom-right badge's background is visually distinct from the default row background (a contrasting/accent color), confirmed by manual inspection in a real terminal alongside the other rendering-layer checks below.
 - When the minimum-display-duration skip is set, the badge shows the completion message in full immediately, treating the moment the skip happened — not the index's actual completion time — as when indexing finished.
 - The minimum-display-duration skip still shows the completion message in full even when the index's real completion time is already well past the completion message's entire display+fade window (e.g. it was masked for a long time by an artificially-held spinner) — this is the regression case for a bug where the badge briefly vanished the instant the picker overlay was opened instead of visibly transitioning.
 - The minimum-display-duration skip does not bypass the completion message's own display+fade timing — it still fades out on schedule, counted forward from the moment of the skip.
-- Opening the jump/fuzzy-picker overlay while indexing is already done sets the badge's minimum-display-duration skip and records the elapsed-since-indexing-started value at that moment.
+- Opening quick open or jump to file while indexing is already done sets the badge's minimum-display-duration skip and records the elapsed-since-indexing-started value at that moment.
 - A filesystem-change-triggered index rebuild resets the minimum-display-duration skip (and its recorded moment), so a fresh indexing cycle gets the flash-prevention floor back.
-- The bottom-right badge renders identically whether the tree explorer or the jump/fuzzy-picker overlay is the currently active screen — this is a manual/rendering-layer check (see the notes below), since the corner badge itself is drawn by the terminal-rendering layer, not the underlying pure decision logic already covered above.
+- The bottom-right badge renders identically whether the browser, quick open, or jump-to-file overlay is the currently active screen — this is a manual/rendering-layer check (see the notes below), since the corner badge itself is drawn by the terminal-rendering layer, not the underlying pure decision logic already covered above.
 
 ## Live refresh on filesystem changes (§6.1)
 
@@ -169,8 +169,8 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Refreshing an unrelated part of the tree preserves an already-expanded directory's node identity, its expanded state, and its own already-loaded children (verified by object identity, not just equal content) — a refresh must not disturb state for anything that didn't change.
 - Refreshing does not touch (and does not mark loaded) a directory that has never been expanded/loaded.
 - Refreshing respects the same `.gitignore`/`.dirtreeignore` exclusion rules as initial listing for newly-appeared entries.
-- If the currently-selected tree explorer node still exists after a refresh, the selection-fallback helper returns that same node.
-- If the currently-selected tree explorer node was deleted by the change, the selection-fallback helper returns its nearest surviving ancestor.
+- If the currently-selected browser node still exists after a refresh, the selection-fallback helper returns that same node.
+- If the currently-selected browser node was deleted by the change, the selection-fallback helper returns its nearest surviving ancestor.
 - If an entire subtree containing the selection was deleted, the selection-fallback helper walks all the way up to the root (which always survives).
 - The background index rebuilds and reflects a newly-created path once the rebuild completes.
 
@@ -178,11 +178,13 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 
 The following require a real terminal (ideally inside a multiplexer like Zellij or tmux) and should be explicitly confirmed, and their status stated, whenever a change touching them is reported complete:
 
-- Startup shows the empty preview state with the tree explorer auto-opened on top of it.
-- Tree explorer's Space opens a file and closes the explorer in one keystroke; `a` opens a file and leaves the explorer open, allowing several files to be queued before Escape.
-- Selecting a binary or unreadable file from the tree explorer (Space or `a`) or the picker's open-into-list action renders the corresponding failure message ("binary file, preview not available," or the OS error text) inline in that overlay without navigating away or adding an open-files entry.
+- Startup shows the empty preview state with the browser auto-opened on top of it.
+- The browser's Space opens a file and closes the browser in one keystroke; `a` opens a file and leaves the browser open, allowing several files to be queued before Escape.
+- Selecting a binary or unreadable file from the browser (Space or `a`) or from quick open renders the corresponding failure message ("binary file, preview not available," or the OS error text) inline in that overlay without navigating away or adding an open-files entry.
 - The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Enter-to-display and `x`-to-remove, and its empty-list message renders when reachable.
 - Shift-Up/Shift-Down reordering is confirmed against a real terminal/multiplexer, since Shift+arrow key delivery is more library/terminal-dependent than plain arrow keys; if the target terminal library can't reliably distinguish Shift-Up/Shift-Down from plain Up/Down, note the fallback keys actually used here rather than silently shipping non-functional reordering.
-- The jump/fuzzy-picker overlay's header legend correctly reflects which of Enter/Space maps to which action depending on entry point (tree explorer vs. preview).
-- Tree-explorer split-view vs. popup layout flips correctly on live resize, with the preview pane visible-but-inert in split view.
+- Quick open's header legend correctly shows Enter-to-open, and jump to file's header legend correctly shows Enter-to-reveal; neither offers the other's action.
+- `B` and `O` behave as toggles: pressing either again while its own overlay (browser, quick open) is active closes it back to the primary preview view, the same as Escape.
+- Jump to file (`/` from within the browser) fully replaces the browser view while open, and Escape from it returns to the browser exactly as it was.
+- Browser split-view vs. popup layout flips correctly on live resize, with the preview pane visible-but-inert in split view.
 - Escape responsiveness (§6.3), resize handling via periodic polling (§6.2), and the spinner badge's visual distinctness (§5.2) per the checks above.
