@@ -74,7 +74,21 @@ const (
 // query can be discarded rather than clobbering a newer one.
 type searchOutcome struct {
 	gen     int
-	results []search.Match
+	results []search.FileResult
+	err     error // non-nil only for a ModeRegex compile failure (defensive: recomputeSearch already validates synchronously before dispatching)
+}
+
+// searchRow is one flattened, displayable row of the content search
+// overlay's results (SPEC.md §9.2): either a file row (one per
+// FileResult, always present) or a hit row (one per matching line
+// within that file, present only while the file is expanded). Hit rows
+// are addressed by (file, hit) rather than a flat index into a
+// concatenated slice so toggling one file's disclosure state doesn't
+// require renumbering anything.
+type searchRow struct {
+	file  int // index into App.searchResults
+	hit   int // index into searchResults[file].Hits; only meaningful when isHit
+	isHit bool
 }
 
 const (
@@ -124,15 +138,19 @@ type App struct {
 	quickOpenEntry quickOpenEntryPoint // which screen quick open was opened from, so Escape returns to it
 
 	// content search overlay state (SPEC.md §9)
-	searchEntry    searchEntryPoint
-	searchQuery    string
-	searchResults  []search.Match // nil while not yet searched (empty query, waiting on index, or a scan in flight), distinct from "searched, zero matches"
-	searchSelected int
-	searchScroll   int
-	searchMessage  string // transient inline failure message for open-into-list (§2.2)
-	searchGen      int
-	searchCancel   context.CancelFunc
-	searchDone     chan searchOutcome
+	searchEntry     searchEntryPoint
+	searchQuery     string
+	searchRegex     bool                // ModeRegex vs. ModeSubstring toggle (ctrl+r)
+	searchResults   []search.FileResult // nil while not yet searched (empty query, waiting on index, or a scan in flight), distinct from "searched, zero matches"
+	searchError     string              // non-empty only for an invalid regex query (ModeRegex); takes precedence over searchResults' nil/empty distinction
+	searchCollapsed map[string]bool     // AbsPath -> collapsed; absent (or false) means expanded, so results start expanded by default
+	searchSelected  int                 // index into a.searchRows(), not directly into searchResults
+	searchScroll    int
+	searchMessage   string // transient inline failure message for open-into-list (§2.2)
+	searchGen       int
+	searchCancel    context.CancelFunc
+	searchScanStart time.Time // when the in-flight scan (searchCancel != nil) started, for the spinner shown once it runs long enough to be noticeable
+	searchDone      chan searchOutcome
 
 	// files is the open-files list (SPEC.md §2.2, §2.3) the primary
 	// preview view and both overlays' open actions operate on.
@@ -292,10 +310,15 @@ func (a *App) Run() error {
 			a.draw()
 		case out := <-a.searchDone:
 			if out.gen == a.searchGen {
-				a.searchResults = out.results
 				a.searchCancel = nil
-				if a.searchSelected >= len(a.searchResults) {
-					a.searchSelected = max(len(a.searchResults)-1, 0)
+				if out.err != nil {
+					a.searchError = out.err.Error()
+					a.searchResults = nil
+				} else {
+					a.searchResults = out.results
+				}
+				if rows := a.searchRows(); a.searchSelected >= len(rows) {
+					a.searchSelected = max(len(rows)-1, 0)
 				}
 			}
 			a.draw()
@@ -472,11 +495,18 @@ func (a *App) gotoLine(input string) {
 	if input == "" || e == nil {
 		return
 	}
-	a.ensurePreviewWrapped(e, a.computedPreviewWidth())
 	n := 0
 	for _, r := range input {
 		n = n*10 + int(r-'0')
 	}
+	a.scrollToLine(e, n)
+}
+
+// scrollToLine jumps e's scroll to source line n's first display row
+// (SPEC.md §2.1), clamped to [1, total source lines]. Used by both the
+// goto-line prompt and content search's jump-to-hit (§9.2).
+func (a *App) scrollToLine(e *openfiles.Entry, n int) {
+	a.ensurePreviewWrapped(e, a.computedPreviewWidth())
 	n = clamp(n, 1, len(e.Lines))
 	if row, ok := e.FirstRow[n-1]; ok {
 		e.Scroll = clamp(row, 0, a.maxPreviewScroll(e, a.previewViewportHeight()))
@@ -959,15 +989,66 @@ func (a *App) performOpenIntoList() {
 
 // openSearch opens the content search overlay from the given entry
 // point (SPEC.md §9.1). Both entry points behave identically once open
-// (§9.2), so this only needs to remember where to return on Escape.
+// (§9.2), so this only needs to remember where to return on Escape. The
+// query, results, selection, and per-file disclosure state are
+// deliberately left untouched here: content search persists across
+// close/reopen (Escape closes the overlay without discarding it) and is
+// only reset by the user explicitly clearing the query themselves
+// (backspacing it to empty, or typing a new one).
 func (a *App) openSearch(entry searchEntryPoint) {
 	a.overlay = overlaySearch
 	a.searchEntry = entry
-	a.searchQuery = ""
-	a.searchSelected = 0
-	a.searchScroll = 0
 	a.searchMessage = ""
-	a.recomputeSearch()
+}
+
+// searchRows flattens the current search results into displayable rows
+// (SPEC.md §9.2): one file row per result, followed by that file's hit
+// rows in source order when it's expanded (i.e. not present in
+// searchCollapsed, so results are expanded by default). This is
+// recomputed on demand rather than cached, since it's cheap and only
+// ever needed while rendering or handling a keypress.
+func (a *App) searchRows() []searchRow {
+	var rows []searchRow
+	for fi, r := range a.searchResults {
+		rows = append(rows, searchRow{file: fi})
+		if a.searchCollapsed[r.AbsPath] {
+			continue
+		}
+		for hi := range r.Hits {
+			rows = append(rows, searchRow{file: fi, hit: hi, isHit: true})
+		}
+	}
+	return rows
+}
+
+// toggleSearchDisclosure flips the expanded/collapsed state of the file
+// the row at index i belongs to (SPEC.md §9.2), keeping the selection on
+// that same file's row so collapsing a file you're inside of doesn't
+// strand the selection.
+func (a *App) toggleSearchDisclosure(i int) {
+	rows := a.searchRows()
+	if i < 0 || i >= len(rows) {
+		return
+	}
+	fi := rows[i].file
+	path := a.searchResults[fi].AbsPath
+	if a.searchCollapsed == nil {
+		a.searchCollapsed = make(map[string]bool)
+	}
+	a.searchCollapsed[path] = !a.searchCollapsed[path]
+	a.searchSelected = a.searchFileRowIndex(fi)
+}
+
+// searchFileRowIndex returns the row index of the file row for
+// searchResults[fi] in the current flattened row list.
+func (a *App) searchFileRowIndex(fi int) int {
+	rows := a.searchRows()
+	for i, row := range rows {
+		if !row.isHit && row.file == fi {
+			return i
+		}
+	}
+	return 0
 }
 
 // recomputeSearch (re)starts the background content scan for the
@@ -976,16 +1057,35 @@ func (a *App) openSearch(entry searchEntryPoint) {
 // result is ever applied. An empty query performs no scan at all. If
 // the background index hasn't finished building yet, the scan is
 // deferred — Run's ticker case retries once it has — rather than
-// scanning a partial candidate set.
+// scanning a partial candidate set. In regex mode, the query is
+// compiled synchronously first — cheap, and lets an invalid pattern be
+// reported immediately as searchError without spawning a scan at all
+// (search.Run would otherwise reject it the same way, just one
+// goroutine-hop later). The scan itself always runs in a background
+// goroutine regardless of mode — even a slow regex over a large tree
+// never blocks the UI thread, since results only arrive back via
+// searchDone in the main select loop (Run.go).
 func (a *App) recomputeSearch() {
 	a.cancelSearch()
 	a.searchSelected = 0
 	a.searchScroll = 0
 	a.searchMessage = ""
+	a.searchError = ""
+	a.searchCollapsed = nil
 
 	if a.searchQuery == "" {
 		a.searchResults = nil
 		return
+	}
+
+	mode := search.ModeSubstring
+	if a.searchRegex {
+		mode = search.ModeRegex
+		if _, err := search.CompileRegex(a.searchQuery); err != nil {
+			a.searchError = err.Error()
+			a.searchResults = nil
+			return
+		}
 	}
 
 	entries, done := a.idx.Snapshot()
@@ -1005,11 +1105,23 @@ func (a *App) recomputeSearch() {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.searchCancel = cancel
 	a.searchGen++
+	a.searchScanStart = time.Now()
 	gen, query := a.searchGen, a.searchQuery
 	go func() {
-		results := search.Run(ctx, query, candidates, previewByteCap)
-		a.searchDone <- searchOutcome{gen: gen, results: results}
+		results, err := search.Run(ctx, query, mode, candidates, previewByteCap)
+		a.searchDone <- searchOutcome{gen: gen, results: results, err: err}
 	}()
+}
+
+// clearSearch resets the query and results back to empty (SPEC.md
+// §9.2's Ctrl+U), the explicit "clear it yourself" action — since
+// Escape deliberately no longer discards search state (openSearch),
+// this is the only way to reset a query short of backspacing it out
+// one character at a time. The regex-mode toggle is left as-is; it's a
+// standing preference, not part of the query being cleared.
+func (a *App) clearSearch() {
+	a.searchQuery = ""
+	a.recomputeSearch()
 }
 
 // cancelSearch stops any in-flight background scan without applying its
@@ -1030,17 +1142,45 @@ func (a *App) cancelSearch() {
 func (a *App) handleSearchKey(ev *tcell.EventKey) {
 	switch {
 	case ev.Key() == tcell.KeyEscape:
-		a.cancelSearch()
+		// The query, results, and any still-running scan are deliberately
+		// left alone: content search persists across close/reopen (see
+		// openSearch), so Escape only leaves the overlay rather than
+		// discarding its state.
 		a.overlay = a.searchReturnOverlay()
 	case ev.Key() == tcell.KeyEnter:
+		// Opening always leaves the overlay open (SPEC.md §9.2) — Escape
+		// is what closes it (and preserves state when it does) — so
+		// several hits can be opened in a row without re-entering the
+		// search each time.
 		a.performSearchOpen()
+	case ev.Key() == tcell.KeyCtrlR:
+		a.searchRegex = !a.searchRegex
+		a.recomputeSearch()
+	case ev.Key() == tcell.KeyCtrlU:
+		a.clearSearch()
 	case ev.Key() == tcell.KeyTab, ev.Key() == tcell.KeyDown:
-		if len(a.searchResults) > 0 {
-			a.searchSelected = tree.MoveSelection(a.searchSelected, 1, len(a.searchResults))
+		if rows := a.searchRows(); len(rows) > 0 {
+			a.searchSelected = tree.MoveSelection(a.searchSelected, 1, len(rows))
 		}
 	case ev.Key() == tcell.KeyBacktab, ev.Key() == tcell.KeyUp:
-		if len(a.searchResults) > 0 {
-			a.searchSelected = tree.MoveSelection(a.searchSelected, -1, len(a.searchResults))
+		if rows := a.searchRows(); len(rows) > 0 {
+			a.searchSelected = tree.MoveSelection(a.searchSelected, -1, len(rows))
+		}
+	case ev.Key() == tcell.KeyLeft:
+		rows := a.searchRows()
+		if a.searchSelected >= 0 && a.searchSelected < len(rows) {
+			row := rows[a.searchSelected]
+			if row.isHit || !a.searchCollapsed[a.searchResults[row.file].AbsPath] {
+				a.toggleSearchDisclosure(a.searchFileRowIndex(row.file))
+			}
+		}
+	case ev.Key() == tcell.KeyRight:
+		rows := a.searchRows()
+		if a.searchSelected >= 0 && a.searchSelected < len(rows) {
+			row := rows[a.searchSelected]
+			if !row.isHit && a.searchCollapsed[a.searchResults[row.file].AbsPath] {
+				a.toggleSearchDisclosure(a.searchSelected)
+			}
 		}
 	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
 		if len(a.searchQuery) > 0 {
@@ -1064,26 +1204,36 @@ func (a *App) searchReturnOverlay() overlay {
 	return overlayNone
 }
 
-// performSearchOpen implements Enter (SPEC.md §9.2): open the selected
-// match into the open-files list per §2.2's open semantics. An "opened"
-// result closes the overlay, landing on the primary preview view
-// regardless of entry point; a "failed" result (e.g. the file changed
-// or was removed between scanning and opening) leaves the overlay open
-// with the message shown inline instead, per §2.2's open-failure
-// signaling.
+// performSearchOpen implements Return (SPEC.md §9.2): open the selected
+// row's file into the open-files list per §2.2's open semantics and
+// jump to its line, leaving the overlay open so several hits can be
+// opened in a row without re-entering the search — Escape is what
+// closes the overlay (and, per openSearch/handleSearchKey, preserves
+// its state when it does). A "failed" result (e.g. the file changed or
+// was removed between scanning and opening) leaves the overlay open
+// with the message shown inline, per §2.2's open-failure signaling.
 func (a *App) performSearchOpen() {
-	if len(a.searchResults) == 0 {
+	rows := a.searchRows()
+	if a.searchSelected < 0 || a.searchSelected >= len(rows) {
 		return
 	}
-	target := a.searchResults[a.searchSelected]
-	res := a.files.Open(target.AbsPath, previewByteCap)
+	row := rows[a.searchSelected]
+	result := a.searchResults[row.file]
+
+	res := a.files.Open(result.AbsPath, previewByteCap)
 	if res.Outcome != openfiles.Opened {
 		a.searchMessage = res.Message
 		return
 	}
 	a.searchMessage = ""
-	a.cancelSearch()
-	a.overlay = overlayNone
+
+	// A file row jumps to its first hit (the file's earliest match); a
+	// hit row jumps to that specific line (SPEC.md §9.2).
+	line := result.Hits[0].LineNum
+	if row.isHit {
+		line = result.Hits[row.hit].LineNum
+	}
+	a.scrollToLine(res.Entry, line)
 }
 
 func indexOf(list []*tree.Node, n *tree.Node) int {
