@@ -11,10 +11,18 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Reading a normal small text file returns its lines split correctly, preserving empty lines.
 - Reading a file above the byte cap returns truncated content plus a "truncated" marker line, and does not read past the cap.
 - An empty file's read result is a single empty line, not an empty list.
+- A tab character is expanded to spaces up to the next tab-stop column (8 columns), not left as a single narrow column.
+- Tab stops reset at the start of every line: a line with leading content before its first tab expands relative to that line's own start, not some running total carried over from a previous line.
 - Highlighting returns `None`/equivalent-"unavailable" when no rule-set matches the file (must degrade to plain text upstream, not raise).
 - Highlighting produces exactly one segment-list per source line (padding or truncating defensively if a lexing pass produces a mismatched row count).
+- Highlighting's segments for every source line concatenate back to exactly that line's text — this is the invariant a token whose value spans a newline (e.g. a combined "end this line + indent the next one" whitespace token) must not violate by attributing text after the newline to the line that just ended instead of the new one (regression case: a YAML/Go-shaped fixture with indentation after a blank or short line, verified against every line, not just line 0).
 - Wrapping a line whose content exceeds the target width splits it into multiple rows, each at most `width` columns.
 - Wrapping preserves segment/category boundaries where possible (a wrapped chunk keeps the category of the segment it came from).
+- Wrapping prefers breaking at a space over breaking mid-word, when a space-break exists within the target width.
+- Wrapping moves a word to the next row whole, rather than splitting it, whenever the word fits entirely within a fresh full-width row (even though it didn't fit in the remaining space on the row it started on).
+- Wrapping allows breaking immediately after a dash/hyphen, keeping the dash on the row it ends (not dropped, unlike a triggering space).
+- A word longer than the full target width, with no space or dash anywhere in it, still hard-breaks mid-word rather than being left overflowing a row — the only case where a mid-word break is expected.
+- A space that triggers a wrap is dropped from the row entirely (not left dangling at the row's end, not carried over as leading whitespace on the next row); real trailing whitespace at a line's actual end (not a wrap point) is preserved.
 - `build_display_rows` assigns the source line number only to each source line's first wrapped row; continuation rows carry no line number.
 - `build_display_rows`'s returned line→display-row index correctly points at the first display row for every source line, including source lines that wrapped into multiple rows.
 
@@ -25,8 +33,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Opening a path not already in the open-files list, whose read succeeds and whose bytes contain no NUL byte, returns an "opened" result and creates/displays an entry as normal — neither failure check false-positives on ordinary readable text content.
 - Opening a path that already has an entry in the open-files list returns an "opened" result and reuses that entry without re-reading the file, regardless of current on-disk content (an existing entry is, by construction, never a "failed" open, since a failed open never creates one).
 - Both the read-error check and the binary check are derived from the same byte-cap-bounded read used for normal preview loading (§2.1) — determining either does not require a second, separate read of the file.
-- The browser's Space action on a path that fails to open (read error or binary) leaves the browser open and selection unchanged (rather than its normal close-and-display), and does not add an entry to the open-files list.
-- The browser's `a` action on a path that fails to open behaves the same as Space's failure case (no entry added; browser already stays open either way).
+- The browser's Return action on a path that fails to open (read error or binary) leaves the browser open and selection unchanged, and does not add an entry to the open-files list.
 - Quick open's open action on a path that fails to open leaves the overlay open and match selection unchanged (rather than exiting to the preview), and does not add an entry to the open-files list.
 - A "failed" result does not block subsequent input: the next open attempt (same or different path) from the same context proceeds normally, evaluated independently.
 
@@ -47,6 +54,17 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Shift-Up on the first entry is a no-op: list order and overlay selection are both unchanged.
 - Reordering via Shift-Up/Shift-Down does not change which entry is displayed and does not reset the moved entry's stored scroll/goto state.
 - Opening a new file after the list has been manually reordered still appends the new entry at the end, regardless of the manual reordering already applied to existing entries.
+
+## In-file find matching (§2.4)
+
+- Searching for a query that appears once returns exactly one match, at the correct line and rune column.
+- Searching for a query that appears multiple times on the same line returns every occurrence, each at its own column, in left-to-right order.
+- Searching for a query that appears across multiple lines returns matches in source order (line, then column within the line).
+- Matching is case-insensitive: a query matches occurrences differing only in case.
+- Overlapping occurrences (e.g. searching "aa" in "aaa") are all reported, not just non-overlapping ones.
+- An empty query returns no matches.
+- A query with no occurrences anywhere in the file returns no matches.
+- A match's column is a rune offset, not a byte offset: a query appearing after a multi-byte character lands on the correct column regardless of that character's UTF-8 byte width.
 
 ## Node / tree construction and flattening (§3.1)
 
@@ -127,10 +145,11 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 
 ## Quick open and jump to file: single-action wiring (§4.2, §4.3)
 
-- Opening quick open from the primary preview view and pressing Enter on a match opens/reuses the corresponding open-files entry, closes quick open, and lands on the preview showing it.
-- Opening jump to file from the browser and pressing Enter on a match expands every ancestor down to it and leaves the browser open with the match selected — jump to file has no other trigger and no other action.
+- Opening quick open from the primary preview view and pressing Return on a match opens/reuses the corresponding open-files entry, closes quick open, and lands on the preview showing it.
+- Opening quick open from the browser and pressing Return on a match behaves identically: opens/reuses the corresponding open-files entry and lands on the primary preview view showing it (not back on the browser).
+- Opening jump to file from the browser and pressing Return on a match expands every ancestor down to it and leaves the browser open with the match selected — jump to file has no other trigger and no other action.
 - Jump to file's resolution failure (path no longer exists) exits the overlay without changing browser selection.
-- Escape from quick open returns to the primary preview view's displayed entry (or empty state) unchanged, without opening anything.
+- Escape from quick open returns to whichever screen it was opened from: the primary preview view's displayed entry (or empty state) unchanged if opened from there, or the browser unchanged (selection untouched) if opened from the browser — in neither case is anything opened.
 - Escape from jump to file returns to the browser, unchanged, without changing selection.
 - Neither overlay exposes the other's action: quick open never reveals in the browser, and jump to file never opens a file into the list.
 
@@ -190,13 +209,32 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 The following require a real terminal (ideally inside a multiplexer like Zellij or tmux) and should be explicitly confirmed, and their status stated, whenever a change touching them is reported complete:
 
 - Startup shows the empty preview state with the browser auto-opened on top of it.
-- The browser's Space opens a file and closes the browser in one keystroke; `a` opens a file and leaves the browser open, allowing several files to be queued before Escape.
-- Selecting a binary or unreadable file from the browser (Space or `a`) or from quick open renders the corresponding failure message ("binary file, preview not available," or the OS error text) inline in that overlay without navigating away or adding an open-files entry.
-- The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Enter-to-display and `x`-to-remove, and its empty-list message renders when reachable.
+- The browser's Return opens a file and displays it in the primary preview view without closing the browser, allowing several files to be queued before Escape/`b`.
+- Selecting a binary or unreadable file from the browser (Return) or from quick open renders the corresponding failure message ("binary file, preview not available," or the OS error text) inline in that overlay without navigating away or adding an open-files entry.
+- The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Return-to-display and `x`-to-remove, and its empty-list message renders when reachable.
 - Shift-Up/Shift-Down reordering is confirmed against a real terminal/multiplexer, since Shift+arrow key delivery is more library/terminal-dependent than plain arrow keys; if the target terminal library can't reliably distinguish Shift-Up/Shift-Down from plain Up/Down, note the fallback keys actually used here rather than silently shipping non-functional reordering.
-- Quick open's header legend correctly shows Enter-to-open, and jump to file's header legend correctly shows Enter-to-reveal; neither offers the other's action.
-- Content search overlay (§9): `s` opens it from both the primary preview view (including its empty state) and the browser; typing (including a literal space) builds the query live and each keystroke's rescan doesn't visibly block input; Enter on a match opens it into the preview and closes the overlay; Escape returns to whichever screen it was opened from unchanged; the bottom-right index badge renders in this overlay the same way it does in the browser, quick open, and jump-to-file overlays.
-- `B` and `O` behave as toggles: pressing either again while its own overlay (browser, quick open) is active closes it back to the primary preview view, the same as Escape.
+- Quick open's header legend correctly shows Return-to-open, and jump to file's header legend correctly shows Return-to-reveal; neither offers the other's action.
+- Content search overlay (§9): `s` opens it from both the primary preview view (including its empty state) and the browser; typing (including a literal space) builds the query live and each keystroke's rescan doesn't visibly block input; Return on a match opens it into the preview and closes the overlay; Escape returns to whichever screen it was opened from unchanged; the bottom-right index badge renders in this overlay the same way it does in the browser, quick open, and jump-to-file overlays.
+- `b` behaves as a toggle: pressing it again while the browser overlay is active closes it back to the primary preview view, the same as Escape.
+- Quick open is not a toggle: typing `o` as part of a filter query (e.g. "go") filters normally rather than closing the overlay; only Escape closes it.
+- `o` opens quick open from within the browser overlay too (not just the primary preview view), replacing the browser view; Escape from there returns to the browser, unchanged, while opening a match lands on the primary preview view instead (confirmed for both entry points).
+- Pressing Escape at the primary preview view (no overlay active, no active find) does nothing — it does not quit; only `q` quits.
 - Jump to file (`/` from within the browser) fully replaces the browser view while open, and Escape from it returns to the browser exactly as it was.
 - Browser split-view vs. popup layout flips correctly on live resize, with the preview pane visible-but-inert in split view.
+- The header/title bar shows the tree root path (abbreviated with `~` when under the home directory) alongside the keybinding legend in a wide terminal, and drops the root path (keeping just the legend) once the terminal is narrowed below the point where both fit — confirmed live on resize in both directions.
+- The file title bar, directly above the preview content, shows the displayed entry's root-relative path (not its absolute path) whenever a file is open, in both the primary preview view and the split-view browser's preview pane, and disappears when no file is displayed.
+- The global header/title bar's legend does not list goto-line (`g`) or any other file-specific action; the file title bar shows `[g] goto line  [/] find` right-aligned, in the primary preview view, whenever a file is displayed, but omits it (path only) in the split-view browser's read-only preview pane, since neither key does anything there while the browser owns input.
+- In-file find (`/` from the primary preview view, SPEC.md §2.4): the prompt opens in the file title bar (not goto-line's bottom row); typing/Backspace edit the query; Escape cancels the prompt without touching any existing find state; Return executes the search, jumps to the first match at or after the top of the current viewport (wrapping to the very first match — with a wrap note — if none exists after that point), and closes the prompt.
+- `n`/`N` step to the next/previous match, wrapping at either end and showing a "wrapped to top"/"wrapped to bottom" note that clears on the next non-wrapping step; both are no-ops with no active find or zero matches.
+- The file title bar's find status shows the query and "current/total" match count while at least one match exists, "no matches" (with no `n`/`N` legend) when the query matched nothing, and this status — like the idle file title bar's legend — is shown only in the interactive primary preview view, not the split-view browser's read-only preview pane.
+- Every match is highlighted in the preview content in a style distinct from syntax highlighting, with the current match visually distinguished from the rest; a match split across two wrapped rows by a mid-token wrap is highlighted correctly on both rows. Unlike the find status text, this highlighting is also visible in the split-view browser's read-only preview pane, since it's a passive visual rather than an interactive legend.
+- Switching to a different open-files entry and back preserves the first entry's find state (query, matches, current index, wrap note) exactly, the same way scroll/goto-line state already does.
+- Escape, while a find is active, clears it — query, matches, current index, wrap note, and highlighting all disappear, and the file title bar returns to its idle `[g] goto line  [/] find  [c] copy mode` legend; Escape with no active find remains a no-op (still doesn't quit).
+- The active-find status always lists `[esc] clear` in its legend, alongside `[n] next  [N] prev` when there's at least one match, or alone (no `n`/`N`) when the query matched nothing — Escape still clears a zero-match find.
+- Copy mode (`c` from the primary preview view): toggling it on strips the line-number gutter and all syntax-highlighting color from the preview content, leaving plain text at full pane width; toggling it off restores both immediately. The file title bar switches to a visually distinct style and its legend collapses to `[c] normal view` while copy mode is active, and back to the idle legend (which itself now includes `[c] copy mode`) once it's off.
+- Copy mode wraps exactly like normal display (same word-wrap rules above), not clipped — confirm a genuinely long line (wider than the terminal) still wraps across multiple screen rows with copy mode on, exactly as it does with copy mode off, just without the gutter/color. (An earlier version clipped instead of wrapping in copy mode; that made anything past the pane's edge impossible to select at all, which is worse than a multi-row selection occasionally picking up a wrap-induced line break — confirm this regression doesn't recur.)
+- In-file find's match highlighting remains visible while copy mode is active (both the current and other matches, still visually distinguished from each other) — copy mode only strips the gutter and syntax color, not find's overlay.
+- Copy mode is tracked per open-files entry, not globally: switching to a different open file while it's active on the first one leaves the new file in normal mode, and switching back restores copy mode on the first exactly as it was left — the same independence scroll/goto-line/find state already have. It applies to the split-view browser layout's read-only preview pane too, not just the interactive primary preview view, whenever that pane is showing an entry that's in copy mode.
+- The file title bar tags its content `[copy mode] ` whenever the displayed entry is in copy mode, regardless of whether the idle legend, an active find's status, or the find prompt is otherwise showing on that row — the tag is never hidden by another state taking over the row.
+- Actually select-and-copy text from the preview (via the terminal/multiplexer's own mouse selection) with copy mode on, confirming the copied text is exactly the file's own characters with no gutter digits mixed in.
 - Escape responsiveness (§6.3), resize handling via periodic polling (§6.2), and the spinner badge's visual distinctness (§5.2) per the checks above.

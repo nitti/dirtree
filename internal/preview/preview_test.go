@@ -72,6 +72,32 @@ func TestReadLinesEmptyFile(t *testing.T) {
 	}
 }
 
+func TestReadLinesExpandsTabsToNextTabStop(t *testing.T) {
+	path := writeTemp(t, []byte("a\tb\n"))
+	lines := ReadLines(path, DefaultByteCap)
+	want := "a       b" // 'a' at col 0, tab expands to col 8, 'b' at col 8
+	if len(lines) != 1 || lines[0] != want {
+		t.Fatalf("got %q, want %q", lines, []string{want})
+	}
+}
+
+func TestReadLinesTabStopsResetPerLine(t *testing.T) {
+	path := writeTemp(t, []byte("\tx\nyy\ty\n"))
+	lines := ReadLines(path, DefaultByteCap)
+	want := []string{
+		"        x", // tab at col 0 expands to col 8
+		"yy      y", // "yy" at cols 0-1, tab expands to col 8
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("got %v, want %v", lines, want)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Fatalf("line %d: got %q, want %q", i, lines[i], want[i])
+		}
+	}
+}
+
 func TestHighlightNoRuleSetReturnsNil(t *testing.T) {
 	segs := Highlight("weird.unknownext", []string{"hello"})
 	if segs != nil {
@@ -84,6 +110,40 @@ func TestHighlightOneSegmentListPerLine(t *testing.T) {
 	segs := Highlight("script.py", lines)
 	if segs == nil || len(segs) != len(lines) {
 		t.Fatalf("expected %d segment lists, got %d", len(lines), len(segs))
+	}
+}
+
+// TestHighlightSegmentsReconstructEachLineExactly guards against a
+// token-to-line attribution bug where a token's value spans a newline
+// (e.g. a whitespace token like "\n    " covering an end-of-line plus
+// the next line's leading indentation): the text after the newline
+// must land on the new line, not get appended to the line that just
+// ended (which silently drops one line's indentation and shifts
+// everything after it by one line — this is exactly the "mangled YAML
+// indentation" bug it was written to catch).
+func TestHighlightSegmentsReconstructEachLineExactly(t *testing.T) {
+	lines := []string{
+		"builds:",
+		"  - id: dirtree",
+		"    main: ./cmd/dirtree",
+		"    env:",
+		"      - CGO_ENABLED=0",
+	}
+	segs := Highlight("build.yaml", lines)
+	if segs == nil {
+		t.Fatal("expected a lexer match for build.yaml")
+	}
+	if len(segs) != len(lines) {
+		t.Fatalf("expected %d segment lists, got %d", len(lines), len(segs))
+	}
+	for i, want := range lines {
+		var got strings.Builder
+		for _, seg := range segs[i] {
+			got.WriteString(seg.Text)
+		}
+		if got.String() != want {
+			t.Fatalf("line %d: got %q, want %q", i, got.String(), want)
+		}
 	}
 }
 
@@ -134,6 +194,105 @@ func TestWrapPreservesCategoryBoundaries(t *testing.T) {
 	}
 }
 
+// rowText concatenates a wrapped row's segment text, for readable
+// assertions against the plain content a row ends up containing.
+func rowText(row []Segment) string {
+	var b strings.Builder
+	for _, s := range row {
+		b.WriteString(s.Text)
+	}
+	return b.String()
+}
+
+func TestWrapPrefersBreakingAtSpaceOverMidWord(t *testing.T) {
+	segs := []Segment{{Text: "hello world", Category: CategoryText}}
+	rows := wrapLineSegments(segs, 8)
+	want := []string{"hello", "world"}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d rows %v, want %v", len(rows), rowsText(rows), want)
+	}
+	for i, w := range want {
+		if rowText(rows[i]) != w {
+			t.Fatalf("row %d: got %q, want %q", i, rowText(rows[i]), w)
+		}
+	}
+}
+
+func TestWrapMovesWordToNextRowRatherThanSplittingIt(t *testing.T) {
+	// "friend" (6 chars) doesn't fit after "hi " within width 6, but
+	// fits exactly on a fresh row — it must move there whole rather than
+	// being split (a naive fixed-width wrap would produce "hi frie"/"nd").
+	segs := []Segment{{Text: "hi friend", Category: CategoryText}}
+	rows := wrapLineSegments(segs, 6)
+	want := []string{"hi", "friend"}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d rows %v, want %v", len(rows), rowsText(rows), want)
+	}
+	for i, w := range want {
+		if rowText(rows[i]) != w {
+			t.Fatalf("row %d: got %q, want %q", i, rowText(rows[i]), w)
+		}
+	}
+}
+
+func TestWrapAllowsBreakingAfterDash(t *testing.T) {
+	segs := []Segment{{Text: "auto-complete", Category: CategoryText}}
+	rows := wrapLineSegments(segs, 6)
+	if len(rows) == 0 || rowText(rows[0]) != "auto-" {
+		t.Fatalf("expected first row to break after the dash as \"auto-\", got %v", rowsText(rows))
+	}
+	// The dash must be kept (not dropped like a triggering space).
+	full := rowsText(rows)
+	joined := ""
+	for _, r := range full {
+		joined += r
+	}
+	if joined != "auto-complete" {
+		t.Fatalf("expected rows to reconstruct to %q, got %q", "auto-complete", joined)
+	}
+}
+
+func TestWrapHardBreaksWordLongerThanFullWidth(t *testing.T) {
+	// No space or dash anywhere: a word longer than the width has no
+	// legal break point at all, so it must still hard-break rather than
+	// overflow the row.
+	segs := []Segment{{Text: "supercalifragilistic", Category: CategoryText}}
+	rows := wrapLineSegments(segs, 5)
+	want := []string{"super", "calif", "ragil", "istic"}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d rows %v, want %v", len(rows), rowsText(rows), want)
+	}
+	for i, w := range want {
+		if rowText(rows[i]) != w {
+			t.Fatalf("row %d: got %q, want %q", i, rowText(rows[i]), w)
+		}
+	}
+}
+
+func TestWrapDropsTriggeringSpaceButKeepsRealTrailingSpace(t *testing.T) {
+	// The space that causes the wrap disappears; a real trailing space
+	// at the actual end of the line's content does not.
+	segs := []Segment{{Text: "ab cd ", Category: CategoryText}}
+	rows := wrapLineSegments(segs, 3)
+	want := []string{"ab", "cd "}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d rows %v, want %v", len(rows), rowsText(rows), want)
+	}
+	for i, w := range want {
+		if rowText(rows[i]) != w {
+			t.Fatalf("row %d: got %q, want %q", i, rowText(rows[i]), w)
+		}
+	}
+}
+
+func rowsText(rows [][]Segment) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = rowText(r)
+	}
+	return out
+}
+
 func TestBuildDisplayRowsAssignsNumberOnlyToFirstWrappedRow(t *testing.T) {
 	lines := [][]Segment{
 		{{Text: "abcdefgh", Category: CategoryText}}, // wraps into 2 rows at width 4
@@ -165,6 +324,22 @@ func TestBuildDisplayRowsFirstRowIndex(t *testing.T) {
 	}
 	if firstRow[1] != 2 {
 		t.Fatalf("expected line 1's first row at index 2, got %d", firstRow[1])
+	}
+}
+
+func TestBuildDisplayRowsColStart(t *testing.T) {
+	lines := [][]Segment{
+		{{Text: "abcdefgh", Category: CategoryText}},
+	}
+	rows, _ := BuildDisplayRows(lines, 4)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 wrapped rows, got %d", len(rows))
+	}
+	if rows[0].ColStart != 0 {
+		t.Fatalf("expected first row's ColStart 0, got %d", rows[0].ColStart)
+	}
+	if rows[1].ColStart != 4 {
+		t.Fatalf("expected second row's ColStart 4, got %d", rows[1].ColStart)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/nitti/dirtree/internal/find"
 	"github.com/nitti/dirtree/internal/ignore"
 	"github.com/nitti/dirtree/internal/index"
 	"github.com/nitti/dirtree/internal/layout"
@@ -46,12 +47,25 @@ const (
 // searchEntryPoint records which screen the content search overlay
 // (SPEC.md §9) was opened from, so Escape returns to it. Both entry
 // points behave identically once the overlay is open (§9.2) — there is
-// no per-entry-point default-action split like quick open/jump to file.
+// no per-entry-point default-action split like jump to file.
 type searchEntryPoint int
 
 const (
 	searchFromBrowser searchEntryPoint = iota
 	searchFromPreview
+)
+
+// quickOpenEntryPoint records which screen quick open (SPEC.md §4.2)
+// was opened from, so Escape returns to it. Both entry points behave
+// identically once the overlay is open — opening a match always lands
+// on the primary preview view regardless of entry point (mirroring
+// content search's own entry-point handling), so this only affects
+// Escape.
+type quickOpenEntryPoint int
+
+const (
+	quickOpenFromPreview quickOpenEntryPoint = iota
+	quickOpenFromBrowser
 )
 
 // searchOutcome is what a background content-search scan (SPEC.md §9.1)
@@ -106,7 +120,8 @@ type App struct {
 	finderMatches  []index.Entry // nil while the background index isn't done yet, distinct from "genuinely zero matches"
 	finderSelected int
 	finderScroll   int
-	finderMessage  string // transient inline open-failure message, quick open only (§2.2)
+	finderMessage  string              // transient inline open-failure message, quick open only (§2.2)
+	quickOpenEntry quickOpenEntryPoint // which screen quick open was opened from, so Escape returns to it
 
 	// content search overlay state (SPEC.md §9)
 	searchEntry    searchEntryPoint
@@ -132,6 +147,14 @@ type App struct {
 	// openfiles.Entry instead, since they're tracked per open file.
 	gotoPromptOpen bool
 	gotoInput      string
+
+	// primary preview view's in-file find prompt state (SPEC.md §2.4);
+	// the query, matches, current index, and wrap note live per-entry on
+	// openfiles.Entry instead (same reasoning as goto-line above), since
+	// only this transient "still typing the query" state needs to be
+	// app-level.
+	findPromptOpen bool
+	findInput      string
 
 	badgeSkip spinner.MinDurationSkip
 
@@ -325,27 +348,37 @@ func (a *App) isFinderOverlay() bool {
 
 // handlePreviewKey handles input at the primary preview view when no
 // overlay is active: reaching the browser, quick open, and open-files
-// overlays, preview scrolling/goto-line, and quitting (SPEC.md §7).
-// `B` and `O` are toggles on their own overlays (SPEC.md §5.1), but
-// since this handler only runs when no overlay is active, pressing
-// them here always opens rather than closes.
+// overlays, preview scrolling/goto-line/in-file-find, and quitting
+// (SPEC.md §7). `b` is a toggle on its own overlay (SPEC.md §5.1), but
+// since this handler only runs when no overlay is active, pressing it
+// here always opens rather than closes (quick open, opened by `o`, is
+// not a toggle — see handleQuickOpenKey). Escape does not quit and
+// there is no overlay to back out of here (`q` is the only way to
+// quit, so an accidental Escape press can't lose the session's
+// open-files state) — its only effect at this view is clearFind,
+// clearing an active in-file find if there is one, and otherwise
+// remaining a no-op.
 func (a *App) handlePreviewKey(ev *tcell.EventKey) {
 	if a.gotoPromptOpen {
 		a.handleGotoPromptKey(ev)
 		return
 	}
+	if a.findPromptOpen {
+		a.handleFindPromptKey(ev)
+		return
+	}
 
 	switch {
-	case ev.Rune() == 'B':
+	case ev.Rune() == 'b':
 		a.overlay = overlayBrowser
 	case ev.Key() == tcell.KeyTab:
 		a.overlay = overlayOpenFiles
 		a.openFilesSelected = max(a.files.Displayed, 0)
-	case ev.Rune() == 'O':
-		a.openQuickOpen()
+	case ev.Rune() == 'o':
+		a.openQuickOpen(quickOpenFromPreview)
 	case ev.Rune() == 's':
 		a.openSearch(searchFromPreview)
-	case ev.Rune() == 'q', ev.Key() == tcell.KeyEscape:
+	case ev.Rune() == 'q':
 		a.quit = true
 	case ev.Key() == tcell.KeyUp:
 		a.scrollPreview(-1)
@@ -360,7 +393,43 @@ func (a *App) handlePreviewKey(ev *tcell.EventKey) {
 			a.gotoPromptOpen = true
 			a.gotoInput = ""
 		}
+	case ev.Rune() == '/':
+		if a.files.DisplayedEntry() != nil {
+			a.findPromptOpen = true
+			a.findInput = ""
+		}
+	case ev.Rune() == 'c':
+		if e := a.files.DisplayedEntry(); e != nil {
+			e.CopyMode = !e.CopyMode
+		}
+	case ev.Rune() == 'n':
+		a.findStep(1)
+	case ev.Rune() == 'N':
+		a.findStep(-1)
+	case ev.Key() == tcell.KeyEscape:
+		a.clearFind()
 	}
+}
+
+// clearFind clears the displayed entry's in-file find state (SPEC.md
+// §2.4), if any — its query, matches, current index, and wrap note —
+// so its highlighting and file-title-bar status disappear, leaving the
+// idle file title bar in their place. Bound to Escape at the primary
+// preview view: this does not conflict with Escape's deliberate
+// no-op-when-nothing-to-back-out-of behavior there (it still never
+// quits — only `q` does), it just gives find an explicit way out,
+// since otherwise it would persist until superseded by a new search on
+// the same entry. A no-op if there's no displayed entry or no active
+// find, so Escape stays inert exactly when there was nothing to clear.
+func (a *App) clearFind() {
+	e := a.files.DisplayedEntry()
+	if e == nil || e.FindQuery == "" {
+		return
+	}
+	e.FindQuery = ""
+	e.FindMatches = nil
+	e.FindCurrent = -1
+	e.FindWrapNote = ""
 }
 
 // handleGotoPromptKey handles input while the goto-line prompt is open
@@ -418,9 +487,145 @@ func (a *App) maxPreviewScroll(e *openfiles.Entry, viewportHeight int) int {
 	return max(len(e.Rows)-viewportHeight, 0)
 }
 
+// handleFindPromptKey handles input while the in-file find prompt is
+// open (SPEC.md §2.4): any printable character is accepted (unlike
+// goto-line's digits-only prompt, since a search query is free text),
+// Enter executes the search, Escape cancels the prompt without
+// changing the entry's existing find state (if any).
+func (a *App) handleFindPromptKey(ev *tcell.EventKey) {
+	switch {
+	case ev.Key() == tcell.KeyEscape:
+		a.findPromptOpen = false
+	case ev.Key() == tcell.KeyEnter:
+		a.performFind(a.findInput)
+		a.findPromptOpen = false
+	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
+		if len(a.findInput) > 0 {
+			r := []rune(a.findInput)
+			a.findInput = string(r[:len(r)-1])
+		}
+	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
+		a.findInput += string(ev.Rune())
+	}
+}
+
+// performFind executes an in-file find (SPEC.md §2.4): locates every
+// case-insensitive match of query in the displayed entry's lines, then
+// jumps to the first one at or after the source line currently at the
+// top of the viewport — the same "search forward from here" behavior
+// as `less` — wrapping to the very first match (and noting the wrap)
+// if none exists at or after that point. A no-op if there's no
+// displayed entry; an empty query clears any existing find state
+// instead of searching (mirroring a bare "/" + Enter in `less`).
+func (a *App) performFind(query string) {
+	e := a.files.DisplayedEntry()
+	if e == nil {
+		return
+	}
+	a.ensurePreviewWrapped(e, a.computedPreviewWidth())
+
+	e.FindQuery = query
+	e.FindMatches = find.InLines(e.Lines, query)
+	e.FindWrapNote = ""
+	if len(e.FindMatches) == 0 {
+		e.FindCurrent = -1
+		return
+	}
+
+	startLine := 0
+	if e.Scroll >= 0 && e.Scroll < len(e.Rows) {
+		startLine = e.Rows[e.Scroll].SourceLine
+	}
+	idx := 0
+	for i, m := range e.FindMatches {
+		if m.Line >= startLine {
+			idx = i
+			break
+		}
+	}
+	if e.FindMatches[idx].Line < startLine {
+		e.FindWrapNote = "wrapped to top"
+	}
+	e.FindCurrent = idx
+	a.scrollToFindMatch(e)
+}
+
+// findStep moves the current match by delta (+1 for `n`/next, -1 for
+// `N`/previous), wrapping around at either end and noting the wrap
+// (SPEC.md §2.4) — the same wraparound stepper the finder overlays and
+// browser navigation already use (internal/tree.MoveSelection). A
+// no-op if there's no displayed entry or it has no matches.
+func (a *App) findStep(delta int) {
+	e := a.files.DisplayedEntry()
+	if e == nil || len(e.FindMatches) == 0 {
+		return
+	}
+	next := tree.MoveSelection(e.FindCurrent, delta, len(e.FindMatches))
+	switch {
+	case delta > 0 && next < e.FindCurrent:
+		e.FindWrapNote = "wrapped to top"
+	case delta < 0 && next > e.FindCurrent:
+		e.FindWrapNote = "wrapped to bottom"
+	default:
+		e.FindWrapNote = ""
+	}
+	e.FindCurrent = next
+	a.scrollToFindMatch(e)
+}
+
+// scrollToFindMatch scrolls e just enough to bring its current find
+// match into view (the same "only scroll if it's not already visible"
+// rule the browser uses for its own selection, SPEC.md §5.2), a no-op
+// if there is no current match.
+func (a *App) scrollToFindMatch(e *openfiles.Entry) {
+	if e.FindCurrent < 0 || e.FindCurrent >= len(e.FindMatches) {
+		return
+	}
+	row := findMatchRow(e, e.FindMatches[e.FindCurrent])
+	if row < 0 {
+		return
+	}
+	h := a.previewViewportHeight()
+	if row < e.Scroll {
+		e.Scroll = row
+	}
+	if row >= e.Scroll+h {
+		e.Scroll = row - h + 1
+	}
+	e.Scroll = clamp(e.Scroll, 0, a.maxPreviewScroll(e, h))
+}
+
+// findMatchRow returns the index into e.Rows of the specific wrapped
+// row m falls in (not just its source line's first row, since a long
+// line's match may land in a continuation row) — a.ensurePreviewWrapped
+// must already have been called. Falls back to the source line's first
+// row if m's column can't be located in any of its rows (shouldn't
+// happen for a match found in e.Lines, but degrades safely rather than
+// losing the jump entirely).
+func findMatchRow(e *openfiles.Entry, m find.Match) int {
+	start, ok := e.FirstRow[m.Line]
+	if !ok {
+		return -1
+	}
+	for i := start; i < len(e.Rows); i++ {
+		r := e.Rows[i]
+		if r.SourceLine != m.Line {
+			break
+		}
+		rowLen := preview.SegmentsRuneLen(r.Segments)
+		if m.Col >= r.ColStart && m.Col < r.ColStart+max(rowLen, 1) {
+			return i
+		}
+	}
+	return start
+}
+
 func (a *App) previewViewportHeight() int {
 	_, h := a.screen.Size()
 	height := h - 1 // header row
+	if a.files.DisplayedEntry() != nil {
+		height-- // file title bar row, shown whenever a file is displayed
+	}
 	if a.gotoPromptOpen {
 		height--
 	}
@@ -441,13 +646,35 @@ func (a *App) computedPreviewWidth() int {
 	if e == nil {
 		return w
 	}
-	return max(w-gutterWidth(len(e.Lines)), 1)
+	return max(w-previewGutterWidth(e), 1)
+}
+
+// previewGutterWidth returns the line-number gutter's width for e:
+// gutterWidth's normal computation, or 0 while e is in copy mode
+// (SPEC.md §2.1) and stripping the gutter out of its preview entirely.
+// Shared by computedPreviewWidth and drawPreview so both agree on the
+// same content width — otherwise they'd race to invalidate each
+// other's wrap cache every frame.
+func previewGutterWidth(e *openfiles.Entry) int {
+	if e.CopyMode {
+		return 0
+	}
+	return gutterWidth(len(e.Lines))
 }
 
 // ensurePreviewWrapped recomputes e's wrapped display rows if width has
 // changed since they were last computed (SPEC.md §2.1: "wrapping must
 // be recomputed whenever the available width changes"), caching the
-// result on the entry so it's not redone every frame.
+// result on the entry so it's not redone every frame. Copy mode wraps
+// the same way normal display does — an earlier version of copy mode
+// disabled wrapping entirely and clipped long lines instead, but that
+// meant anything past the pane's right edge was never drawn at all,
+// making it impossible to select the rest of the line by any means;
+// word-wrapping (SPEC.md §2.1) keeps every character of the line
+// visible and selectable somewhere on screen, which matters more than
+// avoiding the extra line break a multi-row selection can pick up at a
+// wrap point — an inherent limitation of any fixed-width terminal grid,
+// not something copy mode can fully solve either way.
 func (a *App) ensurePreviewWrapped(e *openfiles.Entry, width int) {
 	if e.RowsWidth == width && e.Rows != nil {
 		return
@@ -467,8 +694,8 @@ func clamp(v, lo, hi int) int {
 }
 
 // handleBrowserKey implements the browser overlay's navigation and open
-// actions (SPEC.md §3.4). `B` is a toggle (SPEC.md §5.1): it closes the
-// browser just like Escape does, since `B` is also the key that opens
+// actions (SPEC.md §3.4). `b` is a toggle (SPEC.md §5.1): it closes the
+// browser just like Escape does, since `b` is also the key that opens
 // it from the primary preview view.
 func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 	flat := a.root.Flatten()
@@ -488,27 +715,27 @@ func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 	case ev.Key() == tcell.KeyLeft:
 		a.browserMessage = ""
 		a.browserSelected = a.browserSelected.MoveLeft()
-	case ev.Rune() == ' ':
-		a.browserOpen(false)
-	case ev.Rune() == 'a':
-		a.browserOpen(true)
+	case ev.Key() == tcell.KeyEnter:
+		a.browserOpen()
 	case ev.Rune() == '/':
 		a.openJumpToFile()
+	case ev.Rune() == 'o':
+		a.openQuickOpen(quickOpenFromBrowser)
 	case ev.Rune() == 's':
 		a.openSearch(searchFromBrowser)
-	case ev.Rune() == 'B', ev.Key() == tcell.KeyEscape:
+	case ev.Rune() == 'b', ev.Key() == tcell.KeyEscape:
 		a.browserMessage = ""
 		a.overlay = overlayNone
 	}
 }
 
-// browserOpen implements Space (keepOpen=false) and `a` (keepOpen=true)
-// from the browser, per SPEC.md §3.4 and §2.2's open-failure signaling:
-// a no-op on a directory; on a file, an "opened" result displays it in
-// the primary preview view, closing the browser unless keepOpen; a
-// "failed" result always leaves the browser open with the message
-// shown inline, regardless of keepOpen.
-func (a *App) browserOpen(keepOpen bool) {
+// browserOpen implements Enter from the browser, per SPEC.md §3.4 and
+// §2.2's open-failure signaling: a no-op on a directory; on a file, an
+// "opened" result displays it in the primary preview view without
+// closing the browser, so several files can be queued up in a row
+// before returning to the preview; a "failed" result leaves the
+// browser open with the message shown inline.
+func (a *App) browserOpen() {
 	if a.browserSelected.IsDir {
 		return
 	}
@@ -518,9 +745,6 @@ func (a *App) browserOpen(keepOpen bool) {
 		return
 	}
 	a.browserMessage = ""
-	if !keepOpen {
-		a.overlay = overlayNone
-	}
 }
 
 // handleOpenFilesKey implements the open-files-list overlay's input
@@ -569,13 +793,28 @@ func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 	}
 }
 
-// openQuickOpen opens the quick open overlay from the primary preview
-// view (SPEC.md §4.2). Per SPEC.md §5.2, opening it while indexing is
-// already done means the user has directly seen indexing is ready, so
-// it short-circuits the badge's minimum-display-duration floor.
-func (a *App) openQuickOpen() {
+// openQuickOpen opens the quick open overlay (SPEC.md §4.2) from
+// whichever screen it was triggered from — the primary preview view or
+// the browser — remembering entry so Escape can return to it. Per
+// SPEC.md §5.2, opening it while indexing is already done means the
+// user has directly seen indexing is ready, so it short-circuits the
+// badge's minimum-display-duration floor.
+func (a *App) openQuickOpen(entry quickOpenEntryPoint) {
 	a.overlay = overlayQuickOpen
+	a.quickOpenEntry = entry
 	a.openFinder()
+}
+
+// quickOpenReturnOverlay is which overlay Escape returns to: the
+// browser if quick open was entered from it, otherwise the primary
+// preview view. Opening a match, unlike Escape, always lands on the
+// primary preview view regardless of entry point (SPEC.md §4.2),
+// mirroring content search's own entry-point handling.
+func (a *App) quickOpenReturnOverlay() overlay {
+	if a.quickOpenEntry == quickOpenFromBrowser {
+		return overlayBrowser
+	}
+	return overlayNone
 }
 
 // openJumpToFile opens the jump-to-file overlay from within the
@@ -653,12 +892,14 @@ func (a *App) handleFinderTypingKey(ev *tcell.EventKey) bool {
 
 // handleQuickOpenKey implements quick open's input handling (SPEC.md
 // §4.2): a single action, opening the selected match into the
-// open-files list. `O` is a toggle, closing the overlay the same as
-// Escape.
+// open-files list. Escape returns to whichever screen quick open was
+// opened from (quickOpenReturnOverlay); `o` has no special meaning
+// here — it's a live text filter, and "o" is much too common a letter
+// to double as a close key without breaking ordinary typing.
 func (a *App) handleQuickOpenKey(ev *tcell.EventKey) {
 	switch {
-	case ev.Rune() == 'O', ev.Key() == tcell.KeyEscape:
-		a.overlay = overlayNone
+	case ev.Key() == tcell.KeyEscape:
+		a.overlay = a.quickOpenReturnOverlay()
 	case ev.Key() == tcell.KeyEnter:
 		a.performOpenIntoList()
 	default:
