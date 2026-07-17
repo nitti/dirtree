@@ -134,6 +134,17 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Reveal-in-tree resolution failure (path no longer exists) exits the overlay without changing tree selection, regardless of which key/entry-point triggered it.
 - Escape from either entry point returns to the exact screen the overlay was opened from (tree explorer stays open and unchanged; preview view's displayed entry, or empty state, is unchanged) without performing either action.
 
+## Content search matching (§9.1)
+
+- An empty query returns no matches, and the returned result set is never nil (distinguishable from "not yet searched").
+- A plain query is a case-insensitive substring match checked against file content, not just file names.
+- A match reports the 1-based line number and text of the first line containing the query, not a later line even when multiple lines match.
+- A file containing a NUL byte within the byte-capped read is never matched, even if the query text is literally present in its bytes (binary detection takes precedence, mirroring §2.2's binary-open check).
+- A file that can't be read (permission denied, deleted mid-scan) is silently skipped rather than aborting the whole scan or surfacing an error.
+- A match occurring only beyond the byte cap is not found — content search never reads past the same cap preview loading uses.
+- Results are sorted by root-relative path, case-insensitively.
+- An already-canceled context stops the scan before it reads any candidate, so a superseded query's scan does no wasted work once canceled.
+
 ## Layout computation (§5.1)
 
 - `compute_tree_pane_width` returns at least the configured minimum even for a very short/empty node list.
@@ -184,5 +195,6 @@ The following require a real terminal (ideally inside a multiplexer like Zellij 
 - The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Enter-to-display and `x`-to-remove, and its empty-list message renders when reachable.
 - Shift-Up/Shift-Down reordering is confirmed against a real terminal/multiplexer, since Shift+arrow key delivery is more library/terminal-dependent than plain arrow keys; if the target terminal library can't reliably distinguish Shift-Up/Shift-Down from plain Up/Down, note the fallback keys actually used here rather than silently shipping non-functional reordering.
 - The jump/fuzzy-picker overlay's header legend correctly reflects which of Enter/Space maps to which action depending on entry point (tree explorer vs. preview).
+- Content search overlay (§9): `s` opens it from both the primary preview view (including its empty state) and the tree explorer; typing (including a literal space) builds the query live and each keystroke's rescan doesn't visibly block input; Enter on a match opens it into the preview and closes the overlay; Escape returns to whichever screen it was opened from unchanged; the bottom-right index badge renders in this overlay the same way it does in the tree explorer and jump/fuzzy-picker overlays.
 - Tree-explorer split-view vs. popup layout flips correctly on live resize, with the preview pane visible-but-inert in split view.
 - Escape responsiveness (§6.3), resize handling via periodic polling (§6.2), and the spinner badge's visual distinctness (§5.2) per the checks above.

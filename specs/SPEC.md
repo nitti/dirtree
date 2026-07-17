@@ -211,7 +211,7 @@ Three overlays exist, each opened from the primary preview view or (for the jump
 - **Directory expand/collapse marker**: a small glyph before the name distinguishing expanded vs. collapsed directories (e.g. a down-caret vs. right-caret); files get equivalent blank spacing so names still align vertically.
 - **Indentation**: each row is indented proportionally to its depth in the tree, so the hierarchy is visually legible.
 - **Per-node error indicator**: if a node failed to list its children (see §3.1), append a bracketed short error string after its name.
-- **Delayed loading indicator** (indexing spinner / badge): while the background index (§4.1) has not finished, an animated spinner is available for use in two places — a small floating badge anchored to the bottom-right corner of the screen, rendered in *both* the tree explorer overlay and the jump/fuzzy-picker overlay (so the badge's sequence below stays visible/watchable whichever one is currently showing), and, in the jump/fuzzy-picker overlay specifically, also replacing the match list entirely with an "indexing…" message. In both cases, **suppress the indicator entirely until indexing has been running for at least a short threshold** (250ms in the prototype). This is a deliberate UX fix: on a small tree, indexing finishes in a handful of milliseconds, and briefly flashing a spinner for genuinely instant work reads as more distracting than informative — so nothing is shown at all until it's clear the wait is actually perceptible. During that sub-threshold grace period in the jump/fuzzy-picker overlay specifically, render neither the spinner nor a "no matches" message in the match-list area (since indexing not being done yet is a different state from "genuinely zero matches") — just leave the match-list area blank; the corner badge follows its own sequence below independent of the match-list area's blank state.
+- **Delayed loading indicator** (indexing spinner / badge): while the background index (§4.1) has not finished, an animated spinner is available for use in two places — a small floating badge anchored to the bottom-right corner of the screen, rendered in *both* the tree explorer overlay and the jump/fuzzy-picker overlay (so the badge's sequence below stays visible/watchable whichever one is currently showing), and, in the jump/fuzzy-picker overlay specifically, also replacing the match list entirely with an "indexing…" message. The content search overlay (§9) renders the same bottom-right badge (it depends on the same background index for its candidate set) but has its own "indexing…"/"searching…" match-list placeholder per §9.1, distinct from the jump/fuzzy-picker overlay's. In both cases, **suppress the indicator entirely until indexing has been running for at least a short threshold** (250ms in the prototype). This is a deliberate UX fix: on a small tree, indexing finishes in a handful of milliseconds, and briefly flashing a spinner for genuinely instant work reads as more distracting than informative — so nothing is shown at all until it's clear the wait is actually perceptible. During that sub-threshold grace period in the jump/fuzzy-picker overlay specifically, render neither the spinner nor a "no matches" message in the match-list area (since indexing not being done yet is a different state from "genuinely zero matches") — just leave the match-list area blank; the corner badge follows its own sequence below independent of the match-list area's blank state.
   - Compute the spinner glyph by cycling a small fixed set of animation frames at a fixed rate (10 frames/sec in the prototype) driven by elapsed wall-clock time since indexing started, not by frame count, so its speed is independent of render/poll rate.
   - The bottom-right badge is rendered with a background that contrasts with the surrounding rows (an accent color in the prototype), the same "must read as visually distinct" rule the header bar (above) follows — not plain/default-styled text sitting over the view, which is easy to miss in a busy screen.
 - **Bottom-right badge sequence**: the badge (unlike the jump/fuzzy-picker overlay's match-list-area indicator, which is just shown/hidden per the threshold above) runs through a full sequence once indexing has crossed the perceptibility threshold, identically whether the tree explorer or jump/fuzzy-picker overlay is currently on screen:
@@ -266,6 +266,7 @@ Terminal input libraries commonly buffer a short delay after receiving an Escape
 | `e` | preview | open tree explorer overlay |
 | `Tab` | preview | open the open-files list overlay |
 | `/` | preview | open jump/fuzzy-picker overlay (default action: open-into-list) |
+| `s` | preview | open content search overlay |
 | `q` / Escape | preview, no overlay active | quit |
 | Up / Down | tree explorer | move selection, wraps at both ends |
 | Right | tree explorer | expand a collapsed dir, or descend into an expanded dir's first child |
@@ -273,6 +274,7 @@ Terminal input libraries commonly buffer a short delay after receiving an Escape
 | Space | tree explorer, file selected | open file, close explorer, display it |
 | `a` | tree explorer, file selected | open file, keep explorer open |
 | `/` | tree explorer | open jump/fuzzy-picker overlay (default action: reveal-in-tree) |
+| `s` | tree explorer | open content search overlay |
 | Escape | tree explorer | close overlay, return to preview unchanged |
 | (typing) | jump/fuzzy-picker | append to query, filters live |
 | Backspace | jump/fuzzy-picker | remove last query character |
@@ -286,6 +288,12 @@ Terminal input libraries commonly buffer a short delay after receiving an Escape
 | Enter | open-files list | display selected entry, close overlay |
 | `x` | open-files list | remove selected entry from the list |
 | Escape | open-files list | close overlay, return to preview unchanged |
+| (typing, including space) | content search | append to query, rescans in the background |
+| Backspace | content search | remove last query character, rescans |
+| Tab / Down | content search | next match (wraps) |
+| Shift-Tab / Up | content search | previous match (wraps) |
+| Enter | content search | open the selected match into the open-files list, exit overlay |
+| Escape | content search | cancel, return to whichever screen it was opened from, unchanged |
 
 Escape is the universal "get me out of here" key everywhere it's listed above: closes whatever overlay is currently active, or quits if none is active (i.e. when the primary preview view itself is on screen).
 
@@ -293,3 +301,28 @@ Escape is the universal "get me out of here" key everywhere it's listed above: c
 
 - Mouse support was deliberately removed from the prototype (terminal multiplexer interception made it unreliable) and is **not required**. If an implementation wants to add it back for environments where it works, it must not be the only way to perform any action — full keyboard parity per §7 is required regardless.
 - Exact color choices, exact spinner glyph set, and exact numeric tuning constants (byte cap, pane width cap, badge delay, spinner fps, min/max tree-explorer-pane width) are not required to match the prototype's literal values — they're implementation-tunable. What's required is the *behavior* those constants produce (bounded, sane, non-flashing, non-jarring), not the specific numbers.
+
+## 9. Content search
+
+Content search is a separate overlay from the jump/fuzzy-picker mode (§4): where jump mode matches *paths* by substring/glob and never reads a file's content, content search matches a plain string against each candidate file's *content* and lists the files that contain it. It has its own trigger key (`s`) rather than overloading `/`, and is not part of the jump/fuzzy-picker mode's "single overlay, two workflows" design (§4) — it's a third, independent overlay.
+
+### 9.1 Triggering and background scanning
+
+- Entry points: `s` from the primary preview view (§2.1, including its empty state) and `s` from the tree explorer overlay (§3.4). Unlike jump mode, both entry points behave identically once the overlay is open — there is no per-entry-point default-action distinction (see §9.2).
+- The candidate set is every non-directory entry in the background full-tree index (§4.1) — the same index jump mode searches, so content search automatically honors the same `.gitignore`/`.dirtreeignore` exclusions (§3.2) and reflects the same live-refresh-triggered rebuilds (§6.1). A query typed before the index has finished building is held pending until it completes (rendered as `indexing…`), the same way jump mode defers to an unfinished index (§4.2).
+- Each candidate file is read up to the same byte cap used for preview loading (§2.1), and a capped read containing a NUL byte is treated as binary and never matched — the same check §2.2 uses to detect a binary open. Content search never reports a match inside content it wouldn't be able to preview anyway, and (like preview loading) never reads past the cap, so a match occurring only beyond the cap is not found.
+- Matching is a case-insensitive **substring** match only, checked line by line against the capped read. Content search has no glob-wildcard mode — jump mode's wildcard-vs-substring switch (§4.2) is specific to path matching; a content-search query is always literal, plain text.
+- A file may match on more than one line; only the first matching line (lowest line number) is used for the result's display context (§9.2) — this is a "does this file contain the query, and where's a first example" tool, not a full per-line results list.
+- Scanning runs in the background (mirroring §4.1's non-blocking discipline) rather than on the UI thread: each keystroke that changes the query cancels any still-running scan for the previous query and starts a new one over the full candidate set, so the UI never blocks on a large tree and only the most recently typed query's result is ever applied.
+- An empty query performs no scan and shows no results — this is deliberately different from jump mode's "empty query matches everything" (§4.2): jump mode's empty-query match is a free lookup against an already-built in-memory path list, while scanning every candidate file's content on an empty query would mean reading the entire tree for no useful result.
+- While a scan for the current query is in flight, or the background index itself isn't done yet, the match-list area shows a `searching…`/`indexing…` placeholder instead of "no matches" — the same "don't claim zero results before you've actually looked" rule §5.2 uses for jump mode's own delayed-loading state.
+
+### 9.2 Mode behavior
+
+- The screen is fully replaced by a flat list view, one row per matching file: its root-relative, slash-delimited path, the 1-based line number of its first matching line, and that line's (trimmed) text — enough to tell matches apart without opening each one.
+- A query string starts empty and accumulates/removes characters as the user types/backspaces, shown in the header. Because a content-search query is literal text rather than a path fragment, the space bar always types a literal space into the query — unlike jump mode, no key is overloaded to double as an action key, so there is exactly one action (below), bound to Enter.
+- A `selected` index into the current match list, with wraparound cycling: advance forward (Tab, or Down) or backward (Shift-Tab, or Up).
+- **Enter**, if there is at least one match: open the selected match into the open-files list per §2.2's open semantics (reusing an existing open-files entry if the path is already open). An "opened" result closes the overlay, landing on the primary preview view with that file displayed, regardless of entry point. A "failed" result (read error or binary — e.g. the file changed or was removed between scanning and opening) leaves the overlay open with the message shown inline instead of exiting, per §2.2's open-failure signaling.
+- **Backspace**: remove the last character of the query, cancel any in-flight scan for the old query, and start a new one for the shortened query (or, if the query is now empty, show no results without scanning).
+- **Escape**: cancel any in-flight scan and return to whichever screen the overlay was opened from, unchanged (query and match selection are discarded; no action is performed).
+- Typing any other printable character, including space, appends it to the query, cancels any in-flight scan for the old query, and starts a new one.

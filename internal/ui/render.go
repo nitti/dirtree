@@ -49,8 +49,11 @@ func (a *App) draw() {
 		a.drawBadge(w, h)
 	case overlayOpenFiles:
 		a.drawOpenFiles(w, h)
+	case overlaySearch:
+		a.drawSearch(w, h)
+		a.drawBadge(w, h)
 	default:
-		a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [tab] open files  [/] jump  [g] goto  [q] quit")
+		a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [tab] open files  [/] jump  [s] search  [g] goto  [q] quit")
 		a.drawPreview(0, 1, w, h-1)
 	}
 
@@ -76,7 +79,7 @@ func (a *App) drawTreeOverlay(w, h int) {
 // (no goto-line prompt can be open while this overlay owns input) — on
 // the right.
 func (a *App) drawTreeSplitView(w, h, treeWidth, previewWidth int) {
-	a.drawHeader(w, fmt.Sprintf("%s   [space] open+close  [a] open, keep open  [/] jump  [esc] close", a.rootPath))
+	a.drawHeader(w, fmt.Sprintf("%s   [space] open+close  [a] open, keep open  [/] jump  [s] search  [esc] close", a.rootPath))
 
 	treeHeight := h - 1
 	if a.treeMessage != "" {
@@ -99,7 +102,7 @@ func (a *App) drawTreeSplitView(w, h, treeWidth, previewWidth int) {
 // active ("unmodified, last-rendered"), with a centered, bordered
 // floating window containing the tree explorer on top.
 func (a *App) drawTreePopup(w, h int) {
-	a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [tab] open files  [/] jump  [g] goto  [q] quit")
+	a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [tab] open files  [/] jump  [s] search  [g] goto  [q] quit")
 	a.drawPreview(0, 1, w, h-1)
 
 	popupW := min(max(w-2*popupMarginX, 10), w)
@@ -121,7 +124,7 @@ func (a *App) drawTreePopup(w, h int) {
 	if a.treeMessage != "" {
 		a.drawText(innerX, innerY+treeHeight, innerW, a.treeMessage, styleError)
 	}
-	a.drawText(innerX, innerY+footerRow, innerW, "[space] open+close  [a] open, keep open  [/] jump  [esc] close", styleNormal)
+	a.drawText(innerX, innerY+footerRow, innerW, "[space] open+close  [a] open, keep open  [/] jump  [s] search  [esc] close", styleNormal)
 }
 
 // drawBox draws a bordered rectangle with an optional title embedded in
@@ -257,6 +260,63 @@ func (a *App) drawOpenFiles(w, h int) {
 	}
 }
 
+// drawSearch renders the content search overlay (SPEC.md §9.2): a
+// header showing the query, and the flat list of matching files (each
+// as its root-relative path plus its first matching line's number and
+// text), or a placeholder while there's nothing to show yet.
+func (a *App) drawSearch(w, h int) {
+	a.drawHeader(w, fmt.Sprintf("search: %s   [enter] open  [esc] cancel", a.searchQuery))
+
+	listHeight := h - 1
+	if a.searchMessage != "" {
+		listHeight--
+	}
+
+	switch {
+	case a.searchQuery == "":
+		a.drawText(0, 1, w, centerPad("type to search file contents", w), styleNormal)
+	case a.searchResults == nil:
+		// SPEC.md §9.1: covers both "index not done yet" and "a scan for
+		// this query is still running" — either way, nothing has been
+		// found yet, which is a different state from genuinely zero
+		// matches, so this must not render as "no matches."
+		_, indexDone := a.idx.Snapshot()
+		msg := "searching…"
+		if !indexDone {
+			msg = "indexing…"
+		}
+		a.drawText(0, 1, w, centerPad(msg, w), styleNormal)
+	case len(a.searchResults) == 0:
+		a.drawText(0, 1, w, centerPad("no matches", w), styleNormal)
+	default:
+		if listHeight > 0 {
+			if a.searchSelected < a.searchScroll {
+				a.searchScroll = a.searchSelected
+			}
+			if a.searchSelected >= a.searchScroll+listHeight {
+				a.searchScroll = a.searchSelected - listHeight + 1
+			}
+		}
+		for row := range listHeight {
+			i := a.searchScroll + row
+			if i >= len(a.searchResults) {
+				break
+			}
+			style := styleNormal
+			if i == a.searchSelected {
+				style = styleSelected
+			}
+			m := a.searchResults[i]
+			label := fmt.Sprintf("%s:%d: %s", m.RelPath, m.LineNum, strings.TrimSpace(m.LineText))
+			a.drawText(0, 1+row, w, label, style)
+		}
+	}
+
+	if a.searchMessage != "" {
+		a.drawText(0, h-1, w, a.searchMessage, styleError)
+	}
+}
+
 func (a *App) previewHeaderText() string {
 	if e := a.files.DisplayedEntry(); e != nil {
 		return e.Path
@@ -275,7 +335,7 @@ func (a *App) previewHeaderText() string {
 func (a *App) drawPreview(x0, y0, w, h int) {
 	e := a.files.DisplayedEntry()
 	if e == nil {
-		msg := "no files open — press e to browse, / to search"
+		msg := "no files open — press e to browse, / to jump, s to search contents"
 		row := y0 + max(h/2, 1)
 		a.drawText(x0, row, w, centerPad(msg, w), styleNormal)
 		return
