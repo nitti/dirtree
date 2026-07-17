@@ -42,64 +42,67 @@ func (a *App) draw() {
 	w, h := a.screen.Size()
 
 	switch a.overlay {
-	case overlayTree:
-		a.drawTreeOverlay(w, h)
-	case overlayJump:
-		a.drawJump(w, h)
+	case overlayBrowser:
+		a.drawBrowserOverlay(w, h)
+	case overlayQuickOpen:
+		a.drawQuickOpen(w, h)
+		a.drawBadge(w, h)
+	case overlayJumpToFile:
+		a.drawJumpToFile(w, h)
 		a.drawBadge(w, h)
 	case overlayOpenFiles:
 		a.drawOpenFiles(w, h)
 	default:
-		a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [tab] open files  [/] jump  [g] goto  [q] quit")
+		a.drawHeader(w, a.previewHeaderText()+"   [B] browse  [tab] open files  [O] quick open  [g] goto  [q] quit")
 		a.drawPreview(0, 1, w, h-1)
 	}
 
 	a.screen.Show()
 }
 
-// drawTreeOverlay picks split-vs-popup layout (SPEC.md §5.1, recomputed
-// every frame so a live resize can flip between them) and renders the
-// tree explorer overlay accordingly.
-func (a *App) drawTreeOverlay(w, h int) {
-	treeWidth, previewWidth, split := a.computeSplitLayout(w)
+// drawBrowserOverlay picks split-vs-popup layout (SPEC.md §5.1,
+// recomputed every frame so a live resize can flip between them) and
+// renders the browser overlay accordingly.
+func (a *App) drawBrowserOverlay(w, h int) {
+	browserWidth, previewWidth, split := a.computeSplitLayout(w)
 	if split {
-		a.drawTreeSplitView(w, h, treeWidth, previewWidth)
+		a.drawBrowserSplitView(w, h, browserWidth, previewWidth)
 	} else {
-		a.drawTreePopup(w, h)
+		a.drawBrowserPopup(w, h)
 	}
 	a.drawBadge(w, h)
 }
 
-// drawTreeSplitView renders the wide-terminal layout (SPEC.md §5.1):
-// the tree explorer on the left, a vertical rule, and the primary
-// preview view — still visible, showing whatever it had, but read-only
-// (no goto-line prompt can be open while this overlay owns input) — on
-// the right.
-func (a *App) drawTreeSplitView(w, h, treeWidth, previewWidth int) {
-	a.drawHeader(w, fmt.Sprintf("%s   [space] open+close  [a] open, keep open  [/] jump  [esc] close", a.rootPath))
+// drawBrowserSplitView renders the wide-terminal layout (SPEC.md §5.1):
+// the browser on the left, a vertical rule, and the primary preview
+// view — still visible, showing whatever it had, but read-only (no
+// goto-line prompt can be open while this overlay owns input) — on the
+// right.
+func (a *App) drawBrowserSplitView(w, h, browserWidth, previewWidth int) {
+	a.drawHeader(w, fmt.Sprintf("%s   [space] open+close  [a] open, keep open  [/] jump to file  [B/esc] close", a.rootPath))
 
-	treeHeight := h - 1
-	if a.treeMessage != "" {
-		treeHeight--
+	browserHeight := h - 1
+	if a.browserMessage != "" {
+		browserHeight--
 	}
-	a.drawTree(0, 1, treeWidth, treeHeight)
-	if a.treeMessage != "" {
-		a.drawText(0, h-1, treeWidth, a.treeMessage, styleError)
+	a.drawBrowser(0, 1, browserWidth, browserHeight)
+	if a.browserMessage != "" {
+		a.drawText(0, h-1, browserWidth, a.browserMessage, styleError)
 	}
 
 	for y := 1; y < h; y++ {
-		a.screen.SetContent(treeWidth, y, '│', nil, styleNormal)
+		a.screen.SetContent(browserWidth, y, '│', nil, styleNormal)
 	}
 
-	a.drawPreview(treeWidth+1, 1, previewWidth, h-1)
+	a.drawPreview(browserWidth+1, 1, previewWidth, h-1)
 }
 
-// drawTreePopup renders the narrow-terminal layout (SPEC.md §5.1): the
-// primary preview view rendered exactly as it would with no overlay
+// drawBrowserPopup renders the narrow-terminal layout (SPEC.md §5.1):
+// the primary preview view rendered exactly as it would with no overlay
 // active ("unmodified, last-rendered"), with a centered, bordered
-// floating window containing the tree explorer on top.
-func (a *App) drawTreePopup(w, h int) {
-	a.drawHeader(w, a.previewHeaderText()+"   [e] browse  [tab] open files  [/] jump  [g] goto  [q] quit")
+// floating window containing the browser on top.
+func (a *App) drawBrowserPopup(w, h int) {
+	a.drawHeader(w, a.previewHeaderText()+"   [B] browse  [tab] open files  [O] quick open  [g] goto  [q] quit")
 	a.drawPreview(0, 1, w, h-1)
 
 	popupW := min(max(w-2*popupMarginX, 10), w)
@@ -113,15 +116,15 @@ func (a *App) drawTreePopup(w, h int) {
 	innerX, innerY := x0+1, y0+1
 	innerW, innerH := popupW-2, popupH-2
 	footerRow := innerH - 1
-	treeHeight := footerRow
-	if a.treeMessage != "" {
-		treeHeight--
+	browserHeight := footerRow
+	if a.browserMessage != "" {
+		browserHeight--
 	}
-	a.drawTree(innerX, innerY, innerW, treeHeight)
-	if a.treeMessage != "" {
-		a.drawText(innerX, innerY+treeHeight, innerW, a.treeMessage, styleError)
+	a.drawBrowser(innerX, innerY, innerW, browserHeight)
+	if a.browserMessage != "" {
+		a.drawText(innerX, innerY+browserHeight, innerW, a.browserMessage, styleError)
 	}
-	a.drawText(innerX, innerY+footerRow, innerW, "[space] open+close  [a] open, keep open  [/] jump  [esc] close", styleNormal)
+	a.drawText(innerX, innerY+footerRow, innerW, "[space] open+close  [a] open, keep open  [/] jump to file  [B/esc] close", styleNormal)
 }
 
 // drawBox draws a bordered rectangle with an optional title embedded in
@@ -160,19 +163,30 @@ func (a *App) fillRect(x0, y0, w, h int, style tcell.Style) {
 	}
 }
 
-// drawJump renders the jump/fuzzy-picker overlay (SPEC.md §4.2, §5.2):
-// a header showing the query and which of Enter/Space maps to which
-// action for the current entry point, and the flat, root-relative
-// match list (or an indexing/no-matches placeholder).
-func (a *App) drawJump(w, h int) {
-	enterLabel, spaceLabel := "reveal in tree", "open"
-	if a.jumpEntry == jumpFromPreview {
-		enterLabel, spaceLabel = "open", "reveal in tree"
-	}
-	a.drawHeader(w, fmt.Sprintf("/%s   [enter] %s  [space] %s  [esc] cancel", a.jumpQuery, enterLabel, spaceLabel))
+// drawQuickOpen renders the quick open overlay (SPEC.md §4.2, §5.2): a
+// header showing the query and its single action (Enter opens the
+// selected match), and the shared flat match list.
+func (a *App) drawQuickOpen(w, h int) {
+	a.drawHeader(w, fmt.Sprintf("%s   [enter] open  [O/esc] cancel", a.finderQuery))
+	a.drawFinderList(w, h)
+}
 
+// drawJumpToFile renders the jump-to-file overlay (SPEC.md §4.3, §5.2):
+// a header showing the query and its single action (Enter reveals the
+// selected match in the browser), and the shared flat match list. This
+// replaces the browser view it was opened from.
+func (a *App) drawJumpToFile(w, h int) {
+	a.drawHeader(w, fmt.Sprintf("%s   [enter] reveal in browser  [esc] cancel", a.finderQuery))
+	a.drawFinderList(w, h)
+}
+
+// drawFinderList renders the flat, root-relative match list shared by
+// quick open and jump to file (SPEC.md §4.1's index, §5.2's
+// indexing/no-matches placeholder), plus any inline failure message
+// from a failed open (quick open only — jump to file never sets one).
+func (a *App) drawFinderList(w, h int) {
 	listHeight := h - 1
-	if a.jumpMessage != "" {
+	if a.finderMessage != "" {
 		listHeight--
 	}
 
@@ -184,32 +198,32 @@ func (a *App) drawJump(w, h int) {
 		// level, so the match-list area stays blank either way rather
 		// than claiming "no matches" before indexing has even looked.
 		a.drawText(0, 1, w, centerPad("indexing…", w), styleNormal)
-	case len(a.jumpMatches) == 0:
+	case len(a.finderMatches) == 0:
 		a.drawText(0, 1, w, centerPad("no matches", w), styleNormal)
 	default:
 		if listHeight > 0 {
-			if a.jumpSelected < a.jumpScroll {
-				a.jumpScroll = a.jumpSelected
+			if a.finderSelected < a.finderScroll {
+				a.finderScroll = a.finderSelected
 			}
-			if a.jumpSelected >= a.jumpScroll+listHeight {
-				a.jumpScroll = a.jumpSelected - listHeight + 1
+			if a.finderSelected >= a.finderScroll+listHeight {
+				a.finderScroll = a.finderSelected - listHeight + 1
 			}
 		}
 		for row := range listHeight {
-			i := a.jumpScroll + row
-			if i >= len(a.jumpMatches) {
+			i := a.finderScroll + row
+			if i >= len(a.finderMatches) {
 				break
 			}
 			style := styleNormal
-			if i == a.jumpSelected {
+			if i == a.finderSelected {
 				style = styleSelected
 			}
-			a.drawText(0, 1+row, w, a.jumpMatches[i].RelPath, style)
+			a.drawText(0, 1+row, w, a.finderMatches[i].RelPath, style)
 		}
 	}
 
-	if a.jumpMessage != "" {
-		a.drawText(0, h-1, w, a.jumpMessage, styleError)
+	if a.finderMessage != "" {
+		a.drawText(0, h-1, w, a.finderMessage, styleError)
 	}
 }
 
@@ -270,12 +284,12 @@ func (a *App) previewHeaderText() string {
 // an explanatory empty-state message if none is displayed. The
 // goto-line prompt, when open, occupies the bottom row — reachable only
 // when this is the primary (non-overlaid) view, since the goto-line key
-// isn't handled while the tree explorer's split/popup overlay (§5.1) is
+// isn't handled while the browser's split/popup overlay (§5.1) is
 // showing this read-only.
 func (a *App) drawPreview(x0, y0, w, h int) {
 	e := a.files.DisplayedEntry()
 	if e == nil {
-		msg := "no files open — press e to browse, / to search"
+		msg := "no files open — press B to browse, O to quick-open"
 		row := y0 + max(h/2, 1)
 		a.drawText(x0, row, w, centerPad(msg, w), styleNormal)
 		return
@@ -351,44 +365,42 @@ func (a *App) drawHeader(w int, text string) {
 	a.drawText(0, 0, w, text, styleHeader)
 }
 
-// drawTree renders the tree explorer's currently-visible flattened
-// list (SPEC.md §3.1, §5.2), keeping the selected row scrolled into
-// view. This is a simplified full-width rendering; the dual
-// split/popup layout (SPEC.md §5.1) lands in stage 6.
-func (a *App) drawTree(x0, y0, w, h int) {
+// drawBrowser renders the browser's currently-visible flattened list
+// (SPEC.md §3.1, §5.2), keeping the selected row scrolled into view.
+func (a *App) drawBrowser(x0, y0, w, h int) {
 	if h < 1 {
 		return
 	}
 	flat := a.root.Flatten()
-	selIdx := indexOf(flat, a.treeSelected)
+	selIdx := indexOf(flat, a.browserSelected)
 
-	if selIdx < a.treeScroll {
-		a.treeScroll = selIdx
+	if selIdx < a.browserScroll {
+		a.browserScroll = selIdx
 	}
-	if selIdx >= a.treeScroll+h {
-		a.treeScroll = selIdx - h + 1
+	if selIdx >= a.browserScroll+h {
+		a.browserScroll = selIdx - h + 1
 	}
-	if a.treeScroll < 0 {
-		a.treeScroll = 0
+	if a.browserScroll < 0 {
+		a.browserScroll = 0
 	}
 
 	for row := range h {
-		i := a.treeScroll + row
+		i := a.browserScroll + row
 		if i >= len(flat) {
 			break
 		}
 		n := flat[i]
 		style := styleNormal
-		if n == a.treeSelected {
+		if n == a.browserSelected {
 			style = styleSelected
 		}
-		a.drawText(x0, y0+row, w, treeLabel(n), style)
+		a.drawText(x0, y0+row, w, browserLabel(n), style)
 	}
 }
 
-// treeLabel renders one tree row's indentation, expand/collapse
+// browserLabel renders one browser row's indentation, expand/collapse
 // marker, name, and any per-node error indicator (SPEC.md §5.2).
-func treeLabel(n *tree.Node) string {
+func browserLabel(n *tree.Node) string {
 	indent := strings.Repeat("  ", n.Depth)
 	marker := "  "
 	if n.IsDir {

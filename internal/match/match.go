@@ -1,7 +1,7 @@
-// Package match implements the query-matching rule shared by jump mode
-// and any other filtering use (SPEC.md §7): glob matching when the
-// query contains a shell-wildcard character, case-insensitive substring
-// matching otherwise.
+// Package match implements the query-matching rule shared by quick open
+// and jump to file (SPEC.md §4.1), and any other filtering use: glob
+// matching when the query contains a shell-wildcard character,
+// case-insensitive substring matching otherwise.
 package match
 
 import (

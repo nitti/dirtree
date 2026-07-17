@@ -71,10 +71,11 @@ func Completion(sinceDone, displayDuration, fadeDuration time.Duration, messageL
 }
 
 // MinDurationSkip tracks the badge's minimum-display-duration skip
-// (SPEC.md §10): opening jump mode while indexing is already done means
-// the user has directly seen indexing is ready, so continuing to hold
-// the badge on the spinner for the rest of the minimum display duration
-// would be actively misleading rather than a perceptibility safeguard.
+// (SPEC.md §10): opening quick open or jump to file while indexing is
+// already done means the user has directly seen indexing is ready, so
+// continuing to hold the badge on the spinner for the rest of the
+// minimum display duration would be actively misleading rather than a
+// perceptibility safeguard.
 // Once applied, the moment the skip was recorded — not indexing's real
 // (possibly long-past) completion time — is treated as when indexing
 // finished.

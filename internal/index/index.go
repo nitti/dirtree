@@ -1,7 +1,7 @@
-// Package index implements the background full-tree index used by jump
-// mode (SPEC.md §6): a flat, recursively-walked list of every path
-// under the root, built without touching the interactive tree's node
-// objects so it can safely run concurrently with the UI.
+// Package index implements the background full-tree index used by quick
+// open and jump to file (SPEC.md §4.1): a flat, recursively-walked list
+// of every path under the root, built without touching the interactive
+// tree's node objects so it can safely run concurrently with the UI.
 package index
 
 import (
@@ -54,12 +54,12 @@ func Start(rootPath string, ignorer Ignorer) *Index {
 
 // Rebuild re-walks rootPath in the background and atomically replaces
 // the index's entries once the walk completes, for the live-refresh
-// behavior in SPEC.md §6a: when the tree on disk changes, jump mode's
-// results should eventually reflect it too. It resets done/startTime the
-// same way Start does, so the existing delayed-loading-indicator logic
-// (SPEC.md §10) applies unchanged — a fast rebuild stays invisible, a
-// slow one (re-walking a huge tree) shows the same spinner/"indexing…"
-// state a fresh Start would.
+// behavior in SPEC.md §6a: when the tree on disk changes, quick open's
+// and jump to file's results should eventually reflect it too. It
+// resets done/startTime the same way Start does, so the existing
+// delayed-loading-indicator logic (SPEC.md §10) applies unchanged — a
+// fast rebuild stays invisible, a slow one (re-walking a huge tree)
+// shows the same spinner/"indexing…" state a fresh Start would.
 func (idx *Index) Rebuild(rootPath string, ignorer Ignorer) {
 	idx.mu.Lock()
 	idx.done = false
