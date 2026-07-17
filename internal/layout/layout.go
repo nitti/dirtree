@@ -3,9 +3,9 @@
 // dependency so it's unit-testable.
 package layout
 
-// ComputeTreePaneWidth returns the tree pane width for split view: wide
-// enough to fit the longest label, clamped to [min, max].
-func ComputeTreePaneWidth(labelLengths []int, min, max int) int {
+// ComputeBrowserPaneWidth returns the browser pane width for split
+// view: wide enough to fit the longest label, clamped to [min, max].
+func ComputeBrowserPaneWidth(labelLengths []int, min, max int) int {
 	longest := 0
 	for _, l := range labelLengths {
 		if l > longest {
@@ -23,8 +23,8 @@ func ComputeTreePaneWidth(labelLengths []int, min, max int) int {
 }
 
 // ShouldSplitView reports whether split view should be used: true only
-// when totalWidth is at least treePaneWidth + minPreviewWidth + the
+// when totalWidth is at least browserPaneWidth + minPreviewWidth + the
 // one-column separator.
-func ShouldSplitView(totalWidth, treePaneWidth, minPreviewWidth int) bool {
-	return totalWidth >= treePaneWidth+minPreviewWidth+1
+func ShouldSplitView(totalWidth, browserPaneWidth, minPreviewWidth int) bool {
+	return totalWidth >= browserPaneWidth+minPreviewWidth+1
 }

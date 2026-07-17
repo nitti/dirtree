@@ -5,13 +5,10 @@
 // internal/layout, and internal/spinner, this package is not expected
 // to be unit-tested — verification is manual, in a real terminal.
 //
-// The interactive UI is being rebuilt in stages against SPEC.md's
-// open-files-primary-view redesign (see README.md's Status section for
-// the full plan). This stage adds the primary preview view's own
-// content rendering, scrolling, and goto-line (§2.1); the tree
-// explorer (§3.4), jump/fuzzy-picker (§4), and open-files-list (§2.3)
-// overlays already worked from earlier stages. The tree explorer's
-// dual split/popup layout (§5.1) is not wired yet and lands in stage 6.
+// The primary preview view's own content rendering, scrolling, and
+// goto-line (§2.1) is wired alongside the browser (§3.4), quick open
+// and jump to file (§4), and open-files-list (§2.3) overlays, plus the
+// browser's dual split/popup layout (§5.1).
 package ui
 
 import (
@@ -34,37 +31,26 @@ import (
 )
 
 // overlay identifies which overlay, if any, is currently active over
-// the primary preview view (SPEC.md §5.1). overlayOpenFiles is not
-// reachable yet — it lands in stage 4 — but is declared now so this
-// stage's overlay-dispatch code doesn't need reshaping later.
+// the primary preview view (SPEC.md §5.1).
 type overlay int
 
 const (
 	overlayNone overlay = iota
-	overlayTree
-	overlayJump
+	overlayBrowser
+	overlayQuickOpen
+	overlayJumpToFile
 	overlayOpenFiles
 	overlaySearch
 )
 
-// jumpEntryPoint records which screen the jump/fuzzy-picker overlay
-// was opened from, since that determines which action (reveal-in-tree
-// vs. open-into-list) Enter and Space each perform (SPEC.md §4.2).
-type jumpEntryPoint int
-
-const (
-	jumpFromTree jumpEntryPoint = iota
-	jumpFromPreview
-)
-
 // searchEntryPoint records which screen the content search overlay
-// (SPEC.md §9) was opened from, so Escape returns to it. Unlike jump
-// mode, both entry points behave identically once the overlay is open
-// (§9.2) — there is no per-entry-point default-action split.
+// (SPEC.md §9) was opened from, so Escape returns to it. Both entry
+// points behave identically once the overlay is open (§9.2) — there is
+// no per-entry-point default-action split like quick open/jump to file.
 type searchEntryPoint int
 
 const (
-	searchFromTree searchEntryPoint = iota
+	searchFromBrowser searchEntryPoint = iota
 	searchFromPreview
 )
 
@@ -88,13 +74,13 @@ const (
 	watchDebounce             = 300 * time.Millisecond
 	previewByteCap            = preview.DefaultByteCap
 
-	// Tree explorer split/popup layout (SPEC.md §5.1).
-	previewMaxWidth  = 120 // preview pane's own width cap in split view
-	minPreviewWidth  = 40  // minimum usable preview width for the split-vs-popup threshold
-	minTreePaneWidth = 20
-	maxTreePaneWidth = 60
-	popupMarginX     = 4
-	popupMarginY     = 2
+	// Browser split/popup layout (SPEC.md §5.1).
+	previewMaxWidth     = 120 // preview pane's own width cap in split view
+	minPreviewWidth     = 40  // minimum usable preview width for the split-vs-popup threshold
+	minBrowserPaneWidth = 20
+	maxBrowserPaneWidth = 60
+	popupMarginX        = 4
+	popupMarginY        = 2
 )
 
 // App holds all interactive state for a running session.
@@ -108,18 +94,19 @@ type App struct {
 
 	overlay overlay
 
-	// tree explorer overlay state (SPEC.md §3.4)
-	treeSelected *tree.Node
-	treeScroll   int
-	treeMessage  string // transient inline status/failure message (§2.2)
+	// browser overlay state (SPEC.md §3.4)
+	browserSelected *tree.Node
+	browserScroll   int
+	browserMessage  string // transient inline status/failure message (§2.2)
 
-	// jump/fuzzy-picker overlay state (SPEC.md §4.2)
-	jumpEntry    jumpEntryPoint
-	jumpQuery    string
-	jumpMatches  []index.Entry // nil while the background index isn't done yet, distinct from "genuinely zero matches"
-	jumpSelected int
-	jumpScroll   int
-	jumpMessage  string // transient inline failure message for open-into-list (§2.2)
+	// finder state, shared by the quick open and jump-to-file overlays
+	// (SPEC.md §4.2, §4.3): which one is active is determined by
+	// App.overlay, not stored here, since only one is ever active.
+	finderQuery    string
+	finderMatches  []index.Entry // nil while the background index isn't done yet, distinct from "genuinely zero matches"
+	finderSelected int
+	finderScroll   int
+	finderMessage  string // transient inline open-failure message, quick open only (§2.2)
 
 	// content search overlay state (SPEC.md §9)
 	searchEntry    searchEntryPoint
@@ -164,15 +151,15 @@ func New(rootPath string) *App {
 	watcher, _ := watch.New(watchDebounce)
 
 	a := &App{
-		rootPath:     rootPath,
-		root:         root,
-		ignorer:      ignorer,
-		idx:          idx,
-		watcher:      watcher,
-		overlay:      overlayTree, // SPEC.md §1: explorer auto-opens on top of the (empty) primary view at startup
-		treeSelected: root,
-		files:        openfiles.New(),
-		searchDone:   make(chan searchOutcome, 8),
+		rootPath:        rootPath,
+		root:            root,
+		ignorer:         ignorer,
+		idx:             idx,
+		watcher:         watcher,
+		overlay:         overlayBrowser, // SPEC.md §1: browser auto-opens on top of the (empty) primary view at startup
+		browserSelected: root,
+		files:           openfiles.New(),
+		searchDone:      make(chan searchOutcome, 8),
 	}
 	a.syncWatches()
 	return a
@@ -182,7 +169,7 @@ func New(rootPath string) *App {
 // been loaded at least once, so RefreshTree's re-listing target set
 // matches what's actually being watched. Idempotent and cheap to call
 // after any action that might have loaded a new directory (expand,
-// jump-to reveal).
+// jump-to-file reveal).
 func (a *App) syncWatches() {
 	if a.watcher == nil {
 		return
@@ -203,13 +190,13 @@ func (a *App) syncWatches() {
 // handleFSChange reacts to a debounced filesystem-change signal from
 // the watcher (SPEC.md §6.1): re-list every already-loaded directory,
 // merging by path so unaffected nodes keep their identity/expand
-// state, re-anchor tree selection if the previously-selected node was
-// deleted, kick off a background index rebuild so jump mode eventually
-// reflects the change too, and pick up watches on any newly-loaded
-// directories.
+// state, re-anchor browser selection if the previously-selected node
+// was deleted, kick off a background index rebuild so quick open and
+// jump to file eventually reflect the change too, and pick up watches
+// on any newly-loaded directories.
 func (a *App) handleFSChange() {
 	tree.RefreshTree(a.root, a.rootPath, a.ignorer)
-	a.treeSelected = tree.NearestSurviving(a.treeSelected)
+	a.browserSelected = tree.NearestSurviving(a.browserSelected)
 	a.idx.Rebuild(a.rootPath, a.ignorer)
 	a.badgeSkip.Reset()
 	a.syncWatches()
@@ -276,8 +263,8 @@ func (a *App) Run() error {
 			a.draw()
 		case <-watchEvents:
 			a.handleFSChange()
-			if a.overlay == overlayJump {
-				a.recomputeJumpMatches()
+			if a.isFinderOverlay() {
+				a.recomputeFinderMatches()
 			}
 			a.draw()
 		case out := <-a.searchDone:
@@ -291,10 +278,11 @@ func (a *App) Run() error {
 			a.draw()
 		case <-ticker.C:
 			// Also catches the background index (re)build finishing
-			// while the jump overlay is open with an unchanged query,
-			// so matches don't go stale until the next keystroke.
-			if a.overlay == overlayJump {
-				a.recomputeJumpMatches()
+			// while quick open or jump to file is open with an
+			// unchanged query, so matches don't go stale until the
+			// next keystroke.
+			if a.isFinderOverlay() {
+				a.recomputeFinderMatches()
 			}
 			// Same idea for content search (SPEC.md §9.1): a query typed
 			// before the index finished is held pending (searchResults
@@ -313,10 +301,12 @@ func (a *App) Run() error {
 
 func (a *App) handleKey(ev *tcell.EventKey) {
 	switch a.overlay {
-	case overlayTree:
-		a.handleTreeKey(ev)
-	case overlayJump:
-		a.handleJumpKey(ev)
+	case overlayBrowser:
+		a.handleBrowserKey(ev)
+	case overlayQuickOpen:
+		a.handleQuickOpenKey(ev)
+	case overlayJumpToFile:
+		a.handleJumpToFileKey(ev)
 	case overlayOpenFiles:
 		a.handleOpenFilesKey(ev)
 	case overlaySearch:
@@ -326,11 +316,19 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	}
 }
 
+// isFinderOverlay reports whether the currently-active overlay is one
+// of the two that share the background index and matcher (SPEC.md
+// §4.2, §4.3): quick open or jump to file.
+func (a *App) isFinderOverlay() bool {
+	return a.overlay == overlayQuickOpen || a.overlay == overlayJumpToFile
+}
+
 // handlePreviewKey handles input at the primary preview view when no
-// overlay is active. Full preview interaction (scrolling, goto-line,
-// per-entry content — SPEC.md §2.1) lands in stage 5; for now this only
-// wires the keys needed to reach/leave the tree explorer and jump
-// overlays and to quit (SPEC.md §7).
+// overlay is active: reaching the browser, quick open, and open-files
+// overlays, preview scrolling/goto-line, and quitting (SPEC.md §7).
+// `B` and `O` are toggles on their own overlays (SPEC.md §5.1), but
+// since this handler only runs when no overlay is active, pressing
+// them here always opens rather than closes.
 func (a *App) handlePreviewKey(ev *tcell.EventKey) {
 	if a.gotoPromptOpen {
 		a.handleGotoPromptKey(ev)
@@ -338,13 +336,13 @@ func (a *App) handlePreviewKey(ev *tcell.EventKey) {
 	}
 
 	switch {
-	case ev.Rune() == 'e':
-		a.overlay = overlayTree
+	case ev.Rune() == 'B':
+		a.overlay = overlayBrowser
 	case ev.Key() == tcell.KeyTab:
 		a.overlay = overlayOpenFiles
 		a.openFilesSelected = max(a.files.Displayed, 0)
-	case ev.Rune() == '/':
-		a.openJump(jumpFromPreview)
+	case ev.Rune() == 'O':
+		a.openQuickOpen()
 	case ev.Rune() == 's':
 		a.openSearch(searchFromPreview)
 	case ev.Rune() == 'q', ev.Key() == tcell.KeyEscape:
@@ -434,9 +432,9 @@ func (a *App) previewViewportHeight() int {
 // overlay is active (full terminal width). This is only used by the
 // scroll/goto-line key handlers, which are only reachable in that
 // context (SPEC.md §5.1: the preview pane is read-only, with a
-// narrower width, while the tree explorer's split-view overlay is
-// active — drawPreview computes that width itself from the layout it's
-// given, independently of this helper).
+// narrower width, while the browser's split-view overlay is active —
+// drawPreview computes that width itself from the layout it's given,
+// independently of this helper).
 func (a *App) computedPreviewWidth() int {
 	w, _ := a.screen.Size()
 	e := a.files.DisplayedEntry()
@@ -468,56 +466,58 @@ func clamp(v, lo, hi int) int {
 	return v
 }
 
-// handleTreeKey implements the tree explorer overlay's navigation and
-// open actions (SPEC.md §3.4).
-func (a *App) handleTreeKey(ev *tcell.EventKey) {
+// handleBrowserKey implements the browser overlay's navigation and open
+// actions (SPEC.md §3.4). `B` is a toggle (SPEC.md §5.1): it closes the
+// browser just like Escape does, since `B` is also the key that opens
+// it from the primary preview view.
+func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 	flat := a.root.Flatten()
-	idx := indexOf(flat, a.treeSelected)
+	idx := indexOf(flat, a.browserSelected)
 
 	switch {
 	case ev.Key() == tcell.KeyUp:
-		a.treeMessage = ""
-		a.treeSelected = flat[tree.MoveSelection(idx, -1, len(flat))]
+		a.browserMessage = ""
+		a.browserSelected = flat[tree.MoveSelection(idx, -1, len(flat))]
 	case ev.Key() == tcell.KeyDown:
-		a.treeMessage = ""
-		a.treeSelected = flat[tree.MoveSelection(idx, 1, len(flat))]
+		a.browserMessage = ""
+		a.browserSelected = flat[tree.MoveSelection(idx, 1, len(flat))]
 	case ev.Key() == tcell.KeyRight:
-		a.treeMessage = ""
-		a.treeSelected = a.treeSelected.MoveRight(a.rootPath, a.ignorer)
+		a.browserMessage = ""
+		a.browserSelected = a.browserSelected.MoveRight(a.rootPath, a.ignorer)
 		a.syncWatches()
 	case ev.Key() == tcell.KeyLeft:
-		a.treeMessage = ""
-		a.treeSelected = a.treeSelected.MoveLeft()
+		a.browserMessage = ""
+		a.browserSelected = a.browserSelected.MoveLeft()
 	case ev.Rune() == ' ':
-		a.treeOpen(false)
+		a.browserOpen(false)
 	case ev.Rune() == 'a':
-		a.treeOpen(true)
+		a.browserOpen(true)
 	case ev.Rune() == '/':
-		a.openJump(jumpFromTree)
+		a.openJumpToFile()
 	case ev.Rune() == 's':
-		a.openSearch(searchFromTree)
-	case ev.Key() == tcell.KeyEscape:
-		a.treeMessage = ""
+		a.openSearch(searchFromBrowser)
+	case ev.Rune() == 'B', ev.Key() == tcell.KeyEscape:
+		a.browserMessage = ""
 		a.overlay = overlayNone
 	}
 }
 
-// treeOpen implements Space (keepOpen=false) and `a` (keepOpen=true)
-// from the tree explorer, per SPEC.md §3.4 and §2.2's open-failure
-// signaling: a no-op on a directory; on a file, an "opened" result
-// displays it in the primary preview view, closing the explorer unless
-// keepOpen; a "failed" result always leaves the explorer open with the
-// message shown inline, regardless of keepOpen.
-func (a *App) treeOpen(keepOpen bool) {
-	if a.treeSelected.IsDir {
+// browserOpen implements Space (keepOpen=false) and `a` (keepOpen=true)
+// from the browser, per SPEC.md §3.4 and §2.2's open-failure signaling:
+// a no-op on a directory; on a file, an "opened" result displays it in
+// the primary preview view, closing the browser unless keepOpen; a
+// "failed" result always leaves the browser open with the message
+// shown inline, regardless of keepOpen.
+func (a *App) browserOpen(keepOpen bool) {
+	if a.browserSelected.IsDir {
 		return
 	}
-	res := a.files.Open(a.treeSelected.Path, previewByteCap)
+	res := a.files.Open(a.browserSelected.Path, previewByteCap)
 	if res.Outcome != openfiles.Opened {
-		a.treeMessage = res.Message
+		a.browserMessage = res.Message
 		return
 	}
-	a.treeMessage = ""
+	a.browserMessage = ""
 	if !keepOpen {
 		a.overlay = overlayNone
 	}
@@ -561,158 +561,156 @@ func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 			if len(a.files.Entries) == 0 {
 				// SPEC.md §2.3: emptying the list auto-closes the
 				// overlay to the primary preview view's empty state,
-				// which in turn auto-opens the tree explorer exactly
-				// as it does on startup (§1).
-				a.overlay = overlayTree
+				// which in turn auto-opens the browser exactly as it
+				// does on startup (§1).
+				a.overlay = overlayBrowser
 			}
 		}
 	}
 }
 
-// openJump opens the jump/fuzzy-picker overlay from the given entry
-// point (SPEC.md §4.2): tree explorer via `/` (default action
-// reveal-in-tree) or primary preview view via `/` (default action
-// open-into-list). Per SPEC.md §5.2, opening the overlay while
-// indexing is already done means the user has directly seen indexing
-// is ready, so it short-circuits the badge's minimum-display-duration
-// floor.
-func (a *App) openJump(entry jumpEntryPoint) {
-	a.overlay = overlayJump
-	a.jumpEntry = entry
-	a.jumpQuery = ""
-	a.jumpSelected = 0
-	a.jumpMessage = ""
-	a.recomputeJumpMatches()
+// openQuickOpen opens the quick open overlay from the primary preview
+// view (SPEC.md §4.2). Per SPEC.md §5.2, opening it while indexing is
+// already done means the user has directly seen indexing is ready, so
+// it short-circuits the badge's minimum-display-duration floor.
+func (a *App) openQuickOpen() {
+	a.overlay = overlayQuickOpen
+	a.openFinder()
+}
+
+// openJumpToFile opens the jump-to-file overlay from within the
+// browser (SPEC.md §4.3), replacing the browser view. Same
+// minimum-display-duration short-circuit as openQuickOpen.
+func (a *App) openJumpToFile() {
+	a.overlay = overlayJumpToFile
+	a.openFinder()
+}
+
+// openFinder resets the shared quick-open/jump-to-file state and
+// recomputes matches; the caller has already set a.overlay to whichever
+// of the two is being opened.
+func (a *App) openFinder() {
+	a.finderQuery = ""
+	a.finderSelected = 0
+	a.finderMessage = ""
+	a.recomputeFinderMatches()
 	if _, done := a.idx.Snapshot(); done {
 		a.badgeSkip.NoteIndexAlreadyDone(true, a.idx.Elapsed())
 	}
 }
 
-// recomputeJumpMatches rebuilds jumpMatches from the current query
-// against the background index (SPEC.md §4.2). While the index hasn't
-// finished building, matches are nil/unavailable rather than an empty
-// "no matches" result (SPEC.md §5.2).
-func (a *App) recomputeJumpMatches() {
-	a.jumpScroll = 0
+// recomputeFinderMatches rebuilds finderMatches from the current query
+// against the background index (SPEC.md §4.1), shared by quick open
+// and jump to file. While the index hasn't finished building, matches
+// are nil/unavailable rather than an empty "no matches" result (SPEC.md
+// §5.2).
+func (a *App) recomputeFinderMatches() {
+	a.finderScroll = 0
 	entries, done := a.idx.Snapshot()
 	if !done {
-		a.jumpMatches = nil
+		a.finderMatches = nil
 		return
 	}
 	matches := make([]index.Entry, 0, len(entries))
 	for _, e := range entries {
-		if match.Matches(a.jumpQuery, e.RelPath) {
+		if match.Matches(a.finderQuery, e.RelPath) {
 			matches = append(matches, e)
 		}
 	}
-	a.jumpMatches = matches
+	a.finderMatches = matches
 }
 
-// handleJumpKey implements the jump/fuzzy-picker overlay's input
-// handling (SPEC.md §4.2).
-func (a *App) handleJumpKey(ev *tcell.EventKey) {
+// handleFinderTypingKey handles the navigation/query-editing keys
+// shared by quick open and jump to file (SPEC.md §4.2, §4.3), reporting
+// whether it consumed the event; the caller handles Escape and Enter
+// itself since those differ per overlay.
+func (a *App) handleFinderTypingKey(ev *tcell.EventKey) bool {
 	switch {
-	case ev.Key() == tcell.KeyEscape:
-		a.overlay = a.jumpReturnOverlay()
-	case ev.Key() == tcell.KeyEnter:
-		a.performJumpAction(a.defaultAction())
-	case ev.Rune() == ' ':
-		a.performJumpAction(otherAction(a.defaultAction()))
 	case ev.Key() == tcell.KeyTab, ev.Key() == tcell.KeyDown:
-		if len(a.jumpMatches) > 0 {
-			a.jumpSelected = tree.MoveSelection(a.jumpSelected, 1, len(a.jumpMatches))
+		if len(a.finderMatches) > 0 {
+			a.finderSelected = tree.MoveSelection(a.finderSelected, 1, len(a.finderMatches))
 		}
 	case ev.Key() == tcell.KeyBacktab, ev.Key() == tcell.KeyUp:
-		if len(a.jumpMatches) > 0 {
-			a.jumpSelected = tree.MoveSelection(a.jumpSelected, -1, len(a.jumpMatches))
+		if len(a.finderMatches) > 0 {
+			a.finderSelected = tree.MoveSelection(a.finderSelected, -1, len(a.finderMatches))
 		}
 	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
-		if len(a.jumpQuery) > 0 {
-			r := []rune(a.jumpQuery)
-			a.jumpQuery = string(r[:len(r)-1])
+		if len(a.finderQuery) > 0 {
+			r := []rune(a.finderQuery)
+			a.finderQuery = string(r[:len(r)-1])
 		}
-		a.jumpSelected = 0
-		a.recomputeJumpMatches()
+		a.finderSelected = 0
+		a.recomputeFinderMatches()
 	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
-		a.jumpQuery += string(ev.Rune())
-		a.jumpSelected = 0
-		a.recomputeJumpMatches()
+		a.finderQuery += string(ev.Rune())
+		a.finderSelected = 0
+		a.recomputeFinderMatches()
+	default:
+		return false
+	}
+	return true
+}
+
+// handleQuickOpenKey implements quick open's input handling (SPEC.md
+// §4.2): a single action, opening the selected match into the
+// open-files list. `O` is a toggle, closing the overlay the same as
+// Escape.
+func (a *App) handleQuickOpenKey(ev *tcell.EventKey) {
+	switch {
+	case ev.Rune() == 'O', ev.Key() == tcell.KeyEscape:
+		a.overlay = overlayNone
+	case ev.Key() == tcell.KeyEnter:
+		a.performOpenIntoList()
+	default:
+		a.handleFinderTypingKey(ev)
 	}
 }
 
-// jumpAction identifies one of SPEC.md §4.2's two actions.
-type jumpAction int
-
-const (
-	actionRevealInTree jumpAction = iota
-	actionOpenIntoList
-)
-
-// defaultAction returns which action Enter performs for the overlay's
-// current entry point (SPEC.md §4.2): reveal-in-tree from the tree
-// explorer, open-into-list from the primary preview view. Space always
-// performs the other one.
-func (a *App) defaultAction() jumpAction {
-	if a.jumpEntry == jumpFromTree {
-		return actionRevealInTree
+// handleJumpToFileKey implements jump to file's input handling (SPEC.md
+// §4.3): a single action, revealing the selected match in the browser.
+// Escape always returns to the browser, since that's jump to file's
+// only entry point.
+func (a *App) handleJumpToFileKey(ev *tcell.EventKey) {
+	switch {
+	case ev.Key() == tcell.KeyEscape:
+		a.overlay = overlayBrowser
+	case ev.Key() == tcell.KeyEnter:
+		a.performRevealInBrowser()
+	default:
+		a.handleFinderTypingKey(ev)
 	}
-	return actionOpenIntoList
 }
 
-func otherAction(a jumpAction) jumpAction {
-	if a == actionRevealInTree {
-		return actionOpenIntoList
-	}
-	return actionRevealInTree
-}
-
-// jumpReturnOverlay is which overlay Escape (or a successful
-// exit-performing action) lands on: the tree explorer if the picker
-// was entered from it, otherwise back to the primary preview view.
-func (a *App) jumpReturnOverlay() overlay {
-	if a.jumpEntry == jumpFromTree {
-		return overlayTree
-	}
-	return overlayNone
-}
-
-// performJumpAction runs the given action on the currently-selected
-// match, if any, per SPEC.md §4.2.
-func (a *App) performJumpAction(action jumpAction) {
-	if len(a.jumpMatches) == 0 {
+// performRevealInBrowser implements jump to file's Enter action (SPEC.md
+// §4.3): expanding every ancestor down to the selected match and
+// selecting it in the browser, which is left open. Resolution failure
+// (the path no longer exists) exits the overlay without changing
+// browser selection.
+func (a *App) performRevealInBrowser() {
+	if len(a.finderMatches) == 0 {
 		return
 	}
-	target := a.jumpMatches[a.jumpSelected]
-	switch action {
-	case actionRevealInTree:
-		a.revealInTree(target)
-	case actionOpenIntoList:
-		a.openIntoList(target)
-	}
-}
-
-// revealInTree implements SPEC.md §4.2's reveal-in-tree action:
-// expanding every ancestor down to the match and selecting it in the
-// tree explorer, which is left open (opened first if the picker was
-// entered from the preview). Resolution failure (the path no longer
-// exists) exits the overlay without changing tree selection.
-func (a *App) revealInTree(target index.Entry) {
+	target := a.finderMatches[a.finderSelected]
 	if n := tree.RevealPath(a.root, a.rootPath, target.AbsPath, a.ignorer); n != nil {
-		a.treeSelected = n
+		a.browserSelected = n
 		a.syncWatches()
 	}
-	a.overlay = overlayTree
+	a.overlay = overlayBrowser
 }
 
-// openIntoList implements SPEC.md §4.2's open-into-list action: open
-// the match per §2.2's open semantics. An opened result closes the
-// tree explorer overlay if it was open, landing on the primary preview
-// view; a failed result leaves the picker open with the message shown
-// inline instead of exiting (§2.2's open-failure signaling).
-func (a *App) openIntoList(target index.Entry) {
+// performOpenIntoList implements quick open's Enter action (SPEC.md
+// §4.2): open the selected match per §2.2's open semantics. An opened
+// result closes the overlay, landing on the primary preview view; a
+// failed result leaves quick open open with the message shown inline
+// instead of exiting (§2.2's open-failure signaling).
+func (a *App) performOpenIntoList() {
+	if len(a.finderMatches) == 0 {
+		return
+	}
+	target := a.finderMatches[a.finderSelected]
 	res := a.files.Open(target.AbsPath, previewByteCap)
 	if res.Outcome != openfiles.Opened {
-		a.jumpMessage = res.Message
+		a.finderMessage = res.Message
 		return
 	}
 	a.overlay = overlayNone
@@ -784,9 +782,10 @@ func (a *App) cancelSearch() {
 }
 
 // handleSearchKey implements the content search overlay's input
-// handling (SPEC.md §9.2). Unlike jump mode, space is never an action
-// key — it always types a literal space into the query, since content
-// search queries are plain text rather than path fragments.
+// handling (SPEC.md §9.2). Unlike quick open/jump to file, space is
+// never an action key — it always types a literal space into the query,
+// since content search queries are plain text rather than path
+// fragments.
 func (a *App) handleSearchKey(ev *tcell.EventKey) {
 	switch {
 	case ev.Key() == tcell.KeyEscape:
@@ -815,11 +814,11 @@ func (a *App) handleSearchKey(ev *tcell.EventKey) {
 }
 
 // searchReturnOverlay is which overlay Escape (or a successful open)
-// lands on: the tree explorer if the overlay was entered from it,
-// otherwise back to the primary preview view.
+// lands on: the browser if the overlay was entered from it, otherwise
+// back to the primary preview view.
 func (a *App) searchReturnOverlay() overlay {
-	if a.searchEntry == searchFromTree {
-		return overlayTree
+	if a.searchEntry == searchFromBrowser {
+		return overlayBrowser
 	}
 	return overlayNone
 }
@@ -855,37 +854,37 @@ func indexOf(list []*tree.Node, n *tree.Node) int {
 	return 0
 }
 
-// treePaneWidth returns the tree explorer pane's width for split view
+// browserPaneWidth returns the browser pane's width for split view
 // (SPEC.md §5.1): wide enough to fit the longest currently-visible
 // row's rendered label (indentation + expand marker + name), clamped
-// to [minTreePaneWidth, maxTreePaneWidth].
-func (a *App) treePaneWidth() int {
+// to [minBrowserPaneWidth, maxBrowserPaneWidth].
+func (a *App) browserPaneWidth() int {
 	flat := a.root.Flatten()
 	lengths := make([]int, len(flat))
 	for i, n := range flat {
-		lengths[i] = n.Depth*2 + 2 + len(n.Name) // indent + marker + name, matching treeLabel
+		lengths[i] = n.Depth*2 + 2 + len(n.Name) // indent + marker + name, matching browserLabel
 	}
-	return layout.ComputeTreePaneWidth(lengths, minTreePaneWidth, maxTreePaneWidth)
+	return layout.ComputeBrowserPaneWidth(lengths, minBrowserPaneWidth, maxBrowserPaneWidth)
 }
 
 // computeSplitLayout decides split-vs-popup and, for split view, the
-// tree-pane and preview-pane widths to render, per SPEC.md §5.1: the
+// browser-pane and preview-pane widths to render, per SPEC.md §5.1: the
 // preview pane's own width is capped at previewMaxWidth; once the
 // terminal is wide enough that the preview would exceed that cap, the
-// extra width grows the tree pane (up to its own max) instead of
+// extra width grows the browser pane (up to its own max) instead of
 // stretching the preview further.
-func (a *App) computeSplitLayout(termWidth int) (treeWidth, previewPaneWidth int, split bool) {
-	baseTreeWidth := a.treePaneWidth()
-	if !layout.ShouldSplitView(termWidth, baseTreeWidth, minPreviewWidth) {
-		return baseTreeWidth, 0, false
+func (a *App) computeSplitLayout(termWidth int) (browserWidth, previewPaneWidth int, split bool) {
+	baseBrowserWidth := a.browserPaneWidth()
+	if !layout.ShouldSplitView(termWidth, baseBrowserWidth, minPreviewWidth) {
+		return baseBrowserWidth, 0, false
 	}
 
-	natural := termWidth - baseTreeWidth - 1
+	natural := termWidth - baseBrowserWidth - 1
 	if natural <= previewMaxWidth {
-		return baseTreeWidth, natural, true
+		return baseBrowserWidth, natural, true
 	}
 
 	leftover := natural - previewMaxWidth
-	treeWidth = min(baseTreeWidth+leftover, maxTreePaneWidth)
-	return treeWidth, previewMaxWidth, true
+	browserWidth = min(baseBrowserWidth+leftover, maxBrowserPaneWidth)
+	return browserWidth, previewMaxWidth, true
 }
