@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
+	"github.com/nitti/dirtree/internal/search"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/tree"
 )
@@ -27,11 +29,23 @@ var (
 	// mode's on/off state visually unmistakable, not just the legend
 	// text.
 	styleCopyModeTitle = tcell.StyleDefault.Background(tcell.ColorDarkGreen).Foreground(tcell.ColorWhite)
+	// styleSearchInput sets the content search query row (SPEC.md §9.2)
+	// apart from the plain-background results list below it, so the
+	// "this is where you're typing" row is visually unmistakable at a
+	// glance rather than blending into the rest of the overlay.
+	styleSearchInput = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
 )
 
 const (
 	previewLegend = "[b] browse  [tab] open files  [o] quick open  [s] search  [q] quit"
 	browserLegend = "[return] open  [/] jump to file  [o] quick open  [s] search  [b/esc] close"
+	// searchLegend documents the content search overlay's actions (SPEC.md
+	// §9.2): Return opens the selected row (jumping to its line if it's a
+	// hit row) and leaves the overlay open, for opening several hits in a
+	// row without re-triggering the search each time — Escape is what
+	// closes the overlay; left/right collapse/expand a file's hit rows;
+	// ctrl+r toggles regex mode; ctrl+u clears the query.
+	searchLegend = "[return] open  [left/right] expand/collapse  [ctrl+r] regex  [ctrl+u] clear  [esc] close"
 	// fileLegend lists actions specific to the currently-displayed file
 	// (as opposed to app-wide navigation), shown in the file title bar
 	// rather than the global menu bar (§5.2) — new file-specific actions
@@ -310,34 +324,59 @@ func (a *App) drawOpenFiles(w, h int) {
 }
 
 // drawSearch renders the content search overlay (SPEC.md §9.2): a
-// header showing the query, and the flat list of matching files (each
-// as its root-relative path plus its first matching line's number and
-// text), or a placeholder while there's nothing to show yet.
+// header row (title plus keybinding legend), the query input on its own
+// row directly below, and a two-level list — one row per matching file,
+// disclosing (unless collapsed) its own matching-line rows below it —
+// or a placeholder while there's nothing to show yet.
 func (a *App) drawSearch(w, h int) {
-	a.drawHeader(w, headerText(w, "search: "+a.searchQuery, "[return] open  [esc] cancel"))
+	title := "search"
+	if a.searchRegex {
+		title = "search (regex)"
+	}
+	a.drawHeader(w, headerText(w, title, searchLegend))
+	a.drawText(0, 1, w, "> "+a.searchQuery, styleSearchInput)
 
-	listHeight := h - 1
+	const listTop = 2
+	listHeight := h - listTop
 	if a.searchMessage != "" {
 		listHeight--
 	}
 
 	switch {
 	case a.searchQuery == "":
-		a.drawText(0, 1, w, centerPad("type to search file contents", w), styleNormal)
+		a.drawText(0, listTop, w, centerPad("type to search file contents", w), styleNormal)
+	case a.searchError != "":
+		a.drawText(0, listTop, w, centerPad("invalid regex: "+a.searchError, w), styleError)
 	case a.searchResults == nil:
 		// SPEC.md §9.1: covers both "index not done yet" and "a scan for
 		// this query is still running" — either way, nothing has been
 		// found yet, which is a different state from genuinely zero
-		// matches, so this must not render as "no matches."
+		// matches, so this must not render as "no matches." Scanning
+		// itself always runs in a background goroutine (never on this
+		// draw/input thread), so a slow scan over a large tree never
+		// blocks keystrokes; this spinner is purely feedback that it's
+		// still working, mirroring the background-index badge (§5.2).
 		_, indexDone := a.idx.Snapshot()
-		msg := "searching…"
-		if !indexDone {
+		var msg string
+		switch {
+		case !indexDone:
 			msg = "indexing…"
+		case a.searchCancel == nil:
+			// A scan hasn't been (re)started yet this draw (e.g. the very
+			// first frame after a keystroke); avoid flashing a spinner
+			// frame for a scan that isn't actually running.
+			msg = "searching…"
+		case time.Since(a.searchScanStart) < spinnerThreshold:
+			msg = "searching…"
+		default:
+			frame := spinner.Frame(time.Since(a.searchScanStart), spinnerFPS, spinner.DefaultFrames)
+			msg = string(frame) + " searching…"
 		}
-		a.drawText(0, 1, w, centerPad(msg, w), styleNormal)
+		a.drawText(0, listTop, w, centerPad(msg, w), styleNormal)
 	case len(a.searchResults) == 0:
-		a.drawText(0, 1, w, centerPad("no matches", w), styleNormal)
+		a.drawText(0, listTop, w, centerPad("no matches", w), styleNormal)
 	default:
+		rows := a.searchRows()
 		if listHeight > 0 {
 			if a.searchSelected < a.searchScroll {
 				a.searchScroll = a.searchSelected
@@ -346,24 +385,43 @@ func (a *App) drawSearch(w, h int) {
 				a.searchScroll = a.searchSelected - listHeight + 1
 			}
 		}
-		for row := range listHeight {
-			i := a.searchScroll + row
-			if i >= len(a.searchResults) {
+		for line := range listHeight {
+			i := a.searchScroll + line
+			if i >= len(rows) {
 				break
 			}
 			style := styleNormal
 			if i == a.searchSelected {
 				style = styleSelected
 			}
-			m := a.searchResults[i]
-			label := fmt.Sprintf("%s:%d: %s", m.RelPath, m.LineNum, strings.TrimSpace(m.LineText))
-			a.drawText(0, 1+row, w, label, style)
+			a.drawText(0, listTop+line, w, searchRowLabel(a.searchResults, a.searchCollapsed, rows[i]), style)
 		}
 	}
 
 	if a.searchMessage != "" {
 		a.drawText(0, h-1, w, a.searchMessage, styleError)
 	}
+}
+
+// searchRowLabel renders one flattened search-result row (SPEC.md
+// §9.2): a file row shows a disclosure indicator plus its root-relative
+// path and hit count; a hit row is indented under its file and shows
+// its 1-based line number and (trimmed) text.
+func searchRowLabel(results []search.FileResult, collapsed map[string]bool, row searchRow) string {
+	r := results[row.file]
+	if row.isHit {
+		h := r.Hits[row.hit]
+		return fmt.Sprintf("    %d: %s", h.LineNum, strings.TrimSpace(h.LineText))
+	}
+	marker := "▾"
+	if collapsed[r.AbsPath] {
+		marker = "▸"
+	}
+	plural := "es"
+	if len(r.Hits) == 1 {
+		plural = ""
+	}
+	return fmt.Sprintf("%s %s (%d match%s)", marker, r.RelPath, len(r.Hits), plural)
 }
 
 // rootLabel renders the tree root path for display, abbreviated with

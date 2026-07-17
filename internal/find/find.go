@@ -1,11 +1,10 @@
 // Package find implements in-file search over an already-open file's
 // lines (SPEC.md §2.4): a `less`-style "/query" that locates every
 // case-insensitive substring match so the UI can highlight them and
-// step between them. Unlike internal/search (which scans many files'
-// content in the background for a single first-match-per-file
-// result), this operates on one file already held in memory and
-// returns every match, so it needs no cancellation/concurrency of its
-// own.
+// step between them. Unlike internal/search (which scans many files in
+// the background and needs cancellation/concurrency to stay
+// non-blocking on a large tree), this operates on one file already
+// held in memory, so it needs none of that.
 package find
 
 import "strings"
