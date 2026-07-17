@@ -77,6 +77,19 @@ func ReadLines(path string, cap int64) []string {
 	return linesFromBytes(data, truncated, cap)
 }
 
+// ReadCapped reads up to cap bytes from the start of path and reports
+// whether the content contains a NUL byte, using the same capped-read
+// and binary-detection rule ReadLines/Load use (SPEC.md §2.2) — for
+// callers (e.g. content search, §9.1) that need that same check without
+// also wanting decoded lines or highlighting.
+func ReadCapped(path string, cap int64) (data []byte, binary bool, err error) {
+	data, _, err = readCapped(path, cap)
+	if err != nil {
+		return nil, false, err
+	}
+	return data, bytes.IndexByte(data, 0) != -1, nil
+}
+
 // LoadResult is the outcome of Load: either a failed open (an
 // explanatory message, no entry-worthy content) or a successful read
 // with lines and best-effort highlighting ready for wrapping, per

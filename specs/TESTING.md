@@ -134,6 +134,17 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Escape from jump to file returns to the browser, unchanged, without changing selection.
 - Neither overlay exposes the other's action: quick open never reveals in the browser, and jump to file never opens a file into the list.
 
+## Content search matching (§9.1)
+
+- An empty query returns no matches, and the returned result set is never nil (distinguishable from "not yet searched").
+- A plain query is a case-insensitive substring match checked against file content, not just file names.
+- A match reports the 1-based line number and text of the first line containing the query, not a later line even when multiple lines match.
+- A file containing a NUL byte within the byte-capped read is never matched, even if the query text is literally present in its bytes (binary detection takes precedence, mirroring §2.2's binary-open check).
+- A file that can't be read (permission denied, deleted mid-scan) is silently skipped rather than aborting the whole scan or surfacing an error.
+- A match occurring only beyond the byte cap is not found — content search never reads past the same cap preview loading uses.
+- Results are sorted by root-relative path, case-insensitively.
+- An already-canceled context stops the scan before it reads any candidate, so a superseded query's scan does no wasted work once canceled.
+
 ## Layout computation (§5.1)
 
 - `compute_tree_pane_width` returns at least the configured minimum even for a very short/empty node list.
@@ -184,6 +195,7 @@ The following require a real terminal (ideally inside a multiplexer like Zellij 
 - The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Enter-to-display and `x`-to-remove, and its empty-list message renders when reachable.
 - Shift-Up/Shift-Down reordering is confirmed against a real terminal/multiplexer, since Shift+arrow key delivery is more library/terminal-dependent than plain arrow keys; if the target terminal library can't reliably distinguish Shift-Up/Shift-Down from plain Up/Down, note the fallback keys actually used here rather than silently shipping non-functional reordering.
 - Quick open's header legend correctly shows Enter-to-open, and jump to file's header legend correctly shows Enter-to-reveal; neither offers the other's action.
+- Content search overlay (§9): `s` opens it from both the primary preview view (including its empty state) and the browser; typing (including a literal space) builds the query live and each keystroke's rescan doesn't visibly block input; Enter on a match opens it into the preview and closes the overlay; Escape returns to whichever screen it was opened from unchanged; the bottom-right index badge renders in this overlay the same way it does in the browser, quick open, and jump-to-file overlays.
 - `B` and `O` behave as toggles: pressing either again while its own overlay (browser, quick open) is active closes it back to the primary preview view, the same as Escape.
 - Jump to file (`/` from within the browser) fully replaces the browser view while open, and Escape from it returns to the browser exactly as it was.
 - Browser split-view vs. popup layout flips correctly on live resize, with the preview pane visible-but-inert in split view.

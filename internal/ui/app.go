@@ -12,6 +12,7 @@
 package ui
 
 import (
+	"context"
 	"os"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/nitti/dirtree/internal/match"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
+	"github.com/nitti/dirtree/internal/search"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/tree"
 	"github.com/nitti/dirtree/internal/watch"
@@ -38,7 +40,28 @@ const (
 	overlayQuickOpen
 	overlayJumpToFile
 	overlayOpenFiles
+	overlaySearch
 )
+
+// searchEntryPoint records which screen the content search overlay
+// (SPEC.md §9) was opened from, so Escape returns to it. Both entry
+// points behave identically once the overlay is open (§9.2) — there is
+// no per-entry-point default-action split like quick open/jump to file.
+type searchEntryPoint int
+
+const (
+	searchFromBrowser searchEntryPoint = iota
+	searchFromPreview
+)
+
+// searchOutcome is what a background content-search scan (SPEC.md §9.1)
+// sends back once it finishes (or is canceled), tagged with the
+// generation it was started for so a stale result from a superseded
+// query can be discarded rather than clobbering a newer one.
+type searchOutcome struct {
+	gen     int
+	results []search.Match
+}
 
 const (
 	resizePollInterval        = 100 * time.Millisecond
@@ -85,6 +108,17 @@ type App struct {
 	finderScroll   int
 	finderMessage  string // transient inline open-failure message, quick open only (§2.2)
 
+	// content search overlay state (SPEC.md §9)
+	searchEntry    searchEntryPoint
+	searchQuery    string
+	searchResults  []search.Match // nil while not yet searched (empty query, waiting on index, or a scan in flight), distinct from "searched, zero matches"
+	searchSelected int
+	searchScroll   int
+	searchMessage  string // transient inline failure message for open-into-list (§2.2)
+	searchGen      int
+	searchCancel   context.CancelFunc
+	searchDone     chan searchOutcome
+
 	// files is the open-files list (SPEC.md §2.2, §2.3) the primary
 	// preview view and both overlays' open actions operate on.
 	files *openfiles.List
@@ -125,6 +159,7 @@ func New(rootPath string) *App {
 		overlay:         overlayBrowser, // SPEC.md §1: browser auto-opens on top of the (empty) primary view at startup
 		browserSelected: root,
 		files:           openfiles.New(),
+		searchDone:      make(chan searchOutcome, 8),
 	}
 	a.syncWatches()
 	return a
@@ -232,6 +267,15 @@ func (a *App) Run() error {
 				a.recomputeFinderMatches()
 			}
 			a.draw()
+		case out := <-a.searchDone:
+			if out.gen == a.searchGen {
+				a.searchResults = out.results
+				a.searchCancel = nil
+				if a.searchSelected >= len(a.searchResults) {
+					a.searchSelected = max(len(a.searchResults)-1, 0)
+				}
+			}
+			a.draw()
 		case <-ticker.C:
 			// Also catches the background index (re)build finishing
 			// while quick open or jump to file is open with an
@@ -239,6 +283,15 @@ func (a *App) Run() error {
 			// next keystroke.
 			if a.isFinderOverlay() {
 				a.recomputeFinderMatches()
+			}
+			// Same idea for content search (SPEC.md §9.1): a query typed
+			// before the index finished is held pending (searchResults
+			// stays nil) until it's done, then run once here rather than
+			// on every tick.
+			if a.overlay == overlaySearch && a.searchQuery != "" && a.searchResults == nil && a.searchCancel == nil {
+				if _, done := a.idx.Snapshot(); done {
+					a.recomputeSearch()
+				}
 			}
 			a.draw()
 		}
@@ -256,6 +309,8 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleJumpToFileKey(ev)
 	case overlayOpenFiles:
 		a.handleOpenFilesKey(ev)
+	case overlaySearch:
+		a.handleSearchKey(ev)
 	case overlayNone:
 		a.handlePreviewKey(ev)
 	}
@@ -288,6 +343,8 @@ func (a *App) handlePreviewKey(ev *tcell.EventKey) {
 		a.openFilesSelected = max(a.files.Displayed, 0)
 	case ev.Rune() == 'O':
 		a.openQuickOpen()
+	case ev.Rune() == 's':
+		a.openSearch(searchFromPreview)
 	case ev.Rune() == 'q', ev.Key() == tcell.KeyEscape:
 		a.quit = true
 	case ev.Key() == tcell.KeyUp:
@@ -437,6 +494,8 @@ func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 		a.browserOpen(true)
 	case ev.Rune() == '/':
 		a.openJumpToFile()
+	case ev.Rune() == 's':
+		a.openSearch(searchFromBrowser)
 	case ev.Rune() == 'B', ev.Key() == tcell.KeyEscape:
 		a.browserMessage = ""
 		a.overlay = overlayNone
@@ -654,6 +713,135 @@ func (a *App) performOpenIntoList() {
 		a.finderMessage = res.Message
 		return
 	}
+	a.overlay = overlayNone
+}
+
+// openSearch opens the content search overlay from the given entry
+// point (SPEC.md §9.1). Both entry points behave identically once open
+// (§9.2), so this only needs to remember where to return on Escape.
+func (a *App) openSearch(entry searchEntryPoint) {
+	a.overlay = overlaySearch
+	a.searchEntry = entry
+	a.searchQuery = ""
+	a.searchSelected = 0
+	a.searchScroll = 0
+	a.searchMessage = ""
+	a.recomputeSearch()
+}
+
+// recomputeSearch (re)starts the background content scan for the
+// current query (SPEC.md §9.1): any scan still running for the previous
+// query is canceled first, so only the most recently typed query's
+// result is ever applied. An empty query performs no scan at all. If
+// the background index hasn't finished building yet, the scan is
+// deferred — Run's ticker case retries once it has — rather than
+// scanning a partial candidate set.
+func (a *App) recomputeSearch() {
+	a.cancelSearch()
+	a.searchSelected = 0
+	a.searchScroll = 0
+	a.searchMessage = ""
+
+	if a.searchQuery == "" {
+		a.searchResults = nil
+		return
+	}
+
+	entries, done := a.idx.Snapshot()
+	if !done {
+		a.searchResults = nil
+		return
+	}
+
+	a.searchResults = nil
+	candidates := make([]search.Candidate, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir {
+			candidates = append(candidates, search.Candidate{AbsPath: e.AbsPath, RelPath: e.RelPath})
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a.searchCancel = cancel
+	a.searchGen++
+	gen, query := a.searchGen, a.searchQuery
+	go func() {
+		results := search.Run(ctx, query, candidates, previewByteCap)
+		a.searchDone <- searchOutcome{gen: gen, results: results}
+	}()
+}
+
+// cancelSearch stops any in-flight background scan without applying its
+// (now-stale) result, so leaving the overlay or superseding the query
+// doesn't leave wasted work running against a tree that could be large.
+func (a *App) cancelSearch() {
+	if a.searchCancel != nil {
+		a.searchCancel()
+		a.searchCancel = nil
+	}
+}
+
+// handleSearchKey implements the content search overlay's input
+// handling (SPEC.md §9.2). Unlike quick open/jump to file, space is
+// never an action key — it always types a literal space into the query,
+// since content search queries are plain text rather than path
+// fragments.
+func (a *App) handleSearchKey(ev *tcell.EventKey) {
+	switch {
+	case ev.Key() == tcell.KeyEscape:
+		a.cancelSearch()
+		a.overlay = a.searchReturnOverlay()
+	case ev.Key() == tcell.KeyEnter:
+		a.performSearchOpen()
+	case ev.Key() == tcell.KeyTab, ev.Key() == tcell.KeyDown:
+		if len(a.searchResults) > 0 {
+			a.searchSelected = tree.MoveSelection(a.searchSelected, 1, len(a.searchResults))
+		}
+	case ev.Key() == tcell.KeyBacktab, ev.Key() == tcell.KeyUp:
+		if len(a.searchResults) > 0 {
+			a.searchSelected = tree.MoveSelection(a.searchSelected, -1, len(a.searchResults))
+		}
+	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
+		if len(a.searchQuery) > 0 {
+			r := []rune(a.searchQuery)
+			a.searchQuery = string(r[:len(r)-1])
+		}
+		a.recomputeSearch()
+	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
+		a.searchQuery += string(ev.Rune())
+		a.recomputeSearch()
+	}
+}
+
+// searchReturnOverlay is which overlay Escape (or a successful open)
+// lands on: the browser if the overlay was entered from it, otherwise
+// back to the primary preview view.
+func (a *App) searchReturnOverlay() overlay {
+	if a.searchEntry == searchFromBrowser {
+		return overlayBrowser
+	}
+	return overlayNone
+}
+
+// performSearchOpen implements Enter (SPEC.md §9.2): open the selected
+// match into the open-files list per §2.2's open semantics. An "opened"
+// result closes the overlay, landing on the primary preview view
+// regardless of entry point; a "failed" result (e.g. the file changed
+// or was removed between scanning and opening) leaves the overlay open
+// with the message shown inline instead, per §2.2's open-failure
+// signaling.
+func (a *App) performSearchOpen() {
+	if len(a.searchResults) == 0 {
+		return
+	}
+	target := a.searchResults[a.searchSelected]
+	res := a.files.Open(target.AbsPath, previewByteCap)
+	if res.Outcome != openfiles.Opened {
+		a.searchMessage = res.Message
+		return
+	}
+	a.searchMessage = ""
+	a.cancelSearch()
 	a.overlay = overlayNone
 }
 
