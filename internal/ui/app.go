@@ -73,9 +73,12 @@ const (
 	completionDisplayDuration = 2 * time.Second
 	completionFadeDuration    = 400 * time.Millisecond
 	completionMessage         = "indexing complete"
-	searchFlashDuration       = 400 * time.Millisecond
-	watchDebounce             = 300 * time.Millisecond
-	previewByteCap            = preview.DefaultByteCap
+	// flashDuration is how long the post-open row flash (§2.2/§3.4/§9.2's
+	// "on-open confirmation") stays visible before fading back to normal,
+	// shared by the browser and content search overlays.
+	flashDuration  = 400 * time.Millisecond
+	watchDebounce  = 300 * time.Millisecond
+	previewByteCap = preview.DefaultByteCap
 
 	// Open-files-list overlay dropdown sizing (SPEC.md §2.3): wide enough
 	// to fit its own header row (page counter + keybinding legend) or
@@ -98,9 +101,11 @@ type App struct {
 	overlay overlay
 
 	// browser overlay state (SPEC.md §3.4)
-	browserSelected *tree.Node
-	browserScroll   int
-	browserMessage  string // transient inline status/failure message (§2.2)
+	browserSelected   *tree.Node
+	browserScroll     int
+	browserMessage    string    // transient inline status/failure message (§2.2)
+	browserFlashPath  string    // absolute path of the file row most recently opened via browserOpen, for a brief post-open flash (mirrors searchFlashPath below)
+	browserFlashStart time.Time // when the flash started; drawn only while time.Since(browserFlashStart) < flashDuration
 
 	// finder state, used by the quick open overlay (SPEC.md §4.2).
 	finderQuery    string
@@ -134,7 +139,7 @@ type App struct {
 	searchCancel     context.CancelFunc
 	searchScanStart  time.Time // when the in-flight scan (searchCancel != nil) started, for the spinner shown once it runs long enough to be noticeable
 	searchFlashPath  string    // AbsPath of the file row most recently opened via performSearchOpen, for a brief post-open flash
-	searchFlashStart time.Time // when the flash started; the flash is drawn only while time.Since(searchFlashStart) < searchFlashDuration
+	searchFlashStart time.Time // when the flash started; the flash is drawn only while time.Since(searchFlashStart) < flashDuration
 	searchDone       chan searchOutcome
 
 	// files is the open-files list (SPEC.md §2.2, §2.3) the primary
@@ -807,7 +812,12 @@ func (a *App) handleJumpKey(ev *tcell.EventKey) {
 // "opened" result displays it in the primary preview view without
 // closing the browser, so several files can be queued up in a row
 // before returning to the preview; a "failed" result leaves the
-// browser open with the message shown inline.
+// browser open with the message shown inline. On success, the opened
+// row also gets a brief flash (browserFlashPath/browserFlashStart,
+// drawn in drawBrowser) as an on-open confirmation, the same treatment
+// content search gives its own rows (performSearchOpen) — distinct
+// from the lasting "●" open indicator every open file's row shows
+// regardless of when it was opened.
 func (a *App) browserOpen() {
 	if a.browserSelected.IsDir {
 		return
@@ -818,6 +828,8 @@ func (a *App) browserOpen() {
 		return
 	}
 	a.browserMessage = ""
+	a.browserFlashPath = a.browserSelected.Path
+	a.browserFlashStart = time.Now()
 }
 
 // handleOpenFilesKey implements the open-files-list overlay's input
