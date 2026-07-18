@@ -6,6 +6,10 @@
 package openfiles
 
 import (
+	"os"
+	"path/filepath"
+	"time"
+
 	"github.com/nitti/dirtree/internal/find"
 	"github.com/nitti/dirtree/internal/preview"
 )
@@ -17,6 +21,12 @@ type Entry struct {
 	Path  string
 	Lines []string
 	Segs  [][]preview.Segment
+
+	// ModTime is the file's mtime as of the last successful load or
+	// reload (SPEC.md §6.1a), used by Reload to detect whether the file
+	// has changed on disk since without re-reading its content on every
+	// check.
+	ModTime time.Time
 
 	// Scroll is the entry's display-row scroll offset, preserved across
 	// switches to other entries and restored exactly when this one is
@@ -112,9 +122,55 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 	}
 
 	e := &Entry{Path: path, Lines: res.Lines, Segs: res.Segs, FindCurrent: -1}
+	if info, err := os.Stat(path); err == nil {
+		e.ModTime = info.ModTime()
+	}
 	l.Entries = append(l.Entries, e)
 	l.Displayed = len(l.Entries) - 1
 	return OpenResult{Outcome: Opened, Entry: e}
+}
+
+// Reload checks every open entry against current disk state (SPEC.md
+// §6.1a) and re-reads any whose mtime has changed since it was last
+// loaded or reloaded, replacing its content in place — entry identity,
+// list position, and displayed status are all untouched, so this never
+// disturbs list order or which entry is currently shown. The wrap
+// cache and any in-file find state are invalidated, since both are
+// derived from content that just changed; Scroll is left as-is and
+// self-clamps the next time the entry is scrolled or displayed.
+//
+// An entry whose file can no longer be stat'd or read (deleted,
+// permission lost, now binary) is left with its last-known content
+// untouched — it simply goes stale, per §6.1's existing handling for a
+// currently-open file whose underlying path disappears.
+//
+// Returns the base name of each entry that was actually reloaded, in
+// list order (nil if none changed), for callers that want to surface a
+// transient notification.
+func (l *List) Reload(capBytes int64) []string {
+	var reloaded []string
+	for _, e := range l.Entries {
+		info, err := os.Stat(e.Path)
+		if err != nil || info.ModTime().Equal(e.ModTime) {
+			continue
+		}
+		res := preview.Load(e.Path, capBytes)
+		if res.Failed {
+			continue
+		}
+		e.Lines = res.Lines
+		e.Segs = res.Segs
+		e.ModTime = info.ModTime()
+		e.Rows = nil
+		e.FirstRow = nil
+		e.RowsWidth = 0
+		e.FindQuery = ""
+		e.FindMatches = nil
+		e.FindCurrent = -1
+		e.FindWrapNote = ""
+		reloaded = append(reloaded, filepath.Base(e.Path))
+	}
+	return reloaded
 }
 
 // IsOpen reports whether path already has an entry in the list.

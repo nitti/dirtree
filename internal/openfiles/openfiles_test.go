@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/nitti/dirtree/internal/find"
 	"github.com/nitti/dirtree/internal/preview"
 )
 
@@ -548,5 +550,149 @@ func TestMoveUpPageClampsAtFirstEntryRatherThanWrapping(t *testing.T) {
 	}
 	if l.Entries[0].Path != "/entry04" {
 		t.Fatalf("expected entry04 to land at the first index, got %+v", l.Entries)
+	}
+}
+
+// --- Live reload of open files on disk change (TESTING.md "Live
+// reload of open files (§6.1a)") ---
+
+// rewriteWithNewerMtime overwrites path's content and forces its mtime
+// to be strictly after whatever it was before, sidestepping any
+// filesystem's mtime resolution (e.g. 1s on some setups) so tests never
+// flake on write speed.
+func rewriteWithNewerMtime(t *testing.T, path string, content []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReloadPicksUpChangedContentOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", []byte("old\n"))
+
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+
+	rewriteWithNewerMtime(t, path, []byte("new\n"))
+
+	reloaded := l.Reload(preview.DefaultByteCap)
+	if len(reloaded) != 1 || reloaded[0] != "a.txt" {
+		t.Fatalf("expected [\"a.txt\"] reloaded, got %v", reloaded)
+	}
+	if got := l.Entries[0].Lines; len(got) != 1 || got[0] != "new" {
+		t.Fatalf("expected reloaded content, got %v", got)
+	}
+}
+
+func TestReloadLeavesUnchangedFilesAlone(t *testing.T) {
+	dir := t.TempDir()
+	changed := writeFile(t, dir, "changed.txt", []byte("old\n"))
+	untouched := writeFile(t, dir, "untouched.txt", []byte("stays\n"))
+
+	l := New()
+	l.Open(changed, preview.DefaultByteCap)
+	l.Open(untouched, preview.DefaultByteCap)
+
+	rewriteWithNewerMtime(t, changed, []byte("new\n"))
+
+	reloaded := l.Reload(preview.DefaultByteCap)
+	if len(reloaded) != 1 || reloaded[0] != "changed.txt" {
+		t.Fatalf("expected only changed.txt reloaded, got %v", reloaded)
+	}
+	if got := l.Entries[1].Lines; len(got) != 1 || got[0] != "stays" {
+		t.Fatalf("expected untouched entry's content unchanged, got %v", got)
+	}
+}
+
+func TestReloadIsNoOpWhenNothingChangedOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", []byte("same\n"))
+
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+
+	if reloaded := l.Reload(preview.DefaultByteCap); reloaded != nil {
+		t.Fatalf("expected no reload when mtime hasn't changed, got %v", reloaded)
+	}
+}
+
+func TestReloadPreservesEntryIdentityListOrderAndDisplayed(t *testing.T) {
+	dir := t.TempDir()
+	first := writeFile(t, dir, "first.txt", []byte("a\n"))
+	second := writeFile(t, dir, "second.txt", []byte("b\n"))
+
+	l := New()
+	l.Open(first, preview.DefaultByteCap)
+	l.Open(second, preview.DefaultByteCap)
+	l.Display(0)
+	entryBefore := l.Entries[0]
+
+	rewriteWithNewerMtime(t, first, []byte("a changed\n"))
+	l.Reload(preview.DefaultByteCap)
+
+	if l.Entries[0] != entryBefore {
+		t.Fatal("expected the same *Entry object to be mutated in place, not replaced")
+	}
+	if l.Entries[0].Path != first || l.Entries[1].Path != second {
+		t.Fatalf("expected list order unchanged, got %+v", l.Entries)
+	}
+	if l.Displayed != 0 {
+		t.Fatalf("expected displayed index unchanged, got %d", l.Displayed)
+	}
+}
+
+func TestReloadLeavesDeletedFileEntryStale(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", []byte("still here\n"))
+
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	linesBefore := l.Entries[0].Lines
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := l.Reload(preview.DefaultByteCap)
+	if reloaded != nil {
+		t.Fatalf("expected no reload reported for a deleted file, got %v", reloaded)
+	}
+	if got := l.Entries[0].Lines; len(got) != len(linesBefore) || got[0] != linesBefore[0] {
+		t.Fatalf("expected last-known content left untouched, got %v want %v", got, linesBefore)
+	}
+}
+
+func TestReloadInvalidatesWrapCacheAndFindState(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", []byte("old\n"))
+
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	e := l.Entries[0]
+	e.RowsWidth = 80
+	e.Rows = []preview.DisplayRow{{}}
+	e.FirstRow = map[int]int{0: 0}
+	e.FindQuery = "old"
+	e.FindMatches = []find.Match{{Line: 0}}
+	e.FindCurrent = 0
+	e.FindWrapNote = "wrapped to top"
+
+	rewriteWithNewerMtime(t, path, []byte("new\n"))
+	l.Reload(preview.DefaultByteCap)
+
+	if e.RowsWidth != 0 || e.Rows != nil || e.FirstRow != nil {
+		t.Fatalf("expected wrap cache invalidated after reload, got RowsWidth=%d Rows=%v FirstRow=%v", e.RowsWidth, e.Rows, e.FirstRow)
+	}
+	if e.FindQuery != "" || e.FindMatches != nil || e.FindCurrent != -1 || e.FindWrapNote != "" {
+		t.Fatalf("expected find state cleared after reload, got query=%q matches=%v current=%d wrapNote=%q",
+			e.FindQuery, e.FindMatches, e.FindCurrent, e.FindWrapNote)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/search"
 	"github.com/nitti/dirtree/internal/spinner"
+	"github.com/nitti/dirtree/internal/toast"
 	"github.com/nitti/dirtree/internal/tree"
 )
 
@@ -126,6 +127,7 @@ func (a *App) draw() {
 		titleRows := a.drawFileTitleBar(0, 1, w, true)
 		a.drawPreview(0, 1+titleRows, w, h-1-titleRows)
 	}
+	a.drawToast(w, h)
 
 	a.screen.Show()
 }
@@ -869,6 +871,36 @@ func (a *App) drawBadge(w, h int) {
 		return
 	}
 	visible := []rune(text)
+	if hiddenPrefix < len(visible) {
+		visible = visible[hiddenPrefix:]
+	} else {
+		visible = nil
+	}
+	if len(visible) == 0 {
+		return
+	}
+	a.drawCornerBadge(w, h, string(visible), styleBadge)
+}
+
+// drawToast renders the generic bottom-right transient notification
+// (SPEC.md §5.3, e.g. the open-file live-reload notice, §6.1a) if one
+// is currently active, sharing drawCornerBadge's anchor/style with the
+// indexing badge; drawn after it in draw() so an active toast wins the
+// corner over the badge on the rare frame both would otherwise want it.
+// Clears toastMessage once its fade has fully completed, so a finished
+// toast doesn't keep being redecided on every subsequent frame.
+func (a *App) drawToast(w, h int) {
+	if a.toastMessage == "" {
+		return
+	}
+	phase, hiddenPrefix := toast.Decide(
+		time.Since(a.toastStart), toastDisplayDuration, toastFadeDuration, len([]rune(a.toastMessage)),
+	)
+	if phase == toast.Hidden {
+		a.toastMessage = ""
+		return
+	}
+	visible := []rune(a.toastMessage)
 	if hiddenPrefix < len(visible) {
 		visible = visible[hiddenPrefix:]
 	} else {

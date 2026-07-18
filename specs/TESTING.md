@@ -238,11 +238,21 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Refreshing a directory that newly fails to list (e.g. loses read permission) reports that directory's path as newly-erroring.
 - Refreshing a directory that already had a listing error does not re-report it as newly-erroring.
 
+## Live reload of open files (§6.1a)
+
+- An open file whose mtime has changed on disk since it was last (re)loaded is re-read, its lines/segments replaced, and its base name reported as reloaded.
+- An open file whose mtime has not changed is left untouched and is not reported as reloaded.
+- Reloading one changed entry among several open files leaves every other entry's content untouched and reports only the changed one.
+- Reloading mutates the existing `*Entry` in place rather than replacing it, and leaves the open-files list's order and displayed index exactly as they were.
+- An open file that's deleted (or otherwise fails to re-read, e.g. permission lost or now binary) between opens is skipped by reload — its last-known content is left untouched and it is not reported as reloaded, rather than the entry being cleared or removed.
+- A reload invalidates the entry's line-wrap cache (`Rows`/`FirstRow`/`RowsWidth`) and clears its in-file find state (`FindQuery`/`FindMatches`/`FindCurrent`/`FindWrapNote`), since both are derived from content that just changed.
+
 ## Manual / rendering-layer verification (not unit-testable)
 
 The following require a real terminal (ideally inside a multiplexer like Zellij or tmux) and should be explicitly confirmed, and their status stated, whenever a change touching them is reported complete:
 
 - Startup shows the empty preview state with the browser auto-opened on top of it.
+- Editing an already-open file's content on disk (e.g. from another terminal, `echo >> file` or a save in a real editor) while dirtree is displaying it live-updates the preview pane in place within a debounce window, without any keypress; the scroll position doesn't jump back to the top for a small edit near the bottom, and a bottom-right toast names the file as reloaded, fading out on its own the same way the indexing-complete badge does. Editing a *different* open file that isn't currently displayed also reloads it in the background and still shows the toast; switching to it afterward (Tab / open-files list) shows the new content, not stale content from when it was opened.
 - Making an already-loaded, watched directory unreadable (e.g. `chmod 000` it while dirtree is running, with its row visible in the browser) triggers a live refresh that briefly flashes that row's background red, distinct from the green post-open flash and from selection's reverse-video; the row's inline `[error]` text (already covered elsewhere in this list) remains visible after the flash itself fades, rather than disappearing along with it.
 - Making a not-yet-expanded directory unreadable, then selecting it and pressing Right in the browser: the same red flash and inline `[error]` text appear immediately on that attempt, without needing a live-refresh cycle; the row stays collapsed (`>` marker, not `v`) rather than showing as expanded with nothing under it. Pressing Right again on the same still-broken directory flashes red again (not just the first time), since it's still fully undisclosed. Restoring its permissions and pressing Right once more actually clears the error, marks it expanded, and shows its real contents, rather than the error lingering forever from the first failed attempt.
 - The browser's Return opens a file and displays it in the primary preview view without closing the browser, allowing several files to be queued before Escape/`b`.
