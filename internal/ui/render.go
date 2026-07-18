@@ -61,7 +61,7 @@ var (
 const (
 	previewLegend = "[b] browse  [tab] open files  [o] quick open  [s] search  [q] quit"
 	browserLegend = "[return] open  [/] jump to file  [b/esc] close"
-	jumpLegend    = "[tab] next match  [return] done  [esc] cancel"
+	jumpLegend    = "[tab] next match  [ctrl+u] clear  [return] done  [esc] cancel"
 	// searchLegend documents the content search overlay's actions (SPEC.md
 	// §9.2): Return opens the selected row (jumping to its line if it's a
 	// hit row) and leaves the overlay open, for opening several hits in a
@@ -197,7 +197,7 @@ func (a *App) fillRect(x0, y0, w, h int, style tcell.Style) {
 // query on its own row directly below (the same input-row convention
 // content search uses, §9.2), and the flat match list.
 func (a *App) drawQuickOpen(w, h int) {
-	a.drawHeaderMode(w, "QUICK OPEN", "[return] open  [esc] cancel")
+	a.drawHeaderMode(w, "QUICK OPEN", "[return] open  [ctrl+u] clear  [esc] cancel")
 	a.drawText(0, 1, w, "> "+a.finderQuery, styleSearchInput)
 	a.drawFinderList(w, h)
 }
@@ -565,7 +565,7 @@ func (a *App) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	var text string
 	switch {
 	case interactive && a.findPromptOpen:
-		text = headerText(w, "/"+a.findInput, "[return] search  [esc] cancel")
+		text = headerText(w, "/"+a.findInput, "[return] search  [ctrl+u] clear  [esc] cancel")
 	case !interactive:
 		text = left
 	case e.FindQuery != "" && len(e.FindMatches) > 0:
