@@ -316,6 +316,54 @@ func TestExpandCollapsedDirLoadsAndMarksExpanded(t *testing.T) {
 	}
 }
 
+func TestExpandFailedLoadStaysUndisclosed(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root, permission denial won't apply")
+	}
+	rootPath := t.TempDir()
+	dir := filepath.Join(rootPath, "noperm")
+	must(t, os.Mkdir(dir, 0o000))
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+
+	root := NewRoot(rootPath, nil)
+	n := findChild(root, "noperm")
+	n.Expand(rootPath, nil)
+	if n.Expanded {
+		t.Fatal("expected a directory that failed to load to stay fully undisclosed (not Expanded)")
+	}
+	if n.Err == "" {
+		t.Fatal("expected the failed expand to record an error")
+	}
+}
+
+func TestExpandRetriesEveryAttemptWhileStillFailing(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root, permission denial won't apply")
+	}
+	rootPath := t.TempDir()
+	dir := filepath.Join(rootPath, "noperm")
+	must(t, os.Mkdir(dir, 0o000))
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+
+	root := NewRoot(rootPath, nil)
+	n := findChild(root, "noperm")
+	n.Expand(rootPath, nil)
+	if n.Expanded {
+		t.Fatal("expected first failed attempt to leave the directory undisclosed")
+	}
+	// A second attempt while still broken must retry (not silently
+	// no-op the way an already-*successfully*-expanded directory would),
+	// so the caller can flash feedback on every attempt, not just the
+	// first (SPEC.md §5.3).
+	n.Expand(rootPath, nil)
+	if n.Expanded {
+		t.Fatal("expected the second still-failing attempt to also leave the directory undisclosed")
+	}
+	if n.Err == "" {
+		t.Fatal("expected the second attempt to still report an error")
+	}
+}
+
 func TestCollapseIsIdempotent(t *testing.T) {
 	rootPath := buildFixture(t)
 	root := NewRoot(rootPath, nil)

@@ -364,12 +364,19 @@ func RevealPath(root *Node, rootPath, targetAbsPath string, ignorer Ignorer) *No
 
 // Expand marks a collapsed directory expanded, loading its children if
 // needed. A no-op on files. rootPath is passed through to LoadChildren.
+// If loading fails, n stays fully undisclosed (Expanded left false, same
+// as before the attempt) rather than flipping open onto zero children —
+// there's nothing to disclose, and per LoadChildren's retry behavior,
+// leaving Expanded false is what makes the next attempt on this same
+// node retry the listing instead of being treated as already-expanded.
 func (n *Node) Expand(rootPath string, ignorer Ignorer) {
 	if !n.IsDir {
 		return
 	}
 	n.LoadChildren(rootPath, ignorer)
-	n.Expanded = true
+	if n.Err == "" {
+		n.Expanded = true
+	}
 }
 
 // Collapse marks a directory not-expanded, idempotently. A no-op on

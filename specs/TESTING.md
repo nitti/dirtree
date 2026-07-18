@@ -91,6 +91,8 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 
 - Expanding a file is a no-op.
 - Expanding a collapsed directory loads its children (if not already loaded) and marks it expanded.
+- Expanding a directory whose load fails leaves it not-expanded (fully undisclosed) rather than marking it expanded onto zero children, and records the error.
+- Expanding a still-failing directory a second time retries the listing again (rather than no-oping) and again leaves it not-expanded.
 - Collapsing marks a directory not-expanded regardless of prior state (idempotent).
 - Toggle expands a collapsed directory and collapses an expanded one.
 
@@ -235,7 +237,7 @@ The following require a real terminal (ideally inside a multiplexer like Zellij 
 
 - Startup shows the empty preview state with the browser auto-opened on top of it.
 - Making an already-loaded, watched directory unreadable (e.g. `chmod 000` it while dirtree is running, with its row visible in the browser) triggers a live refresh that briefly flashes that row's background red, distinct from the green post-open flash and from selection's reverse-video; the row's inline `[error]` text (already covered elsewhere in this list) remains visible after the flash itself fades, rather than disappearing along with it.
-- Making a not-yet-expanded directory unreadable, then selecting it and pressing Right in the browser: the same red flash and inline `[error]` text appear immediately on that attempt, without needing a live-refresh cycle. Restoring its permissions and collapsing/re-expanding it (Left then Right) actually clears the error and shows its real contents, rather than the error lingering forever from the first failed attempt.
+- Making a not-yet-expanded directory unreadable, then selecting it and pressing Right in the browser: the same red flash and inline `[error]` text appear immediately on that attempt, without needing a live-refresh cycle; the row stays collapsed (`>` marker, not `v`) rather than showing as expanded with nothing under it. Pressing Right again on the same still-broken directory flashes red again (not just the first time), since it's still fully undisclosed. Restoring its permissions and pressing Right once more actually clears the error, marks it expanded, and shows its real contents, rather than the error lingering forever from the first failed attempt.
 - The browser's Return opens a file and displays it in the primary preview view without closing the browser, allowing several files to be queued before Escape/`b`.
 - Selecting a binary or unreadable file from the browser (Return), quick open, or content search's open action renders the corresponding failure message ("binary file, preview not available," or the OS error text) appended inline on that specific row (browser: `tree.Node.Err`, same as a directory listing error; quick open/content search: tracked by path since their rows aren't backed by a stable node) without navigating away or adding an open-files entry, and briefly flashes that row's background red (styleFlashError, §5.3) the same way a newly-unreadable directory does — the flash decays but the inline text persists until overwritten by a later successful open of that same path.
 - The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Return-to-display and `x`-to-remove, and its empty-list message renders when reachable.

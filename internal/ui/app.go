@@ -785,9 +785,13 @@ func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 		a.browserSelected = flat[tree.MoveSelection(idx, 1, len(flat))]
 	case ev.Key() == tcell.KeyRight:
 		target := a.browserSelected
-		hadErr := target.Err != ""
 		a.browserSelected = target.MoveRight(a.rootPath, a.ignorer)
-		if target.Err != "" && !hadErr {
+		// Flash on every attempt that ends in an error, not just the
+		// first: MoveRight/Expand retries the listing each time (a
+		// still-failing directory never gets marked Expanded, SPEC.md
+		// §3.1), so a still-broken directory the user keeps trying to
+		// disclose should keep giving feedback each time, not just once.
+		if target.Err != "" {
 			a.flagErrorFlashes([]string{target.Path})
 		}
 		a.syncWatches()
