@@ -1,12 +1,24 @@
 package openfiles
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nitti/dirtree/internal/preview"
 )
+
+// newListWithN returns a List with n bare entries (no file I/O), for
+// exercising the dropdown's paging/bulk-reorder math, which only cares
+// about entry count and position, not content.
+func newListWithN(n int) *List {
+	l := New()
+	for i := range n {
+		l.Entries = append(l.Entries, &Entry{Path: fmt.Sprintf("/entry%02d", i)})
+	}
+	return l
+}
 
 func writeFile(t *testing.T, dir, name string, content []byte) string {
 	t.Helper()
@@ -390,5 +402,127 @@ func TestOpeningAfterReorderStillAppendsAtEnd(t *testing.T) {
 
 	if len(l.Entries) != 3 || l.Entries[2].Path != c {
 		t.Fatalf("expected c appended at end regardless of reordering, got %+v", l.Entries)
+	}
+}
+
+// --- Open-files dropdown paging (TESTING.md "Open files list (§2.2, §2.3)") ---
+
+func TestPageComputesZeroBasedPageFromIndex(t *testing.T) {
+	cases := []struct{ i, want int }{{0, 0}, {9, 0}, {10, 1}, {19, 1}, {20, 2}, {23, 2}}
+	for _, c := range cases {
+		if got := Page(c.i, 10); got != c.want {
+			t.Errorf("Page(%d, 10) = %d, want %d", c.i, got, c.want)
+		}
+	}
+}
+
+func TestPageCountRoundsUpAndIsAtLeastOne(t *testing.T) {
+	cases := []struct{ count, want int }{{0, 1}, {1, 1}, {10, 1}, {11, 2}, {20, 2}, {23, 3}}
+	for _, c := range cases {
+		if got := PageCount(c.count, 10); got != c.want {
+			t.Errorf("PageCount(%d, 10) = %d, want %d", c.count, got, c.want)
+		}
+	}
+}
+
+func TestPageBoundsReturnsCorrectSlice(t *testing.T) {
+	if start, end := PageBounds(0, 10, 23); start != 0 || end != 10 {
+		t.Fatalf("page 0 of 23 = [%d,%d), want [0,10)", start, end)
+	}
+	if start, end := PageBounds(2, 10, 23); start != 20 || end != 23 {
+		t.Fatalf("page 2 of 23 = [%d,%d), want [20,23) (short final page)", start, end)
+	}
+}
+
+func TestSelectPageJumpsToFirstEntryOfAdjacentPage(t *testing.T) {
+	if got := SelectPage(15, 1, 10, 23); got != 20 {
+		t.Fatalf("SelectPage(15, +1) = %d, want 20 (first entry of page 2)", got)
+	}
+	if got := SelectPage(15, -1, 10, 23); got != 0 {
+		t.Fatalf("SelectPage(15, -1) = %d, want 0 (first entry of page 0)", got)
+	}
+}
+
+func TestSelectPageClampsAtEndsRatherThanWrapping(t *testing.T) {
+	if got := SelectPage(22, 1, 10, 23); got != 22 {
+		t.Fatalf("SelectPage past the last page = %d, want unchanged 22", got)
+	}
+	if got := SelectPage(3, -1, 10, 23); got != 3 {
+		t.Fatalf("SelectPage before the first page = %d, want unchanged 3", got)
+	}
+}
+
+func TestSelectPageNoOpOnEmptyList(t *testing.T) {
+	if got := SelectPage(0, 1, 10, 0); got != 0 {
+		t.Fatalf("SelectPage on empty list = %d, want unchanged 0", got)
+	}
+}
+
+func TestSelectDigitMapsToPageRelativePosition(t *testing.T) {
+	idx, ok := SelectDigit(15, 3, 10, 23) // page 1 (10-19), digit 3 -> index 13
+	if !ok || idx != 13 {
+		t.Fatalf("SelectDigit(15, 3) = (%d, %v), want (13, true)", idx, ok)
+	}
+}
+
+func TestSelectDigitNoOpPastShortFinalPage(t *testing.T) {
+	// count=23: last page is [20,23), only digits 0-2 have an entry.
+	if _, ok := SelectDigit(20, 5, 10, 23); ok {
+		t.Fatal("expected SelectDigit past the final page's last row to report no entry")
+	}
+	if idx, ok := SelectDigit(20, 2, 10, 23); !ok || idx != 22 {
+		t.Fatalf("SelectDigit(20, 2) = (%d, %v), want (22, true)", idx, ok)
+	}
+}
+
+func TestMoveDownPageMovesUpToPageSizePositions(t *testing.T) {
+	l := newListWithN(15)
+	l.Display(0)
+	newSel := l.MoveDownPage(0, 10)
+	if newSel != 10 {
+		t.Fatalf("MoveDownPage(0, 10) = %d, want 10", newSel)
+	}
+	if l.Entries[10].Path != "/entry00" {
+		t.Fatalf("expected entry00 to land at index 10, got %+v", l.Entries[10])
+	}
+	if l.DisplayedEntry().Path != "/entry00" {
+		t.Fatal("expected displayed entry to follow the bulk move")
+	}
+}
+
+func TestMoveDownPageClampsAtLastEntryRatherThanWrapping(t *testing.T) {
+	l := newListWithN(5)
+	newSel := l.MoveDownPage(0, 10)
+	if newSel != 4 {
+		t.Fatalf("MoveDownPage clamped = %d, want 4 (last index)", newSel)
+	}
+	if l.Entries[4].Path != "/entry00" {
+		t.Fatalf("expected entry00 to land at the last index, got %+v", l.Entries)
+	}
+}
+
+func TestMoveUpPageMovesUpToPageSizePositions(t *testing.T) {
+	l := newListWithN(15)
+	l.Display(14)
+	newSel := l.MoveUpPage(14, 10)
+	if newSel != 4 {
+		t.Fatalf("MoveUpPage(14, 10) = %d, want 4", newSel)
+	}
+	if l.Entries[4].Path != "/entry14" {
+		t.Fatalf("expected entry14 to land at index 4, got %+v", l.Entries[4])
+	}
+	if l.DisplayedEntry().Path != "/entry14" {
+		t.Fatal("expected displayed entry to follow the bulk move")
+	}
+}
+
+func TestMoveUpPageClampsAtFirstEntryRatherThanWrapping(t *testing.T) {
+	l := newListWithN(5)
+	newSel := l.MoveUpPage(4, 10)
+	if newSel != 0 {
+		t.Fatalf("MoveUpPage clamped = %d, want 0 (first index)", newSel)
+	}
+	if l.Entries[0].Path != "/entry04" {
+		t.Fatalf("expected entry04 to land at the first index, got %+v", l.Entries)
 	}
 }
