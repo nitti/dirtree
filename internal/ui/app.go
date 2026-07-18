@@ -109,6 +109,14 @@ const (
 	maxBrowserPaneWidth = 60
 	popupMarginX        = 4
 	popupMarginY        = 2
+
+	// Open-files-list overlay dropdown sizing (SPEC.md §2.3): wide enough
+	// to fit its own header row (page counter + keybinding legend) or
+	// its longest visible path, whichever is larger, clamped to this
+	// range so it still reads as a compact dropdown rather than growing
+	// to fill the terminal.
+	openFilesMinWidth = 40
+	openFilesMaxWidth = 84
 )
 
 // App holds all interactive state for a running session.
@@ -168,9 +176,10 @@ type App struct {
 	// preview view and both overlays' open actions operate on.
 	files *openfiles.List
 
-	// open-files-list overlay state (SPEC.md §2.3)
+	// open-files-list overlay state (SPEC.md §2.3): openFilesSelected is
+	// an index into files.Entries. Which page it falls on is derived
+	// (openfiles.Page), not stored, per that package's doc comment.
 	openFilesSelected int
-	openFilesScroll   int
 
 	// primary preview view's goto-line prompt state (SPEC.md §2.1);
 	// scroll and the wrapped-row cache live per-entry on
@@ -851,9 +860,13 @@ func (a *App) browserOpen() {
 }
 
 // handleOpenFilesKey implements the open-files-list overlay's input
-// handling (SPEC.md §2.3). Shift-Up/Shift-Down (reorder) are checked
-// ahead of plain Up/Down (navigate) since tcell reports them as the
-// same Key with ModShift set, not a distinct key.
+// handling (SPEC.md §2.3): a dropdown-style popup showing at most
+// openfiles.PageSize entries at a time ("a page"), each row labeled
+// with its 0-9 position on the current page. Shift-Page-Up/Shift-Page-
+// Down and Shift-Up/Shift-Down (reorder) are checked ahead of their
+// plain Page-Up/Page-Down and Up/Down counterparts (navigate) since
+// tcell reports the shifted and unshifted forms as the same Key with
+// ModShift set, not a distinct key.
 func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 	n := len(a.files.Entries)
 	shift := ev.Modifiers()&tcell.ModShift != 0
@@ -861,6 +874,14 @@ func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 	switch {
 	case ev.Key() == tcell.KeyEscape:
 		a.overlay = overlayNone
+	case ev.Key() == tcell.KeyPgUp && shift:
+		if n > 0 {
+			a.openFilesSelected = a.files.MoveUpPage(a.openFilesSelected, openfiles.PageSize)
+		}
+	case ev.Key() == tcell.KeyPgDn && shift:
+		if n > 0 {
+			a.openFilesSelected = a.files.MoveDownPage(a.openFilesSelected, openfiles.PageSize)
+		}
 	case ev.Key() == tcell.KeyUp && shift:
 		if n > 0 {
 			a.openFilesSelected = a.files.MoveUp(a.openFilesSelected)
@@ -869,6 +890,10 @@ func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 		if n > 0 {
 			a.openFilesSelected = a.files.MoveDown(a.openFilesSelected)
 		}
+	case ev.Key() == tcell.KeyPgUp:
+		a.openFilesSelected = openfiles.SelectPage(a.openFilesSelected, -1, openfiles.PageSize, n)
+	case ev.Key() == tcell.KeyPgDn:
+		a.openFilesSelected = openfiles.SelectPage(a.openFilesSelected, 1, openfiles.PageSize, n)
 	case ev.Key() == tcell.KeyUp:
 		if n > 0 {
 			a.openFilesSelected = tree.MoveSelection(a.openFilesSelected, -1, n)
@@ -880,6 +905,12 @@ func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 	case ev.Key() == tcell.KeyEnter:
 		if n > 0 {
 			a.files.Display(a.openFilesSelected)
+			a.overlay = overlayNone
+		}
+	case ev.Rune() >= '0' && ev.Rune() <= '9':
+		if idx, ok := openfiles.SelectDigit(a.openFilesSelected, int(ev.Rune()-'0'), openfiles.PageSize, n); ok {
+			a.openFilesSelected = idx
+			a.files.Display(idx)
 			a.overlay = overlayNone
 		}
 	case ev.Rune() == 'x':

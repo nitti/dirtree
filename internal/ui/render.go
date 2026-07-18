@@ -298,48 +298,118 @@ func (a *App) drawFinderList(w, h int) {
 	}
 }
 
-// drawOpenFiles renders the open-files-list overlay (SPEC.md §2.3):
-// every entry in list order as its root-relative, slash-delimited
-// path, the currently-displayed entry marked distinctly, or an
-// explanatory message if the list is empty.
+// drawOpenFiles renders the open-files-list overlay (SPEC.md §2.3): a
+// dropdown-style popup over the (unmodified, last-rendered) primary
+// preview view — the same "floating window over an unchanged
+// background" idiom the browser's popup layout uses (§5.1) — showing at
+// most openfiles.PageSize entries of the current page, each row labeled
+// with its 0-9 position, the currently-displayed entry marked
+// distinctly, or an explanatory message if the list is empty.
 func (a *App) drawOpenFiles(w, h int) {
-	a.drawHeader(w, headerText(w, "open files", "[return] display  [x] remove  [shift-up/down] reorder  [esc] close"))
+	a.drawHeader(w, a.menuBarText(w, previewLegend))
+	titleRows := a.drawFileTitleBar(0, 1, w, false)
+	a.drawPreview(0, 1+titleRows, w, h-1-titleRows)
 
 	entries := a.files.Entries
-	listHeight := h - 1
-	if listHeight < 1 {
-		return
-	}
+	y0 := 1
 
 	if len(entries) == 0 {
-		a.drawText(0, 1, w, centerPad("no open files", w), styleNormal)
+		boxW := min(max(openFilesMinWidth, 4), w)
+		boxH := min(4, h)
+		if boxW < 4 || boxH < 4 {
+			return
+		}
+		x0 := (w - boxW) / 2
+		a.drawOpenFilesBox(x0, y0, boxW, boxH, "open files", false, false)
+		innerW := boxW - 2
+		a.drawText(x0+1, y0+1, innerW, centerPad("no open files", innerW), styleNormal)
+		a.drawText(x0+1, y0+2, innerW, centerPad("[esc] close", innerW), styleNormal)
 		return
 	}
 
-	if a.openFilesSelected < a.openFilesScroll {
-		a.openFilesScroll = a.openFilesSelected
-	}
-	if a.openFilesSelected >= a.openFilesScroll+listHeight {
-		a.openFilesScroll = a.openFilesSelected - listHeight + 1
-	}
+	pageSize := openfiles.PageSize
+	page := openfiles.Page(a.openFilesSelected, pageSize)
+	start, end := openfiles.PageBounds(page, pageSize, len(entries))
+	pageCount := openfiles.PageCount(len(entries), pageSize)
+	counter := fmt.Sprintf("%d–%d/%d", start+1, end, len(entries))
+	legend := openFilesLegend(pageCount > 1)
 
-	for row := range listHeight {
-		i := a.openFilesScroll + row
-		if i >= len(entries) {
-			break
+	// Content-driven width: the header row (counter + a 1-column gap +
+	// legend) needs only the border columns around it, since headerText
+	// already accounts for its own internal spacing; row labels get 2
+	// extra columns of breathing room around them.
+	longest := len([]rune(counter)) + 1 + len([]rune(legend)) + 2
+	for i := start; i < end; i++ {
+		label := openFilesRowLabel(i-start, i == a.files.Displayed, tree.RelativeDisplayPath(a.rootPath, entries[i].Path))
+		if n := len([]rune(label)) + 4; n > longest {
+			longest = n
 		}
+	}
+	boxW := min(max(longest, openFilesMinWidth), min(openFilesMaxWidth, w))
+	itemRows := end - start
+	boxH := min(3+itemRows, h)
+	if boxW < 4 || boxH < 3 {
+		return
+	}
+	x0 := (w - boxW) / 2
+	innerW := boxW - 2
+
+	a.drawOpenFilesBox(x0, y0, boxW, boxH, "open files", page > 0, page < pageCount-1)
+	a.drawText(x0+1, y0+1, innerW, headerText(innerW, counter, legend), styleNormal)
+
+	for row := 0; row < itemRows && y0+2+row < y0+boxH-1; row++ {
+		i := start + row
 		style := styleNormal
 		if i == a.openFilesSelected {
 			style = styleSelected
 		}
-		label := tree.RelativeDisplayPath(a.rootPath, entries[i].Path)
-		if i == a.files.Displayed {
-			label = "* " + label
-		} else {
-			label = "  " + label
-		}
-		a.drawText(0, 1+row, w, label, style)
+		label := openFilesRowLabel(row, i == a.files.Displayed, tree.RelativeDisplayPath(a.rootPath, entries[i].Path))
+		a.drawText(x0+1, y0+2+row, innerW, label, style)
 	}
+}
+
+// drawOpenFilesBox draws the open-files dropdown's bordered box: the
+// title embedded in the top border like drawBox, plus a "▲" in the top
+// border's right end when a previous page exists and a "▼" in the
+// bottom border's right end when a next page exists — so "more items
+// available" is visible right at the edge it refers to (above/below)
+// without spending a content row on it.
+func (a *App) drawOpenFilesBox(x0, y0, w, h int, title string, hasPrev, hasNext bool) {
+	a.drawBox(x0, y0, w, h, title)
+	if hasPrev && w > 2 {
+		a.screen.SetContent(x0+w-2, y0, '▲', nil, styleNormal)
+	}
+	if hasNext && w > 2 {
+		a.screen.SetContent(x0+w-2, y0+h-1, '▼', nil, styleNormal)
+	}
+	a.fillRect(x0+1, y0+1, w-2, h-2, styleNormal)
+}
+
+// openFilesRowLabel renders one dropdown row: its 0-9 on-page position,
+// a marker for the currently-displayed entry, and the path.
+func openFilesRowLabel(digit int, displayed bool, path string) string {
+	marker := "  "
+	if displayed {
+		marker = "* "
+	}
+	return fmt.Sprintf("%d %s%s", digit, marker, path)
+}
+
+// openFilesLegend is the dropdown's keybinding legend (SPEC.md §2.3),
+// kept deliberately terse since it has to fit inside a narrow popup
+// rather than a full-width header row; pgup/pgdn is only listed when
+// there's more than one page to page through, the same "don't advertise
+// a key that does nothing right now" discipline the file title bar's
+// legend already follows. Shift-Page-Up/Down (the bulk-reorder
+// accelerator) is intentionally left off even on a multi-page list —
+// it's a bulk variant of the already-listed shift+↑↓, the same way
+// arrow-key scrolling is never listed at the primary view either.
+func openFilesLegend(multiPage bool) string {
+	legend := "[0-9] open  [x] remove  [shift+↑↓] move"
+	if multiPage {
+		legend += "  [pgup/pgdn] page"
+	}
+	return legend + "  [esc] close"
 }
 
 // drawSearch renders the content search overlay (SPEC.md §9.2): a

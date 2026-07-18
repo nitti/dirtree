@@ -220,3 +220,103 @@ func clampIndex(i, count int) int {
 	}
 	return i
 }
+
+// MoveUpPage moves the entry at i up to pageSize positions toward the
+// top of the list (SPEC.md §2.3's Shift-Page-Up bulk reorder) by
+// repeating MoveUp, stopping early — rather than wrapping — the moment
+// a step is a no-op (i.e. i has reached the first entry). Returns the
+// entry's final index.
+func (l *List) MoveUpPage(i, pageSize int) int {
+	for range pageSize {
+		next := l.MoveUp(i)
+		if next == i {
+			break
+		}
+		i = next
+	}
+	return i
+}
+
+// MoveDownPage moves the entry at i up to pageSize positions toward the
+// bottom of the list (SPEC.md §2.3's Shift-Page-Down bulk reorder), the
+// mirror of MoveUpPage.
+func (l *List) MoveDownPage(i, pageSize int) int {
+	for range pageSize {
+		next := l.MoveDown(i)
+		if next == i {
+			break
+		}
+		i = next
+	}
+	return i
+}
+
+// PageSize is the number of open-files entries shown per page in the
+// open-files-list overlay's dropdown (SPEC.md §2.3): fixed so each
+// visible row can be labeled with a single digit (0-9) for direct
+// select-and-open.
+const PageSize = 10
+
+// Page returns the 0-based page index i falls on for the given page
+// size (SPEC.md §2.3). Page is deliberately not stored anywhere — it's
+// derived fresh from the selected index and the list's current length
+// every time it's needed, the same "recompute from current state"
+// discipline the rest of the app's layout follows, so a page never
+// needs to be kept in sync with reorders/removals happening elsewhere.
+func Page(i, pageSize int) int {
+	if pageSize <= 0 || i < 0 {
+		return 0
+	}
+	return i / pageSize
+}
+
+// PageCount returns the total number of pages for count entries and the
+// given page size (at least 1, so an empty or single-page list still
+// reports one page).
+func PageCount(count, pageSize int) int {
+	if count <= 0 || pageSize <= 0 {
+		return 1
+	}
+	return (count-1)/pageSize + 1
+}
+
+// PageBounds returns the [start, end) index bounds of page p within a
+// list of count entries at the given page size.
+func PageBounds(p, pageSize, count int) (start, end int) {
+	start = p * pageSize
+	if start > count {
+		start = count
+	}
+	end = start + pageSize
+	if end > count {
+		end = count
+	}
+	return start, end
+}
+
+// SelectPage returns the selected index after jumping a full page
+// forward/backward (delta = +1/-1) from i's current page, landing on
+// the target page's first entry (SPEC.md §2.3's Page Up/Down). Clamped
+// at the first/last page rather than wrapping — a no-op, returning i
+// unchanged, past either end or on an empty list.
+func SelectPage(i, delta, pageSize, count int) int {
+	if count == 0 {
+		return i
+	}
+	p := Page(i, pageSize) + delta
+	if p < 0 || p >= PageCount(count, pageSize) {
+		return i
+	}
+	start, _ := PageBounds(p, pageSize, count)
+	return start
+}
+
+// SelectDigit returns the entry index for digit d (0-9) on i's current
+// page, and whether that position actually holds an entry (SPEC.md
+// §2.3's digit-key instant open, a no-op past the current page's last
+// row — e.g. a short final page).
+func SelectDigit(i, d, pageSize, count int) (idx int, ok bool) {
+	start, end := PageBounds(Page(i, pageSize), pageSize, count)
+	idx = start + d
+	return idx, idx >= start && idx < end
+}
