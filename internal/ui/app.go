@@ -2,14 +2,13 @@
 // loop, input handling, resize polling, and escape-timeout
 // configuration (SPEC.md §6.2, §6.3). Unlike internal/tree,
 // internal/openfiles, internal/match, internal/preview,
-// internal/layout, and internal/spinner, this package is not expected
-// to be unit-tested — verification is manual, in a real terminal.
+// and internal/spinner, this package is not expected to be
+// unit-tested — verification is manual, in a real terminal.
 //
 // The primary preview view's own content rendering, scrolling, and
 // goto-line (§2.1) is wired alongside the browser (§3.4, including its
 // jump-to-file typing mode, §4.3), quick open (§4.2), and
-// open-files-list (§2.3) overlays, plus the browser's dual split/popup
-// layout (§5.1).
+// open-files-list (§2.3) overlays, all rendered full-screen (§5.1).
 package ui
 
 import (
@@ -22,7 +21,6 @@ import (
 	"github.com/nitti/dirtree/internal/find"
 	"github.com/nitti/dirtree/internal/ignore"
 	"github.com/nitti/dirtree/internal/index"
-	"github.com/nitti/dirtree/internal/layout"
 	"github.com/nitti/dirtree/internal/match"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
@@ -78,14 +76,6 @@ const (
 	searchFlashDuration       = 400 * time.Millisecond
 	watchDebounce             = 300 * time.Millisecond
 	previewByteCap            = preview.DefaultByteCap
-
-	// Browser split/popup layout (SPEC.md §5.1).
-	previewMaxWidth     = 120 // preview pane's own width cap in split view
-	minPreviewWidth     = 40  // minimum usable preview width for the split-vs-popup threshold
-	minBrowserPaneWidth = 20
-	maxBrowserPaneWidth = 60
-	popupMarginX        = 4
-	popupMarginY        = 2
 
 	// Open-files-list overlay dropdown sizing (SPEC.md §2.3): wide enough
 	// to fit its own header row (page counter + keybinding legend) or
@@ -653,10 +643,7 @@ func (a *App) previewViewportHeight() int {
 // to the preview's wrapped text at the primary preview view when no
 // overlay is active (full terminal width). This is only used by the
 // scroll/goto-line key handlers, which are only reachable in that
-// context (SPEC.md §5.1: the preview pane is read-only, with a
-// narrower width, while the browser's split-view overlay is active —
-// drawPreview computes that width itself from the layout it's given,
-// independently of this helper).
+// context.
 func (a *App) computedPreviewWidth() int {
 	w, _ := a.screen.Size()
 	e := a.files.DisplayedEntry()
@@ -1297,39 +1284,4 @@ func indexOf(list []*tree.Node, n *tree.Node) int {
 		}
 	}
 	return 0
-}
-
-// browserPaneWidth returns the browser pane's width for split view
-// (SPEC.md §5.1): wide enough to fit the longest currently-visible
-// row's rendered label (indentation + expand marker + name), clamped
-// to [minBrowserPaneWidth, maxBrowserPaneWidth].
-func (a *App) browserPaneWidth() int {
-	flat := a.root.Flatten()
-	lengths := make([]int, len(flat))
-	for i, n := range flat {
-		lengths[i] = n.Depth*2 + 2 + len(n.Name) // indent + marker + name, matching browserLabel
-	}
-	return layout.ComputeBrowserPaneWidth(lengths, minBrowserPaneWidth, maxBrowserPaneWidth)
-}
-
-// computeSplitLayout decides split-vs-popup and, for split view, the
-// browser-pane and preview-pane widths to render, per SPEC.md §5.1: the
-// preview pane's own width is capped at previewMaxWidth; once the
-// terminal is wide enough that the preview would exceed that cap, the
-// extra width grows the browser pane (up to its own max) instead of
-// stretching the preview further.
-func (a *App) computeSplitLayout(termWidth int) (browserWidth, previewPaneWidth int, split bool) {
-	baseBrowserWidth := a.browserPaneWidth()
-	if !layout.ShouldSplitView(termWidth, baseBrowserWidth, minPreviewWidth) {
-		return baseBrowserWidth, 0, false
-	}
-
-	natural := termWidth - baseBrowserWidth - 1
-	if natural <= previewMaxWidth {
-		return baseBrowserWidth, natural, true
-	}
-
-	leftover := natural - previewMaxWidth
-	browserWidth = min(baseBrowserWidth+leftover, maxBrowserPaneWidth)
-	return browserWidth, previewMaxWidth, true
 }
