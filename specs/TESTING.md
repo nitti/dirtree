@@ -154,6 +154,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Opening quick open from the primary preview view and pressing Return on a match opens/reuses the corresponding open-files entry, closes quick open, and lands on the preview showing it.
 - Escape from quick open returns to the primary preview view's displayed entry (or empty state) unchanged — nothing is opened.
 - `o` has no effect while the browser overlay is active, and `s` has no effect while the browser or quick open overlays are active: browse, quick open, and content search are mutually exclusive (§5.1), so reaching one from another requires closing back to the primary preview view first (Escape, or `b` for the browser).
+- Page Up/Page Down in quick open move the selection by the match list's own visible height, clamped at the first/last match rather than wrapping (unlike Tab/Shift-Tab); covered by `TestMoveSelectionClamped*` in `internal/tree`, the pure function quick open's Page Up/Down handling is built on.
 
 ## Jump to file: in-browser incremental jump (§4.3)
 
