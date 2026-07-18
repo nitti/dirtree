@@ -129,6 +129,10 @@ type App struct {
 	// toastMessage == "" means no toast is active.
 	toastMessage string
 	toastStart   time.Time
+	// toastBoldRanges marks [start, end) rune ranges within toastMessage
+	// (e.g. reloaded file names, SPEC.md §6.1a) to render bold, so the
+	// scannable part of a toast stands out from its surrounding prose.
+	toastBoldRanges [][2]int
 
 	// finder state, used by the quick open overlay (SPEC.md §4.2).
 	finderQuery    string
@@ -283,24 +287,38 @@ func (a *App) handleFSChange() {
 		a.flagErrorFlashes(newlyErrored)
 	}
 	if reloaded := a.files.Reload(previewByteCap); len(reloaded) > 0 {
-		a.showToast(reloadToastMessage(reloaded))
+		msg, boldRanges := reloadToastMessage(reloaded)
+		a.showToast(msg, boldRanges...)
 	}
 }
 
 // reloadToastMessage formats the names of one or more just-reloaded
-// open files (SPEC.md §6.1a) into the transient notification text.
-func reloadToastMessage(names []string) string {
-	if len(names) == 1 {
-		return names[0] + " reloaded (changed on disk)"
+// open files (SPEC.md §6.1a) into the transient notification text,
+// along with the rune ranges each name occupies so the caller can
+// render them bold for easier visual scanning.
+func reloadToastMessage(names []string) (string, [][2]int) {
+	var b strings.Builder
+	ranges := make([][2]int, 0, len(names))
+	for i, name := range names {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		start := len([]rune(b.String()))
+		b.WriteString(name)
+		ranges = append(ranges, [2]int{start, len([]rune(b.String()))})
 	}
-	return strings.Join(names, ", ") + " reloaded (changed on disk)"
+	b.WriteString(" reloaded (changed on disk)")
+	return b.String(), ranges
 }
 
 // showToast starts the generic bottom-right transient notification
 // (SPEC.md §5.3) with msg, replacing any toast already in progress.
-func (a *App) showToast(msg string) {
+// boldRanges optionally marks [start, end) rune ranges of msg to
+// render bold (e.g. the reloaded file names).
+func (a *App) showToast(msg string, boldRanges ...[2]int) {
 	a.toastMessage = msg
 	a.toastStart = time.Now()
+	a.toastBoldRanges = boldRanges
 }
 
 // flagErrorFlashes starts a brief red flash (SPEC.md §2.2, §6.1, §5.3)
