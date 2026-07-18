@@ -24,11 +24,17 @@ func waitDone(t *testing.T, idx *Index) []Entry {
 }
 
 func TestSinceDoneReportsFalseUntilBuildFinishes(t *testing.T) {
+	// Constructed directly (bypassing Start) rather than checking SinceDone
+	// immediately after a real Start call: on a small/empty tree the
+	// background goroutine can finish before control returns to the test,
+	// so racing it would make this assertion flaky rather than meaningful.
+	notYetStarted := &Index{startTime: time.Now()}
+	if _, done := notYetStarted.SinceDone(); done {
+		t.Fatal("expected SinceDone to report not-done before the build has finished")
+	}
+
 	root := t.TempDir()
 	idx := Start(root, nil)
-	if _, done := idx.SinceDone(); done {
-		t.Fatal("expected SinceDone to report not-done immediately after Start")
-	}
 	waitDone(t, idx)
 	if elapsed, done := idx.SinceDone(); !done || elapsed < 0 {
 		t.Fatalf("expected SinceDone to report done with a non-negative elapsed duration, got done=%v elapsed=%v", done, elapsed)
