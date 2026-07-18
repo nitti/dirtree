@@ -44,7 +44,7 @@ var (
 
 const (
 	previewLegend = "[b] browse  [tab] open files  [o] quick open  [s] search  [q] quit"
-	browserLegend = "[return] open  [/] jump to file  [o] quick open  [s] search  [b/esc] close"
+	browserLegend = "[return] open  [/] jump to file  [b/esc] close"
 	jumpLegend    = "[tab] next match  [return] done  [esc] cancel"
 	// searchLegend documents the content search overlay's actions (SPEC.md
 	// §9.2): Return opens the selected row (jumping to its line if it's a

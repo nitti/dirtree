@@ -44,29 +44,6 @@ const (
 	overlaySearch
 )
 
-// searchEntryPoint records which screen the content search overlay
-// (SPEC.md §9) was opened from, so Escape returns to it. Both entry
-// points behave identically once the overlay is open (§9.2).
-type searchEntryPoint int
-
-const (
-	searchFromBrowser searchEntryPoint = iota
-	searchFromPreview
-)
-
-// quickOpenEntryPoint records which screen quick open (SPEC.md §4.2)
-// was opened from, so Escape returns to it. Both entry points behave
-// identically once the overlay is open — opening a match always lands
-// on the primary preview view regardless of entry point (mirroring
-// content search's own entry-point handling), so this only affects
-// Escape.
-type quickOpenEntryPoint int
-
-const (
-	quickOpenFromPreview quickOpenEntryPoint = iota
-	quickOpenFromBrowser
-)
-
 // searchOutcome is what a background content-search scan (SPEC.md §9.1)
 // sends back once it finishes (or is canceled), tagged with the
 // generation it was started for so a stale result from a superseded
@@ -140,8 +117,7 @@ type App struct {
 	finderMatches  []index.Entry // nil while the background index isn't done yet, distinct from "genuinely zero matches"
 	finderSelected int
 	finderScroll   int
-	finderMessage  string              // transient inline open-failure message, quick open only (§2.2)
-	quickOpenEntry quickOpenEntryPoint // which screen quick open was opened from, so Escape returns to it
+	finderMessage  string // transient inline open-failure message, quick open only (§2.2)
 
 	// jump-to-file typing mode (SPEC.md §4.3): not a separate overlay —
 	// App.overlay stays overlayBrowser throughout, and the browser's own
@@ -156,7 +132,6 @@ type App struct {
 	jumpPrevScroll   int
 
 	// content search overlay state (SPEC.md §9)
-	searchEntry      searchEntryPoint
 	searchQuery      string
 	searchRegex      bool                // ModeRegex vs. ModeSubstring toggle (ctrl+r)
 	searchResults    []search.FileResult // nil while not yet searched (empty query, waiting on index, or a scan in flight), distinct from "searched, zero matches"
@@ -410,9 +385,9 @@ func (a *App) handlePreviewKey(ev *tcell.EventKey) {
 		a.overlay = overlayOpenFiles
 		a.openFilesSelected = max(a.files.Displayed, 0)
 	case ev.Rune() == 'o':
-		a.openQuickOpen(quickOpenFromPreview)
+		a.openQuickOpen()
 	case ev.Rune() == 's':
-		a.openSearch(searchFromPreview)
+		a.openSearch()
 	case ev.Rune() == 'q':
 		a.quit = true
 	case ev.Key() == tcell.KeyUp:
@@ -741,6 +716,9 @@ func clamp(v, lo, hi int) int {
 // it from the primary preview view. While jump-to-file typing mode
 // (§4.3) is active, every key below is bypassed in favor of
 // handleJumpKey, since jump mode repurposes all of them as query input.
+// `o` and `s` have no effect here — browse, quick open, and content
+// search are mutually exclusive (SPEC.md §5.1): reaching another one
+// requires closing the browser back to the primary preview view first.
 func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 	if a.jumpActive {
 		a.handleJumpKey(ev)
@@ -768,10 +746,6 @@ func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 		a.browserOpen()
 	case ev.Rune() == '/':
 		a.openJumpToFile()
-	case ev.Rune() == 'o':
-		a.openQuickOpen(quickOpenFromBrowser)
-	case ev.Rune() == 's':
-		a.openSearch(searchFromBrowser)
 	case ev.Rune() == 'b', ev.Key() == tcell.KeyEscape:
 		a.browserMessage = ""
 		a.overlay = overlayNone
@@ -927,28 +901,16 @@ func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 	}
 }
 
-// openQuickOpen opens the quick open overlay (SPEC.md §4.2) from
-// whichever screen it was triggered from — the primary preview view or
-// the browser — remembering entry so Escape can return to it. Per
-// SPEC.md §5.2, opening it while indexing is already done means the
-// user has directly seen indexing is ready, so it short-circuits the
-// badge's minimum-display-duration floor.
-func (a *App) openQuickOpen(entry quickOpenEntryPoint) {
+// openQuickOpen opens the quick open overlay (SPEC.md §4.2), reachable
+// only from the primary preview view: browse, quick open, and content
+// search are mutually exclusive (SPEC.md §5.1), so Escape always
+// returns here rather than to some other mode. Per SPEC.md §5.2,
+// opening it while indexing is already done means the user has
+// directly seen indexing is ready, so it short-circuits the badge's
+// minimum-display-duration floor.
+func (a *App) openQuickOpen() {
 	a.overlay = overlayQuickOpen
-	a.quickOpenEntry = entry
 	a.openFinder()
-}
-
-// quickOpenReturnOverlay is which overlay Escape returns to: the
-// browser if quick open was entered from it, otherwise the primary
-// preview view. Opening a match, unlike Escape, always lands on the
-// primary preview view regardless of entry point (SPEC.md §4.2),
-// mirroring content search's own entry-point handling.
-func (a *App) quickOpenReturnOverlay() overlay {
-	if a.quickOpenEntry == quickOpenFromBrowser {
-		return overlayBrowser
-	}
-	return overlayNone
 }
 
 // openFinder resets quick open's query/match state and recomputes
@@ -1015,14 +977,14 @@ func (a *App) handleFinderTypingKey(ev *tcell.EventKey) bool {
 
 // handleQuickOpenKey implements quick open's input handling (SPEC.md
 // §4.2): a single action, opening the selected match into the
-// open-files list. Escape returns to whichever screen quick open was
-// opened from (quickOpenReturnOverlay); `o` has no special meaning
-// here — it's a live text filter, and "o" is much too common a letter
-// to double as a close key without breaking ordinary typing.
+// open-files list. Escape returns to the primary preview view; `o` has
+// no special meaning here — it's a live text filter, and "o" is much
+// too common a letter to double as a close key without breaking
+// ordinary typing.
 func (a *App) handleQuickOpenKey(ev *tcell.EventKey) {
 	switch {
 	case ev.Key() == tcell.KeyEscape:
-		a.overlay = a.quickOpenReturnOverlay()
+		a.overlay = overlayNone
 	case ev.Key() == tcell.KeyEnter:
 		a.performOpenIntoList()
 	default:
@@ -1048,17 +1010,16 @@ func (a *App) performOpenIntoList() {
 	a.overlay = overlayNone
 }
 
-// openSearch opens the content search overlay from the given entry
-// point (SPEC.md §9.1). Both entry points behave identically once open
-// (§9.2), so this only needs to remember where to return on Escape. The
-// query, results, selection, and per-file disclosure state are
-// deliberately left untouched here: content search persists across
-// close/reopen (Escape closes the overlay without discarding it) and is
-// only reset by the user explicitly clearing the query themselves
-// (backspacing it to empty, or typing a new one).
-func (a *App) openSearch(entry searchEntryPoint) {
+// openSearch opens the content search overlay (SPEC.md §9.1), reachable
+// only from the primary preview view: browse, quick open, and content
+// search are mutually exclusive (SPEC.md §5.1), so Escape always
+// returns here. The query, results, selection, and per-file disclosure
+// state are deliberately left untouched here: content search persists
+// across close/reopen (Escape closes the overlay without discarding
+// it) and is only reset by the user explicitly clearing the query
+// themselves (backspacing it to empty, or typing a new one).
+func (a *App) openSearch() {
 	a.overlay = overlaySearch
-	a.searchEntry = entry
 	a.searchMessage = ""
 }
 
@@ -1207,7 +1168,7 @@ func (a *App) handleSearchKey(ev *tcell.EventKey) {
 		// left alone: content search persists across close/reopen (see
 		// openSearch), so Escape only leaves the overlay rather than
 		// discarding its state.
-		a.overlay = a.searchReturnOverlay()
+		a.overlay = overlayNone
 	case ev.Key() == tcell.KeyEnter:
 		// Opening always leaves the overlay open (SPEC.md §9.2) — Escape
 		// is what closes it (and preserves state when it does) — so
@@ -1253,16 +1214,6 @@ func (a *App) handleSearchKey(ev *tcell.EventKey) {
 		a.searchQuery += string(ev.Rune())
 		a.recomputeSearch()
 	}
-}
-
-// searchReturnOverlay is which overlay Escape (or a successful open)
-// lands on: the browser if the overlay was entered from it, otherwise
-// back to the primary preview view.
-func (a *App) searchReturnOverlay() overlay {
-	if a.searchEntry == searchFromBrowser {
-		return overlayBrowser
-	}
-	return overlayNone
 }
 
 // performSearchOpen implements Return (SPEC.md §9.2): open the selected
