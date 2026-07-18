@@ -31,7 +31,7 @@
 - Before making any code change, check the state of the current branch: if it's `main` (or any shared branch) with a clean working tree, create a new worktree (and matching feature branch) with `git worktree add` and make the change there, not in the primary checkout.
 - Exception: if the current branch is already a feature branch and already has uncommitted or committed changes in progress (i.e. you're mid-task on it), keep working in place — don't switch to a worktree mid-task just to satisfy this rule.
 - The point of a worktree is that the user can build and run it locally with no extra setup — `cd` in and `go build`/`go run` just works. That's the requirement; the mechanism is not prescribed. In practice this means normal, fully-checked-out working directories (no `--no-checkout`, sparse-checkout, or detached-HEAD-only setups), but if some other worktree configuration would still let the user smoke-test immediately, that's fine too — never leave a worktree in a state that requires extra steps to produce a runnable checkout.
-- Place worktrees as sibling directories of the main checkout (e.g. `../dirtree-<branch-name>`), not nested inside it, so tooling that walks the repo tree doesn't trip over them.
+- Place worktrees under `~/worktrees/dirtree/<branch-name>/` (the global convention in `~/.claude/CLAUDE.md`), not as loose siblings of the main checkout and not nested inside it, so they don't clutter the home directory, so tooling that walks the repo tree doesn't trip over them, and so it stays obvious which checkout (`/Users/tomnitti/dirtree`) is the canonical project root.
 - When a task is done and its branch is merged, remove the worktree (`git worktree remove`) rather than leaving it around indefinitely.
 
 ## Commits and Pull Requests
