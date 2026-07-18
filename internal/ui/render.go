@@ -42,12 +42,18 @@ var (
 	// unmistakable at a glance rather than blending into the rest of the
 	// overlay.
 	styleSearchInput = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
-	// styleSearchFlash briefly replaces a search-result file row's normal
-	// style right after it's opened (performSearchOpen/searchFlashPath),
+	// styleFlash briefly replaces a just-opened file row's normal style
+	// (browserOpen/browserFlashPath, performSearchOpen/searchFlashPath),
 	// as an on-open confirmation distinct from styleSelected (cursor
 	// position) and from the lasting "●" already-open indicator every
 	// open file's row shows regardless of when it was opened.
-	styleSearchFlash = tcell.StyleDefault.Background(tcell.ColorGreen).Foreground(tcell.ColorBlack).Bold(true)
+	styleFlash = tcell.StyleDefault.Background(tcell.ColorGreen).Foreground(tcell.ColorBlack).Bold(true)
+	// styleDir sets quick open's directory-path rows apart from file
+	// rows (SPEC.md §4.2), so it's clear at a glance which matches are
+	// openable (files) versus just path segments shown for context
+	// (directories, never a valid quick open target since only files
+	// can be opened into the open-files list).
+	styleDir = tcell.StyleDefault.Foreground(tcell.ColorTeal).Bold(true)
 )
 
 const (
@@ -235,11 +241,17 @@ func (a *App) drawFinderList(w, h int) {
 			if i >= len(a.finderMatches) {
 				break
 			}
+			match := a.finderMatches[i]
 			style := styleNormal
+			if match.IsDir {
+				style = styleDir
+			}
 			if i == a.finderSelected {
+				// SPEC.md §5.2: the cursor's own highlight always wins
+				// over any other row styling.
 				style = styleSelected
 			}
-			a.drawText(0, listTop+row, w, a.finderMatches[i].RelPath, style)
+			a.drawText(0, listTop+row, w, match.RelPath, style)
 		}
 	}
 
@@ -433,8 +445,8 @@ func (a *App) drawSearch(w, h int) {
 				style = styleSelected
 			}
 			row := rows[i]
-			if !row.isHit && a.searchResults[row.file].AbsPath == a.searchFlashPath && time.Since(a.searchFlashStart) < searchFlashDuration {
-				style = styleSearchFlash
+			if !row.isHit && a.searchResults[row.file].AbsPath == a.searchFlashPath && time.Since(a.searchFlashStart) < flashDuration {
+				style = styleFlash
 			}
 			a.drawText(0, listTop+line, w, searchRowLabel(a.searchResults, a.searchCollapsed, a.files, row), style)
 		}
@@ -795,21 +807,28 @@ func (a *App) drawBrowser(x0, y0, w, h int) {
 		n := flat[i]
 		style := styleNormal
 		switch {
+		// SPEC.md §5.2: the flash takes precedence here, unlike content
+		// search's own flash/selected precedence — Return never moves
+		// the browser's selection (§3.4), so the just-opened row is
+		// always the already-selected row; if styleSelected won here the
+		// same way it does in content search, the flash would be
+		// permanently masked by reverse-video and never actually visible.
+		case n.Path == a.browserFlashPath && time.Since(a.browserFlashStart) < flashDuration:
+			style = styleFlash
 		case n == a.browserSelected:
-			// SPEC.md §5.2: the cursor's own highlight always wins over
-			// jump mode's match highlight, since the selected row is
-			// itself one of the matches whenever jump mode is active.
 			style = styleSelected
 		case isMatch[n]:
 			style = styleFindMatch
 		}
-		a.drawText(x0, y0+row, w, browserLabel(n), style)
+		a.drawText(x0, y0+row, w, browserLabel(n, a.files.IsOpen(n.Path)), style)
 	}
 }
 
 // browserLabel renders one browser row's indentation, expand/collapse
-// marker, name, and any per-node error indicator (SPEC.md §5.2).
-func browserLabel(n *tree.Node) string {
+// marker, lasting "●" open indicator (files already in the open-files
+// list, SPEC.md §2.2/§5.2 — the same indicator content search's own
+// file rows use, §9.2), name, and any per-node error indicator.
+func browserLabel(n *tree.Node, open bool) string {
 	indent := strings.Repeat("  ", n.Depth)
 	marker := "  "
 	if n.IsDir {
@@ -819,7 +838,11 @@ func browserLabel(n *tree.Node) string {
 			marker = "> "
 		}
 	}
-	label := indent + marker + n.Name
+	openMarker := " "
+	if open {
+		openMarker = "●"
+	}
+	label := indent + marker + openMarker + " " + n.Name
 	if n.Err != "" {
 		label += " [" + n.Err + "]"
 	}
