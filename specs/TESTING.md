@@ -54,6 +54,16 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Shift-Up on the first entry is a no-op: list order and overlay selection are both unchanged.
 - Reordering via Shift-Up/Shift-Down does not change which entry is displayed and does not reset the moved entry's stored scroll/goto state.
 - Opening a new file after the list has been manually reordered still appends the new entry at the end, regardless of the manual reordering already applied to existing entries.
+- An index's page (0-based) is its position divided by the page size, for a range of indices spanning several pages including exact page boundaries (e.g. the last index of one page and the first index of the next).
+- The total page count for a given entry count is always at least 1 (including zero entries), and rounds up for a partial final page.
+- A page's index bounds correctly reflect a short final page (fewer than a full page's worth of entries) as well as a full one.
+- Jumping to the next/previous page from an index lands on the target page's first entry (position 0 on that page), not on the same relative position carried over from the source page.
+- Jumping past the last page or before the first page is a no-op (clamped, not wrapped) — the index is left unchanged.
+- Jumping to the next/previous page on an empty list is a no-op.
+- Selecting a digit (0-9) resolves to the entry at that position on the current page, for a digit that has a corresponding entry.
+- Selecting a digit past the current page's last row (e.g. a short final page) reports no entry, distinguishing it from a valid position 0.
+- A bulk page-reorder (Shift-Page-Up/Shift-Page-Down) moves the entry up to a full page's worth of positions toward the top/bottom, and the displayed entry (if it was the one moved) follows it.
+- A bulk page-reorder that would cross a list end stops at that end rather than being a no-op or wrapping around — moving as many positions as are actually available.
 
 ## In-file find matching (§2.4)
 
