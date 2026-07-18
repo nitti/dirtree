@@ -146,10 +146,11 @@ type App struct {
 	// Escape can restore them exactly.
 	jumpActive       bool
 	jumpQuery        string
-	jumpMatches      []*tree.Node // recomputed on every query change from a.root.Flatten(); rows both files and directories
+	jumpMatches      []*tree.Node // recomputed on every query change from a.jumpScope.Flatten(); rows both files and directories
 	jumpSelected     int          // index into jumpMatches
 	jumpPrevSelected *tree.Node
 	jumpPrevScroll   int
+	jumpScope        *tree.Node // matching root for jumpMatches: a.root normally, or a directory drilled into via slash-to-expand (SPEC.md §4.3)
 
 	// content search overlay state (SPEC.md §9)
 	searchQuery     string
@@ -496,7 +497,7 @@ func (a *App) clearFind() {
 }
 
 // handleGotoPromptKey handles input while the goto-line prompt is open
-// (SPEC.md §2.1): only digits and backspace are accepted, Enter jumps
+// (SPEC.md §2.1): only digits, backspace, and Ctrl+U (clear) are accepted, Enter jumps
 // to the entered line, Escape cancels without changing scroll.
 func (a *App) handleGotoPromptKey(ev *tcell.EventKey) {
 	switch {
@@ -509,6 +510,8 @@ func (a *App) handleGotoPromptKey(ev *tcell.EventKey) {
 		if len(a.gotoInput) > 0 {
 			a.gotoInput = a.gotoInput[:len(a.gotoInput)-1]
 		}
+	case ev.Key() == tcell.KeyCtrlU:
+		a.gotoInput = ""
 	case ev.Rune() >= '0' && ev.Rune() <= '9':
 		a.gotoInput += string(ev.Rune())
 	}
@@ -574,6 +577,8 @@ func (a *App) handleFindPromptKey(ev *tcell.EventKey) {
 			r := []rune(a.findInput)
 			a.findInput = string(r[:len(r)-1])
 		}
+	case ev.Key() == tcell.KeyCtrlU:
+		a.findInput = ""
 	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
 		a.findInput += string(ev.Rune())
 	}
@@ -817,16 +822,19 @@ func (a *App) openJumpToFile() {
 	a.jumpSelected = 0
 	a.jumpPrevSelected = a.browserSelected
 	a.jumpPrevScroll = a.browserScroll
+	a.jumpScope = a.root
 }
 
 // recomputeJumpMatches rebuilds jumpMatches from the current query
-// against the browser's live flattened row list (SPEC.md §4.3's
+// against a.jumpScope's live flattened row list (SPEC.md §4.3's
 // candidate set: whatever the tree's current expand/collapse state
 // already exposes, files and directories alike), matching each row's
-// leaf name by case-insensitive prefix.
+// leaf name by case-insensitive prefix. jumpScope is normally the tree
+// root, but narrows after a slash-to-expand drill-down (see
+// handleJumpKey).
 func (a *App) recomputeJumpMatches() {
 	a.jumpSelected = 0
-	a.jumpMatches = tree.JumpMatches(a.root, a.jumpQuery)
+	a.jumpMatches = tree.JumpMatches(a.jumpScope, a.jumpQuery)
 }
 
 // handleJumpKey implements jump-to-file typing mode's input handling
@@ -859,6 +867,32 @@ func (a *App) handleJumpKey(ev *tcell.EventKey) {
 		a.recomputeJumpMatches()
 		if len(a.jumpMatches) > 0 {
 			a.browserSelected = a.jumpMatches[0]
+		}
+	case ev.Key() == tcell.KeyCtrlU:
+		a.jumpQuery = ""
+		a.recomputeJumpMatches()
+		if len(a.jumpMatches) > 0 {
+			a.browserSelected = a.jumpMatches[0]
+		}
+	case ev.Rune() == '/' && ev.Key() == tcell.KeyRune && len(a.jumpMatches) == 1 && a.jumpMatches[0].IsDir:
+		// Slash-to-expand (SPEC.md §4.3): when the query already
+		// uniquely identifies a directory, `/` disclosed it and
+		// re-scopes matching to its descendants instead of being
+		// consumed as a literal query character (which could never
+		// match anyway, since no filename contains `/`). This is
+		// jump to file's one deliberate exception to "never expands
+		// or collapses anything" — it only ever expands, never
+		// collapses, and only on this explicit unique-match+`/` signal.
+		target := a.jumpMatches[0]
+		target.Expand(a.rootPath, a.ignorer)
+		if target.Err != "" {
+			a.flagErrorFlashes([]string{target.Path})
+		} else {
+			a.jumpScope = target
+			a.jumpQuery = ""
+			a.browserSelected = target
+			a.syncWatches()
+			a.recomputeJumpMatches()
 		}
 	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
 		a.jumpQuery += string(ev.Rune())
@@ -1074,6 +1108,10 @@ func (a *App) handleFinderTypingKey(ev *tcell.EventKey) bool {
 			r := []rune(a.finderQuery)
 			a.finderQuery = string(r[:len(r)-1])
 		}
+		a.finderSelected = 0
+		a.recomputeFinderMatches()
+	case ev.Key() == tcell.KeyCtrlU:
+		a.finderQuery = ""
 		a.finderSelected = 0
 		a.recomputeFinderMatches()
 	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
