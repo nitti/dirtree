@@ -23,7 +23,14 @@ type Node struct {
 	IsDir    bool
 	Expanded bool
 	Children []*Node // nil until loaded; loading is idempotent
-	Err      string  // non-empty if listing this node's children failed
+	// Err is non-empty if the most recent operation on this node failed:
+	// listing its children (directories, set by LoadChildren/refreshChildren
+	// below) or, for a file, the UI's last attempt to open it (set
+	// directly by internal/ui on a failed open, per SPEC.md §2.2) — both
+	// are rendered the same way (browserLabel's inline `[error]` suffix,
+	// with a brief attention-flash, SPEC.md §5.3) since both are "the
+	// last thing this node's owner tried to do with it didn't work."
+	Err string
 
 	loaded bool
 }

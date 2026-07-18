@@ -151,14 +151,7 @@ func (a *App) drawBrowserOverlay(w, h int) {
 		a.drawHeaderMode(w, "BROWSE", browserLegend)
 	}
 
-	browserHeight := h - browserTop
-	if a.browserMessage != "" {
-		browserHeight--
-	}
-	a.drawBrowser(0, browserTop, w, browserHeight)
-	if a.browserMessage != "" {
-		a.drawText(0, h-1, w, a.browserMessage, styleError)
-	}
+	a.drawBrowser(0, browserTop, w, h-browserTop)
 
 	a.drawBadge(w, h)
 }
@@ -210,14 +203,13 @@ func (a *App) drawQuickOpen(w, h int) {
 }
 
 // drawFinderList renders quick open's flat, root-relative match list
-// (SPEC.md §4.1's index, §5.2's indexing/no-matches placeholder), plus
-// any inline failure message from a failed open.
+// (SPEC.md §4.1's index, §5.2's indexing/no-matches placeholder), with
+// any failed-open match (§2.2) showing its failure message inline,
+// appended the same way tree.Node.Err is in the browser, and flashing
+// red the same brief window (§5.3).
 func (a *App) drawFinderList(w, h int) {
 	const listTop = 2
 	listHeight := h - listTop
-	if a.finderMessage != "" {
-		listHeight--
-	}
 
 	_, done := a.idx.Snapshot()
 	switch {
@@ -243,16 +235,21 @@ func (a *App) drawFinderList(w, h int) {
 			if i >= len(a.finderMatches) {
 				break
 			}
+			match := a.finderMatches[i]
+			label := match.RelPath
+			errored := a.finderErrorPath != "" && match.AbsPath == a.finderErrorPath
+			if errored {
+				label += " [" + a.finderErrorMessage + "]"
+			}
 			style := styleNormal
-			if i == a.finderSelected {
+			switch {
+			case errored && time.Since(a.finderErrorFlashStart) < flashDuration:
+				style = styleFlashError
+			case i == a.finderSelected:
 				style = styleSelected
 			}
-			a.drawText(0, listTop+row, w, a.finderMatches[i].RelPath, style)
+			a.drawText(0, listTop+row, w, label, style)
 		}
-	}
-
-	if a.finderMessage != "" {
-		a.drawText(0, h-1, w, a.finderMessage, styleError)
 	}
 }
 
@@ -384,9 +381,6 @@ func (a *App) drawSearch(w, h int) {
 
 	const listTop = 2
 	listHeight := h - listTop
-	if a.searchMessage != "" {
-		listHeight--
-	}
 
 	switch {
 	case a.searchQuery == "":
@@ -436,20 +430,23 @@ func (a *App) drawSearch(w, h int) {
 			if i >= len(rows) {
 				break
 			}
-			style := styleNormal
-			if i == a.searchSelected {
-				style = styleSelected
-			}
 			row := rows[i]
-			if !row.isHit && a.searchResults[row.file].AbsPath == a.searchFlashPath && time.Since(a.searchFlashStart) < flashDuration {
+			label := searchRowLabel(a.searchResults, a.searchCollapsed, a.files, row)
+			fileErrored := !row.isHit && a.searchErrorPath != "" && a.searchResults[row.file].AbsPath == a.searchErrorPath
+			if fileErrored {
+				label += " [" + a.searchErrorMessage + "]"
+			}
+			style := styleNormal
+			switch {
+			case fileErrored && time.Since(a.searchErrorFlashStart) < flashDuration:
+				style = styleFlashError
+			case i == a.searchSelected:
+				style = styleSelected
+			case !row.isHit && a.searchResults[row.file].AbsPath == a.searchFlashPath && time.Since(a.searchFlashStart) < flashDuration:
 				style = styleFlash
 			}
-			a.drawText(0, listTop+line, w, searchRowLabel(a.searchResults, a.searchCollapsed, a.files, row), style)
+			a.drawText(0, listTop+line, w, label, style)
 		}
-	}
-
-	if a.searchMessage != "" {
-		a.drawText(0, h-1, w, a.searchMessage, styleError)
 	}
 }
 

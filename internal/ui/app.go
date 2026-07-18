@@ -70,10 +70,9 @@ const (
 	spinnerThreshold          = 250 * time.Millisecond
 	spinnerMinDisplayDuration = 1 * time.Second
 	spinnerFPS                = 10.0
-	// toastDisplayDuration/toastFadeDuration are the shared "show in full,
-	// then fade left-to-right" timing (internal/toast, SPEC.md §5.3) used
-	// by both the indexing-complete badge message and the transient error
-	// toast below.
+	// toastDisplayDuration/toastFadeDuration are the "show in full, then
+	// fade left-to-right" timing (internal/toast, SPEC.md §5.3) backing
+	// the indexing-complete badge message.
 	toastDisplayDuration = 2 * time.Second
 	toastFadeDuration    = 400 * time.Millisecond
 	completionMessage    = "indexing complete"
@@ -107,18 +106,19 @@ type App struct {
 	// browser overlay state (SPEC.md §3.4)
 	browserSelected   *tree.Node
 	browserScroll     int
-	browserMessage    string    // transient inline status/failure message (§2.2)
 	browserFlashPath  string    // absolute path of the file row most recently opened via browserOpen, for a brief post-open flash (mirrors searchFlashPath below)
 	browserFlashStart time.Time // when the flash started; drawn only while time.Since(browserFlashStart) < flashDuration
 	// browserErrorFlashes tracks a brief red flash (styleFlashError) for
-	// any directory whose listing newly started failing during a
-	// live-refresh (SPEC.md §6.1) — e.g. it lost read permission out from
-	// under the running session. Unlike browserFlashPath above, the flash
-	// itself is only the attention-grabbing part and always decays; the
-	// error text it's drawing attention to (tree.Node.Err, rendered
-	// inline by browserLabel) does not fade with it and stays until the
-	// error clears on its own. Keyed by path since more than one
-	// directory could newly error in the same debounced refresh.
+	// any node whose most recent operation failed — a directory that
+	// newly started failing to list during a live-refresh (SPEC.md §6.1),
+	// or a file that failed to open (§2.2, e.g. permission denied or
+	// binary). Unlike browserFlashPath above, the flash itself is only
+	// the attention-grabbing part and always decays; the error text it's
+	// drawing attention to (tree.Node.Err, rendered inline by
+	// browserLabel for both cases) does not fade with it and stays until
+	// overwritten by a later successful operation on that same node.
+	// Keyed by path since more than one directory could newly error in
+	// the same debounced live-refresh batch.
 	browserErrorFlashes map[string]time.Time
 
 	// finder state, used by the quick open overlay (SPEC.md §4.2).
@@ -126,7 +126,18 @@ type App struct {
 	finderMatches  []index.Entry // nil while the background index isn't done yet, distinct from "genuinely zero matches"
 	finderSelected int
 	finderScroll   int
-	finderMessage  string // transient inline open-failure message, quick open only (§2.2)
+	// finderErrorPath/finderErrorMessage/finderErrorFlashStart mirror
+	// tree.Node.Err/browserErrorFlashes for quick open (§2.2, §5.3):
+	// finderMatches has no stable per-entry identity to attach a
+	// persistent error to (it's rebuilt from the index on every
+	// keystroke), so the failed match's path and message are tracked
+	// here instead, appended inline to that row wherever it still
+	// appears and flashed red the same way. Cleared whenever the query
+	// changes, since a new query can't say anything about a stale
+	// open-failure from a previous one.
+	finderErrorPath       string
+	finderErrorMessage    string
+	finderErrorFlashStart time.Time
 
 	// jump-to-file typing mode (SPEC.md §4.3): not a separate overlay —
 	// App.overlay stays overlayBrowser throughout, and the browser's own
@@ -141,20 +152,29 @@ type App struct {
 	jumpPrevScroll   int
 
 	// content search overlay state (SPEC.md §9)
-	searchQuery      string
-	searchRegex      bool                // ModeRegex vs. ModeSubstring toggle (ctrl+r)
-	searchResults    []search.FileResult // nil while not yet searched (empty query, waiting on index, or a scan in flight), distinct from "searched, zero matches"
-	searchError      string              // non-empty only for an invalid regex query (ModeRegex); takes precedence over searchResults' nil/empty distinction
-	searchCollapsed  map[string]bool     // AbsPath -> collapsed; absent (or false) means expanded, so results start expanded by default
-	searchSelected   int                 // index into a.searchRows(), not directly into searchResults
-	searchScroll     int
-	searchMessage    string // transient inline failure message for open-into-list (§2.2)
-	searchGen        int
-	searchCancel     context.CancelFunc
-	searchScanStart  time.Time // when the in-flight scan (searchCancel != nil) started, for the spinner shown once it runs long enough to be noticeable
-	searchFlashPath  string    // AbsPath of the file row most recently opened via performSearchOpen, for a brief post-open flash
-	searchFlashStart time.Time // when the flash started; the flash is drawn only while time.Since(searchFlashStart) < flashDuration
-	searchDone       chan searchOutcome
+	searchQuery     string
+	searchRegex     bool                // ModeRegex vs. ModeSubstring toggle (ctrl+r)
+	searchResults   []search.FileResult // nil while not yet searched (empty query, waiting on index, or a scan in flight), distinct from "searched, zero matches"
+	searchError     string              // non-empty only for an invalid regex query (ModeRegex); takes precedence over searchResults' nil/empty distinction
+	searchCollapsed map[string]bool     // AbsPath -> collapsed; absent (or false) means expanded, so results start expanded by default
+	searchSelected  int                 // index into a.searchRows(), not directly into searchResults
+	searchScroll    int
+	// searchErrorPath/searchErrorMessage/searchErrorFlashStart mirror
+	// finderErrorPath et al. above for content search's open-into-list
+	// action (§2.2, §9.2, §5.3): AbsPath of the file row whose open
+	// attempt most recently failed (a hit row's failure attributes to
+	// its parent file row, the same way the on-open flash already does),
+	// the failure message, and when to stop flashing it red. Cleared
+	// whenever the query changes.
+	searchErrorPath       string
+	searchErrorMessage    string
+	searchErrorFlashStart time.Time
+	searchGen             int
+	searchCancel          context.CancelFunc
+	searchScanStart       time.Time // when the in-flight scan (searchCancel != nil) started, for the spinner shown once it runs long enough to be noticeable
+	searchFlashPath       string    // AbsPath of the file row most recently opened via performSearchOpen, for a brief post-open flash
+	searchFlashStart      time.Time // when the flash started; the flash is drawn only while time.Since(searchFlashStart) < flashDuration
+	searchDone            chan searchOutcome
 
 	// files is the open-files list (SPEC.md §2.2, §2.3) the primary
 	// preview view and both overlays' open actions operate on.
@@ -253,12 +273,14 @@ func (a *App) handleFSChange() {
 	}
 }
 
-// flagErrorFlashes starts a brief red flash (SPEC.md §6.1) for each path
-// in paths, drawing attention to the inline error text browserLabel
-// already renders for it (tree.Node.Err) without the error text itself
-// fading — only the flash decays. Also prunes any previously-flashed
-// path whose flash has already finished, so the map doesn't grow
-// unbounded over a long-running session.
+// flagErrorFlashes starts a brief red flash (SPEC.md §2.2, §6.1, §5.3)
+// for each path in paths, drawing attention to the inline error text
+// browserLabel already renders for it (tree.Node.Err) without the error
+// text itself fading — only the flash decays. Used both for a
+// live-refresh's newly-erroring directories (handleFSChange, several
+// paths at once) and a single failed file-open (browserOpen). Also
+// prunes any previously-flashed path whose flash has already finished,
+// so the map doesn't grow unbounded over a long-running session.
 func (a *App) flagErrorFlashes(paths []string) {
 	now := time.Now()
 	for p, start := range a.browserErrorFlashes {
@@ -758,24 +780,19 @@ func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 
 	switch {
 	case ev.Key() == tcell.KeyUp:
-		a.browserMessage = ""
 		a.browserSelected = flat[tree.MoveSelection(idx, -1, len(flat))]
 	case ev.Key() == tcell.KeyDown:
-		a.browserMessage = ""
 		a.browserSelected = flat[tree.MoveSelection(idx, 1, len(flat))]
 	case ev.Key() == tcell.KeyRight:
-		a.browserMessage = ""
 		a.browserSelected = a.browserSelected.MoveRight(a.rootPath, a.ignorer)
 		a.syncWatches()
 	case ev.Key() == tcell.KeyLeft:
-		a.browserMessage = ""
 		a.browserSelected = a.browserSelected.MoveLeft()
 	case ev.Key() == tcell.KeyEnter:
 		a.browserOpen()
 	case ev.Rune() == '/':
 		a.openJumpToFile()
 	case ev.Rune() == 'b', ev.Key() == tcell.KeyEscape:
-		a.browserMessage = ""
 		a.overlay = overlayNone
 	}
 }
@@ -847,23 +864,28 @@ func (a *App) handleJumpKey(ev *tcell.EventKey) {
 // §2.2's open-failure signaling: a no-op on a directory; on a file, an
 // "opened" result displays it in the primary preview view without
 // closing the browser, so several files can be queued up in a row
-// before returning to the preview; a "failed" result leaves the
-// browser open with the message shown inline. On success, the opened
-// row also gets a brief flash (browserFlashPath/browserFlashStart,
-// drawn in drawBrowser) as an on-open confirmation, the same treatment
-// content search gives its own rows (performSearchOpen) — distinct
-// from the lasting "●" open indicator every open file's row shows
-// regardless of when it was opened.
+// before returning to the preview; a "failed" result leaves the browser
+// open with the failure recorded on the node itself (tree.Node.Err,
+// browserLabel's existing inline `[error]` rendering) and a brief red
+// flash (browserErrorFlashes/styleFlashError, §5.3) — the same treatment
+// a directory that newly fails to list gets from a live-refresh (§6.1),
+// unified since both are "the last operation on this node failed." On
+// success, the opened row also gets a brief flash (browserFlashPath/
+// browserFlashStart, drawn in drawBrowser) as an on-open confirmation,
+// the same treatment content search gives its own rows
+// (performSearchOpen) — distinct from the lasting "●" open indicator
+// every open file's row shows regardless of when it was opened.
 func (a *App) browserOpen() {
 	if a.browserSelected.IsDir {
 		return
 	}
 	res := a.files.Open(a.browserSelected.Path, previewByteCap)
 	if res.Outcome != openfiles.Opened {
-		a.browserMessage = res.Message
+		a.browserSelected.Err = res.Message
+		a.flagErrorFlashes([]string{a.browserSelected.Path})
 		return
 	}
-	a.browserMessage = ""
+	a.browserSelected.Err = ""
 	a.browserFlashPath = a.browserSelected.Path
 	a.browserFlashStart = time.Now()
 }
@@ -953,7 +975,6 @@ func (a *App) openQuickOpen() {
 func (a *App) openFinder() {
 	a.finderQuery = ""
 	a.finderSelected = 0
-	a.finderMessage = ""
 	a.recomputeFinderMatches()
 	if _, done := a.idx.Snapshot(); done {
 		a.badgeSkip.NoteIndexAlreadyDone(true, a.idx.Elapsed())
@@ -961,26 +982,26 @@ func (a *App) openFinder() {
 }
 
 // finderListHeight returns quick open's match-list viewport height in
-// rows, mirroring drawFinderList's own layout math (header row, query
-// input row, and an inline message row when present) so Page-Up/Page-
-// Down move by the same number of rows the list actually shows.
+// rows, mirroring drawFinderList's own layout math (header row and query
+// input row — an open-failure now renders inline on the match row
+// itself rather than reserving a row of its own) so Page-Up/Page-Down
+// move by the same number of rows the list actually shows.
 func (a *App) finderListHeight() int {
 	_, h := a.screen.Size()
-	height := h - 2 // header row + query input row
-	if a.finderMessage != "" {
-		height--
-	}
-	return height
+	return h - 2 // header row + query input row
 }
 
 // recomputeFinderMatches rebuilds finderMatches from the current query
 // against the background index (SPEC.md §4.1), resetting match-selection
 // and scroll to the top — used only where the query itself just changed
 // (typing, backspace) or the overlay just opened, per §4.2's "reset
-// match-selection and scroll to the top" rule.
+// match-selection and scroll to the top" rule. Also clears any stale
+// open-failure recorded against the previous query's matches (§2.2),
+// since a new query can't say anything about it.
 func (a *App) recomputeFinderMatches() {
 	a.finderSelected = 0
 	a.finderScroll = 0
+	a.finderErrorPath = ""
 	a.refreshFinderMatches()
 }
 
@@ -1076,8 +1097,10 @@ func (a *App) handleQuickOpenKey(ev *tcell.EventKey) {
 // performOpenIntoList implements quick open's Enter action (SPEC.md
 // §4.2): open the selected match per §2.2's open semantics. An opened
 // result closes the overlay, landing on the primary preview view; a
-// failed result leaves quick open open with the message shown inline
-// instead of exiting (§2.2's open-failure signaling).
+// failed result leaves quick open open with the failure recorded
+// against that match's path (finderErrorPath/finderErrorMessage) and
+// rendered inline on its row by drawFinderList, plus a brief red flash
+// (§2.2, §5.3) — the same treatment browserOpen's failures get.
 func (a *App) performOpenIntoList() {
 	if len(a.finderMatches) == 0 {
 		return
@@ -1085,7 +1108,9 @@ func (a *App) performOpenIntoList() {
 	target := a.finderMatches[a.finderSelected]
 	res := a.files.Open(target.AbsPath, previewByteCap)
 	if res.Outcome != openfiles.Opened {
-		a.finderMessage = res.Message
+		a.finderErrorPath = target.AbsPath
+		a.finderErrorMessage = res.Message
+		a.finderErrorFlashStart = time.Now()
 		return
 	}
 	a.revealInBrowser(target.AbsPath)
@@ -1115,7 +1140,7 @@ func (a *App) revealInBrowser(absPath string) {
 // themselves (backspacing it to empty, or typing a new one).
 func (a *App) openSearch() {
 	a.overlay = overlaySearch
-	a.searchMessage = ""
+	a.searchErrorPath = ""
 }
 
 // searchRows flattens the current search results into displayable rows
@@ -1186,7 +1211,7 @@ func (a *App) recomputeSearch() {
 	a.cancelSearch()
 	a.searchSelected = 0
 	a.searchScroll = 0
-	a.searchMessage = ""
+	a.searchErrorPath = ""
 	a.searchError = ""
 	a.searchCollapsed = nil
 
@@ -1318,11 +1343,15 @@ func (a *App) handleSearchKey(ev *tcell.EventKey) {
 // closes the overlay (and, per openSearch/handleSearchKey, preserves
 // its state when it does). A "failed" result (e.g. the file changed or
 // was removed between scanning and opening) leaves the overlay open
-// with the message shown inline, per §2.2's open-failure signaling. On
-// success, the opened file's row also gets a brief flash (searchFlashPath/
-// searchFlashStart, drawn in drawSearch) as an on-open confirmation
-// distinct from the lasting "already open" indicator every open file's
-// row shows regardless of whether it was just opened this way.
+// with the failure recorded against that file's path
+// (searchErrorPath/searchErrorMessage) and rendered inline on its file
+// row by searchRowLabel, plus a brief red flash (§2.2, §5.3) — attributed
+// to the parent file row even when opened from one of its hit rows, the
+// same as the on-open flash below. On success, the opened file's row
+// also gets a brief flash (searchFlashPath/searchFlashStart, drawn in
+// drawSearch) as an on-open confirmation distinct from the lasting
+// "already open" indicator every open file's row shows regardless of
+// whether it was just opened this way.
 func (a *App) performSearchOpen() {
 	rows := a.searchRows()
 	if a.searchSelected < 0 || a.searchSelected >= len(rows) {
@@ -1333,10 +1362,12 @@ func (a *App) performSearchOpen() {
 
 	res := a.files.Open(result.AbsPath, previewByteCap)
 	if res.Outcome != openfiles.Opened {
-		a.searchMessage = res.Message
+		a.searchErrorPath = result.AbsPath
+		a.searchErrorMessage = res.Message
+		a.searchErrorFlashStart = time.Now()
 		return
 	}
-	a.searchMessage = ""
+	a.searchErrorPath = ""
 	a.searchFlashPath = result.AbsPath
 	a.searchFlashStart = time.Now()
 	a.revealInBrowser(result.AbsPath)
