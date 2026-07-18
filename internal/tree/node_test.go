@@ -3,6 +3,7 @@ package tree
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nitti/dirtree/internal/ignore"
@@ -225,6 +226,41 @@ func TestPermissionErrorYieldsZeroChildrenAndErrString(t *testing.T) {
 	if len(n.Children) != 0 {
 		t.Fatal("expected zero children on listing error")
 	}
+	if strings.Contains(n.Err, noperm) {
+		t.Fatalf("expected error message not to repeat the already-visible path, got %q", n.Err)
+	}
+}
+
+func TestLoadChildrenRetriesAfterPreviousFailure(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root, permission denial won't apply")
+	}
+	rootPath := t.TempDir()
+	dir := filepath.Join(rootPath, "fixable")
+	must(t, os.Mkdir(dir, 0o000))
+	must(t, os.WriteFile(filepath.Join(rootPath, "keep.txt"), []byte("z"), 0o644))
+
+	root := NewRoot(rootPath, nil)
+	n := findChild(root, "fixable")
+	n.LoadChildren(rootPath, nil)
+	if n.Err == "" {
+		t.Fatal("expected an error from the first, still-unreadable load attempt")
+	}
+
+	must(t, os.Chmod(dir, 0o755))
+	must(t, os.WriteFile(filepath.Join(dir, "inner.txt"), []byte("z"), 0o644))
+
+	// A second LoadChildren call (mirroring collapse/re-expand in the
+	// UI, SPEC.md §5) must actually retry rather than silently no-op
+	// just because the node was already marked loaded by the failed
+	// attempt.
+	n.LoadChildren(rootPath, nil)
+	if n.Err != "" {
+		t.Fatalf("expected error cleared once the directory became readable, got %q", n.Err)
+	}
+	if findChild(n, "inner.txt") == nil {
+		t.Fatal("expected the retry to actually list the now-readable directory's contents")
+	}
 }
 
 func TestDirectoryListingOrder(t *testing.T) {
@@ -277,6 +313,54 @@ func TestExpandCollapsedDirLoadsAndMarksExpanded(t *testing.T) {
 	d.Expand(rootPath, nil)
 	if !d.Expanded || d.Children == nil {
 		t.Fatal("expected expand to load children and mark expanded")
+	}
+}
+
+func TestExpandFailedLoadStaysUndisclosed(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root, permission denial won't apply")
+	}
+	rootPath := t.TempDir()
+	dir := filepath.Join(rootPath, "noperm")
+	must(t, os.Mkdir(dir, 0o000))
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+
+	root := NewRoot(rootPath, nil)
+	n := findChild(root, "noperm")
+	n.Expand(rootPath, nil)
+	if n.Expanded {
+		t.Fatal("expected a directory that failed to load to stay fully undisclosed (not Expanded)")
+	}
+	if n.Err == "" {
+		t.Fatal("expected the failed expand to record an error")
+	}
+}
+
+func TestExpandRetriesEveryAttemptWhileStillFailing(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root, permission denial won't apply")
+	}
+	rootPath := t.TempDir()
+	dir := filepath.Join(rootPath, "noperm")
+	must(t, os.Mkdir(dir, 0o000))
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+
+	root := NewRoot(rootPath, nil)
+	n := findChild(root, "noperm")
+	n.Expand(rootPath, nil)
+	if n.Expanded {
+		t.Fatal("expected first failed attempt to leave the directory undisclosed")
+	}
+	// A second attempt while still broken must retry (not silently
+	// no-op the way an already-*successfully*-expanded directory would),
+	// so the caller can flash feedback on every attempt, not just the
+	// first (SPEC.md §5.3).
+	n.Expand(rootPath, nil)
+	if n.Expanded {
+		t.Fatal("expected the second still-failing attempt to also leave the directory undisclosed")
+	}
+	if n.Err == "" {
+		t.Fatal("expected the second attempt to still report an error")
 	}
 }
 
@@ -676,6 +760,55 @@ func TestNearestSurvivingFallsBackToRootWhenWholeSubtreeDeleted(t *testing.T) {
 	got := NearestSurviving(leaf)
 	if got != root {
 		t.Fatalf("expected fallback all the way to root, got %v", got)
+	}
+}
+
+func TestRefreshTreeReportsNewlyErroringDirectory(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root, permission denial won't apply")
+	}
+	rootPath := t.TempDir()
+	dir := filepath.Join(rootPath, "goesbad")
+	must(t, os.Mkdir(dir, 0o755))
+	root := NewRoot(rootPath, nil)
+	n := findChild(root, "goesbad")
+	n.LoadChildren(rootPath, nil)
+	if n.Err != "" {
+		t.Fatalf("expected no error while dir is still readable, got %q", n.Err)
+	}
+
+	must(t, os.Chmod(dir, 0o000))
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+
+	newlyErrored := RefreshTree(root, rootPath, nil)
+
+	if n.Err == "" {
+		t.Fatal("expected refresh to record the new listing error")
+	}
+	if len(newlyErrored) != 1 || newlyErrored[0] != dir {
+		t.Fatalf("expected newlyErrored=[%q], got %v", dir, newlyErrored)
+	}
+}
+
+func TestRefreshTreeDoesNotReReportAlreadyErroringDirectory(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root, permission denial won't apply")
+	}
+	rootPath := t.TempDir()
+	dir := filepath.Join(rootPath, "noperm")
+	must(t, os.Mkdir(dir, 0o000))
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+	root := NewRoot(rootPath, nil)
+	n := findChild(root, "noperm")
+	n.LoadChildren(rootPath, nil)
+	if n.Err == "" {
+		t.Fatal("expected initial load to record an error")
+	}
+
+	newlyErrored := RefreshTree(root, rootPath, nil)
+
+	if len(newlyErrored) != 0 {
+		t.Fatalf("expected an already-erroring directory not to be reported again, got %v", newlyErrored)
 	}
 }
 

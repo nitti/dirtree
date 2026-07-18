@@ -48,6 +48,14 @@ var (
 	// position) and from the lasting "●" already-open indicator every
 	// open file's row shows regardless of when it was opened.
 	styleFlash = tcell.StyleDefault.Background(tcell.ColorGreen).Foreground(tcell.ColorBlack).Bold(true)
+	// styleFlashError is styleFlash's counterpart for a live-refresh
+	// discovering a directory that newly failed to list (SPEC.md §6.1):
+	// same brief-attention-grabbing role, red instead of green so it
+	// reads as a problem rather than a confirmation. Unlike styleFlash,
+	// what it's drawing attention to (the inline `[error]` text
+	// browserLabel already appends from tree.Node.Err) does not disappear
+	// when the flash itself fades — only the highlight is transient.
+	styleFlashError = tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite).Bold(true)
 )
 
 const (
@@ -143,14 +151,7 @@ func (a *App) drawBrowserOverlay(w, h int) {
 		a.drawHeaderMode(w, "BROWSE", browserLegend)
 	}
 
-	browserHeight := h - browserTop
-	if a.browserMessage != "" {
-		browserHeight--
-	}
-	a.drawBrowser(0, browserTop, w, browserHeight)
-	if a.browserMessage != "" {
-		a.drawText(0, h-1, w, a.browserMessage, styleError)
-	}
+	a.drawBrowser(0, browserTop, w, h-browserTop)
 
 	a.drawBadge(w, h)
 }
@@ -202,14 +203,13 @@ func (a *App) drawQuickOpen(w, h int) {
 }
 
 // drawFinderList renders quick open's flat, root-relative match list
-// (SPEC.md §4.1's index, §5.2's indexing/no-matches placeholder), plus
-// any inline failure message from a failed open.
+// (SPEC.md §4.1's index, §5.2's indexing/no-matches placeholder), with
+// any failed-open match (§2.2) showing its failure message inline,
+// appended the same way tree.Node.Err is in the browser, and flashing
+// red the same brief window (§5.3).
 func (a *App) drawFinderList(w, h int) {
 	const listTop = 2
 	listHeight := h - listTop
-	if a.finderMessage != "" {
-		listHeight--
-	}
 
 	_, done := a.idx.Snapshot()
 	switch {
@@ -235,16 +235,21 @@ func (a *App) drawFinderList(w, h int) {
 			if i >= len(a.finderMatches) {
 				break
 			}
+			match := a.finderMatches[i]
+			label := match.RelPath
+			errored := a.finderErrorPath != "" && match.AbsPath == a.finderErrorPath
+			if errored {
+				label += " [" + a.finderErrorMessage + "]"
+			}
 			style := styleNormal
-			if i == a.finderSelected {
+			switch {
+			case errored && time.Since(a.finderErrorFlashStart) < flashDuration:
+				style = styleFlashError
+			case i == a.finderSelected:
 				style = styleSelected
 			}
-			a.drawText(0, listTop+row, w, a.finderMatches[i].RelPath, style)
+			a.drawText(0, listTop+row, w, label, style)
 		}
-	}
-
-	if a.finderMessage != "" {
-		a.drawText(0, h-1, w, a.finderMessage, styleError)
 	}
 }
 
@@ -376,9 +381,6 @@ func (a *App) drawSearch(w, h int) {
 
 	const listTop = 2
 	listHeight := h - listTop
-	if a.searchMessage != "" {
-		listHeight--
-	}
 
 	switch {
 	case a.searchQuery == "":
@@ -428,20 +430,23 @@ func (a *App) drawSearch(w, h int) {
 			if i >= len(rows) {
 				break
 			}
-			style := styleNormal
-			if i == a.searchSelected {
-				style = styleSelected
-			}
 			row := rows[i]
-			if !row.isHit && a.searchResults[row.file].AbsPath == a.searchFlashPath && time.Since(a.searchFlashStart) < flashDuration {
+			label := searchRowLabel(a.searchResults, a.searchCollapsed, a.files, row)
+			fileErrored := !row.isHit && a.searchErrorPath != "" && a.searchResults[row.file].AbsPath == a.searchErrorPath
+			if fileErrored {
+				label += " [" + a.searchErrorMessage + "]"
+			}
+			style := styleNormal
+			switch {
+			case fileErrored && time.Since(a.searchErrorFlashStart) < flashDuration:
+				style = styleFlashError
+			case i == a.searchSelected:
+				style = styleSelected
+			case !row.isHit && a.searchResults[row.file].AbsPath == a.searchFlashPath && time.Since(a.searchFlashStart) < flashDuration:
 				style = styleFlash
 			}
-			a.drawText(0, listTop+line, w, searchRowLabel(a.searchResults, a.searchCollapsed, a.files, row), style)
+			a.drawText(0, listTop+line, w, label, style)
 		}
-	}
-
-	if a.searchMessage != "" {
-		a.drawText(0, h-1, w, a.searchMessage, styleError)
 	}
 }
 
@@ -795,6 +800,12 @@ func (a *App) drawBrowser(x0, y0, w, h int) {
 		n := flat[i]
 		style := styleNormal
 		switch {
+		// SPEC.md §6.1: same reasoning as the open-flash case below —
+		// the errored directory could well be the currently-selected
+		// row, and reverse-video would otherwise mask the flash
+		// entirely, so it takes precedence even over selection.
+		case isErrorFlashing(a.browserErrorFlashes, n.Path):
+			style = styleFlashError
 		// SPEC.md §5.2: the flash takes precedence here, unlike content
 		// search's own flash/selected precedence — Return never moves
 		// the browser's selection (§3.4), so the just-opened row is
@@ -810,6 +821,13 @@ func (a *App) drawBrowser(x0, y0, w, h int) {
 		}
 		a.drawText(x0, y0+row, w, browserLabel(n, a.files.IsOpen(n.Path)), style)
 	}
+}
+
+// isErrorFlashing reports whether path's brief red error flash (SPEC.md
+// §6.1) is still within its display window.
+func isErrorFlashing(flashes map[string]time.Time, path string) bool {
+	start, ok := flashes[path]
+	return ok && time.Since(start) < flashDuration
 }
 
 // browserLabel renders one browser row's indentation, expand/collapse
@@ -844,7 +862,7 @@ func (a *App) drawBadge(w, h int) {
 	sinceDone, done := a.idx.SinceDone()
 	text, hiddenPrefix, ok := spinner.BadgeDecision(
 		elapsed, sinceDone, done, spinner.DebugAlwaysShow, a.badgeSkip,
-		spinnerThreshold, spinnerMinDisplayDuration, completionDisplayDuration, completionFadeDuration,
+		spinnerThreshold, spinnerMinDisplayDuration, toastDisplayDuration, toastFadeDuration,
 		spinnerFPS, completionMessage,
 	)
 	if !ok {
@@ -859,12 +877,20 @@ func (a *App) drawBadge(w, h int) {
 	if len(visible) == 0 {
 		return
 	}
+	a.drawCornerBadge(w, h, string(visible), styleBadge)
+}
+
+// drawCornerBadge draws text right-anchored on the bottom row, the
+// shared anchor point both the indexing badge and the error toast fade
+// out from (SPEC.md §5.3's "anchored, directional motion").
+func (a *App) drawCornerBadge(w, h int, text string, style tcell.Style) {
+	visible := []rune(text)
 	x := max(w-len(visible), 0)
 	y := h - 1
 	if y < 0 {
 		return
 	}
-	a.drawText(x, y, len(visible), string(visible), styleBadge)
+	a.drawText(x, y, len(visible), text, style)
 }
 
 // drawText draws text starting at (x, y), clipped and padded with

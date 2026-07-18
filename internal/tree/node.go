@@ -5,6 +5,8 @@
 package tree
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +15,18 @@ import (
 
 	"github.com/nitti/dirtree/internal/match"
 )
+
+// errText extracts the underlying message from a directory-listing
+// error, dropping the "open <path>: " prefix Go's os package adds to a
+// *fs.PathError — the path is already visible via the row this message
+// is displayed inline on (SPEC.md §2.2, §5.2), so repeating it would be
+// redundant.
+func errText(err error) string {
+	if pe, ok := errors.AsType[*fs.PathError](err); ok {
+		return pe.Err.Error()
+	}
+	return err.Error()
+}
 
 // Node is one entry in the lazily-loaded tree.
 type Node struct {
@@ -23,7 +37,14 @@ type Node struct {
 	IsDir    bool
 	Expanded bool
 	Children []*Node // nil until loaded; loading is idempotent
-	Err      string  // non-empty if listing this node's children failed
+	// Err is non-empty if the most recent operation on this node failed:
+	// listing its children (directories, set by LoadChildren/refreshChildren
+	// below) or, for a file, the UI's last attempt to open it (set
+	// directly by internal/ui on a failed open, per SPEC.md §2.2) — both
+	// are rendered the same way (browserLabel's inline `[error]` suffix,
+	// with a brief attention-flash, SPEC.md §5.3) since both are "the
+	// last thing this node's owner tried to do with it didn't work."
+	Err string
 
 	loaded bool
 }
@@ -66,19 +87,25 @@ func NewRoot(absPath string, ignorer Ignorer) *Node {
 // LoadChildren populates n.Children by listing the directory at n.Path
 // on disk. rootPath is the tree root's absolute path, needed to compute
 // each candidate's root-relative path for ignore matching. Loading an
-// already-loaded node is a no-op (SPEC.md §2).
+// already-successfully-loaded node is a no-op (SPEC.md §2); a node whose
+// last load attempt failed (n.Err set) is retried instead of staying
+// permanently stuck with a stale error — e.g. the user fixes the
+// permission problem and collapses/re-expands the directory, rather
+// than only being able to recover via a live-refresh (§6.1) picking up
+// the fix on its own.
 func (n *Node) LoadChildren(rootPath string, ignorer Ignorer) {
-	if !n.IsDir || n.loaded {
+	if !n.IsDir || (n.loaded && n.Err == "") {
 		return
 	}
 	n.loaded = true
 
 	entries, err := os.ReadDir(n.Path)
 	if err != nil {
-		n.Err = err.Error()
+		n.Err = errText(err)
 		n.Children = nil
 		return
 	}
+	n.Err = ""
 
 	if ignorer == nil {
 		ignorer = noopIgnorer{}
@@ -131,14 +158,29 @@ func (n *Node) Loaded() bool {
 // "keep it selected by identity" rule). Directories never visited by the
 // user are left alone: they'll pick up current disk state whenever they
 // are eventually expanded, same as today.
-func RefreshTree(n *Node, rootPath string, ignorer Ignorer) {
+//
+// It returns the paths of any directories whose listing newly started
+// failing during this refresh (Err was empty before, non-empty after) —
+// e.g. a directory that lost read permission out from under the running
+// session. A directory that already had an error, or still lists fine,
+// isn't included: the per-node inline error indicator (§5.2) already
+// covers the steady-state case, so this is only for the transition a
+// caller might want to surface as a one-off notification (SPEC.md §6.1),
+// not the ongoing state.
+func RefreshTree(n *Node, rootPath string, ignorer Ignorer) []string {
 	if !n.IsDir || !n.loaded {
-		return
+		return nil
 	}
+	hadErr := n.Err != ""
 	n.refreshChildren(rootPath, ignorer)
-	for _, c := range n.Children {
-		RefreshTree(c, rootPath, ignorer)
+	var newlyErrored []string
+	if n.Err != "" && !hadErr {
+		newlyErrored = append(newlyErrored, n.Path)
 	}
+	for _, c := range n.Children {
+		newlyErrored = append(newlyErrored, RefreshTree(c, rootPath, ignorer)...)
+	}
+	return newlyErrored
 }
 
 // refreshChildren re-lists n's directory and merges the result into
@@ -148,7 +190,7 @@ func RefreshTree(n *Node, rootPath string, ignorer Ignorer) {
 func (n *Node) refreshChildren(rootPath string, ignorer Ignorer) {
 	entries, err := os.ReadDir(n.Path)
 	if err != nil {
-		n.Err = err.Error()
+		n.Err = errText(err)
 		n.Children = nil
 		return
 	}
@@ -322,12 +364,19 @@ func RevealPath(root *Node, rootPath, targetAbsPath string, ignorer Ignorer) *No
 
 // Expand marks a collapsed directory expanded, loading its children if
 // needed. A no-op on files. rootPath is passed through to LoadChildren.
+// If loading fails, n stays fully undisclosed (Expanded left false, same
+// as before the attempt) rather than flipping open onto zero children —
+// there's nothing to disclose, and per LoadChildren's retry behavior,
+// leaving Expanded false is what makes the next attempt on this same
+// node retry the listing instead of being treated as already-expanded.
 func (n *Node) Expand(rootPath string, ignorer Ignorer) {
 	if !n.IsDir {
 		return
 	}
 	n.LoadChildren(rootPath, ignorer)
-	n.Expanded = true
+	if n.Err == "" {
+		n.Expanded = true
+	}
 }
 
 // Collapse marks a directory not-expanded, idempotently. A no-op on

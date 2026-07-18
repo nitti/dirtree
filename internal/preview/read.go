@@ -4,8 +4,10 @@ package preview
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"unicode/utf8"
@@ -14,6 +16,18 @@ import (
 // DefaultByteCap is the read cap in bytes, in the neighborhood of the
 // prototype's 1,000,000-byte cap (SPEC.md §8).
 const DefaultByteCap = 1_000_000
+
+// errText extracts the underlying message from a failed-open error,
+// dropping the "open <path>: " prefix Go's os package adds to a
+// *fs.PathError — the path is already visible via whichever row this
+// message ends up displayed inline on (SPEC.md §2.2, §5.2), so repeating
+// it there would be redundant.
+func errText(err error) string {
+	if pe, ok := errors.AsType[*fs.PathError](err); ok {
+		return pe.Err.Error()
+	}
+	return err.Error()
+}
 
 // readCapped reads up to cap bytes from the start of path, reporting
 // whether the file's actual size exceeds cap. It is the single read
@@ -146,7 +160,7 @@ type LoadResult struct {
 func Load(path string, cap int64) LoadResult {
 	data, truncated, err := readCapped(path, cap)
 	if err != nil {
-		return LoadResult{Failed: true, Message: err.Error()}
+		return LoadResult{Failed: true, Message: errText(err)}
 	}
 	if bytes.IndexByte(data, 0) != -1 {
 		return LoadResult{Failed: true, Message: "binary file, preview not available"}

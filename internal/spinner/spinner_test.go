@@ -44,38 +44,10 @@ func TestFrameAdvances(t *testing.T) {
 	}
 }
 
-func TestCompletionShownDuringDisplayWindow(t *testing.T) {
-	phase, hidden := Completion(0, 2*time.Second, 400*time.Millisecond, 18)
-	if phase != CompletionMessage || hidden != 0 {
-		t.Fatalf("expected full message at sinceDone=0, got phase=%v hidden=%d", phase, hidden)
-	}
-	phase, hidden = Completion(1900*time.Millisecond, 2*time.Second, 400*time.Millisecond, 18)
-	if phase != CompletionMessage || hidden != 0 {
-		t.Fatalf("expected full message just under display duration, got phase=%v hidden=%d", phase, hidden)
-	}
-}
-
-func TestCompletionFadesAfterDisplayWindow(t *testing.T) {
-	phase, hidden := Completion(2*time.Second, 2*time.Second, 400*time.Millisecond, 20)
-	if phase != CompletionFading || hidden != 0 {
-		t.Fatalf("expected fading to start at exactly the display duration with nothing hidden yet, got phase=%v hidden=%d", phase, hidden)
-	}
-	phase, hidden = Completion(2*time.Second+200*time.Millisecond, 2*time.Second, 400*time.Millisecond, 20)
-	if phase != CompletionFading || hidden != 10 {
-		t.Fatalf("expected half the message hidden halfway through the fade, got phase=%v hidden=%d", phase, hidden)
-	}
-}
-
-func TestCompletionHiddenAfterFadeCompletes(t *testing.T) {
-	phase, hidden := Completion(2*time.Second+400*time.Millisecond, 2*time.Second, 400*time.Millisecond, 20)
-	if phase != CompletionHidden || hidden != 20 {
-		t.Fatalf("expected fully hidden once fade duration elapses, got phase=%v hidden=%d", phase, hidden)
-	}
-	phase, hidden = Completion(10*time.Second, 2*time.Second, 400*time.Millisecond, 20)
-	if phase != CompletionHidden || hidden != 20 {
-		t.Fatalf("expected fully hidden long after fade completes, got phase=%v hidden=%d", phase, hidden)
-	}
-}
+// Completion-message fade timing itself is now covered by
+// internal/toast's tests, since BadgeDecision delegates to toast.Decide;
+// what's tested here is BadgeDecision's own sequencing logic layered on
+// top of it (threshold, minimum display duration, the skip).
 
 // --- MinDurationSkip (TESTING.md indexing-delay/spinner-suppression group) ---
 
