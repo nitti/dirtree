@@ -1028,7 +1028,21 @@ func (a *App) performOpenIntoList() {
 		a.finderMessage = res.Message
 		return
 	}
+	a.revealInBrowser(target.AbsPath)
 	a.overlay = overlayNone
+}
+
+// revealInBrowser expands the browser tree's disclosure state down to
+// absPath and selects it, so opening a file from quick open or content
+// search (which search the whole tree regardless of what's currently
+// expanded) leaves the browser showing where that file lives the next
+// time it's opened (SPEC.md §4.2, §9.2) — not gated on the browser
+// overlay actually being open right now, purely updating its state for
+// later.
+func (a *App) revealInBrowser(absPath string) {
+	if n := tree.RevealPath(a.root, a.rootPath, absPath, a.ignorer); n != nil {
+		a.browserSelected = n
+	}
 }
 
 // openSearch opens the content search overlay (SPEC.md §9.1), reachable
@@ -1265,6 +1279,7 @@ func (a *App) performSearchOpen() {
 	a.searchMessage = ""
 	a.searchFlashPath = result.AbsPath
 	a.searchFlashStart = time.Now()
+	a.revealInBrowser(result.AbsPath)
 
 	// A file row jumps to its first hit (the file's earliest match); a
 	// hit row jumps to that specific line (SPEC.md §9.2).

@@ -277,6 +277,49 @@ func JumpMatches(root *Node, query string) []*Node {
 	return matches
 }
 
+// RevealPath walks down from root following relSlashPath's segments,
+// expanding every intermediate ancestor directory (loading children as
+// needed) so the target becomes visible, and returns the target node.
+// It returns nil if the path doesn't exist under root or falls outside
+// it entirely. Used to reveal a quick open/content search result in the
+// browser (SPEC.md §4.2, §9.2) — unlike jump to file (§4.3), which
+// deliberately never expands anything since its candidates are already
+// scoped to what's visible, quick open and content search search the
+// whole tree regardless of current disclosure state, so there's no
+// other way for the browser to reflect what they just opened.
+func RevealPath(root *Node, rootPath, targetAbsPath string, ignorer Ignorer) *Node {
+	rel := relSlashPath(rootPath, targetAbsPath)
+	if rel == "." {
+		return root
+	}
+	if rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+		return nil
+	}
+	segments := strings.Split(rel, "/")
+	current := root
+	for i, seg := range segments {
+		if !current.IsDir {
+			return nil
+		}
+		current.Expand(rootPath, ignorer)
+		var next *Node
+		for _, c := range current.Children {
+			if c.Name == seg {
+				next = c
+				break
+			}
+		}
+		if next == nil {
+			return nil
+		}
+		if i < len(segments)-1 {
+			next.Expand(rootPath, ignorer)
+		}
+		current = next
+	}
+	return current
+}
+
 // Expand marks a collapsed directory expanded, loading its children if
 // needed. A no-op on files. rootPath is passed through to LoadChildren.
 func (n *Node) Expand(rootPath string, ignorer Ignorer) {

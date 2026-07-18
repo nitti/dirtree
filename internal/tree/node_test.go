@@ -524,6 +524,53 @@ func TestRelativeDisplayPathIsPosix(t *testing.T) {
 	}
 }
 
+func TestRevealPathDeeplyNested(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+	target := filepath.Join(rootPath, "a_dir", "deep", "leaf.txt")
+	n := RevealPath(root, rootPath, target, nil)
+	if n == nil || n.Name != "leaf.txt" {
+		t.Fatal("expected reveal to find leaf.txt")
+	}
+	d := findChild(root, "a_dir")
+	if !d.Expanded {
+		t.Fatal("expected intermediate ancestor a_dir to be expanded")
+	}
+	if !findChild(d, "deep").Expanded {
+		t.Fatal("expected intermediate ancestor deep to be expanded")
+	}
+}
+
+func TestRevealPathRootLevel(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+	target := filepath.Join(rootPath, "a.txt")
+	n := RevealPath(root, rootPath, target, nil)
+	if n == nil || n.Name != "a.txt" {
+		t.Fatal("expected reveal to find root-level a.txt")
+	}
+}
+
+func TestRevealPathNotFound(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+	target := filepath.Join(rootPath, "does", "not", "exist")
+	n := RevealPath(root, rootPath, target, nil)
+	if n != nil {
+		t.Fatal("expected reveal of missing path to return nil")
+	}
+}
+
+func TestRevealPathOutsideRoot(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+	outside := t.TempDir()
+	n := RevealPath(root, rootPath, filepath.Join(outside, "x.txt"), nil)
+	if n != nil {
+		t.Fatal("expected reveal of path outside root to return nil")
+	}
+}
+
 // --- Live refresh (§6a) ---
 
 func TestRefreshTreeAddsNewEntry(t *testing.T) {
