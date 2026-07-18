@@ -19,6 +19,13 @@ var (
 	styleNormal      = tcell.StyleDefault
 	styleSelected    = tcell.StyleDefault.Reverse(true)
 	styleHeader      = tcell.StyleDefault.Background(tcell.ColorDarkBlue).Foreground(tcell.ColorWhite)
+	// styleHeaderMode is styleHeader with bold applied, used only for the
+	// mode-name label (e.g. "BROWSE", "SEARCH") that replaces the tree
+	// root path on the header/title bar's left side while a mode other
+	// than the primary preview view is active — bold sets the label
+	// apart from the plain-weight legend sharing the same row, similar
+	// to how editors like hx render their current mode name.
+	styleHeaderMode = styleHeader.Bold(true)
 	styleFileTitle   = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
 	styleError       = tcell.StyleDefault.Foreground(tcell.ColorRed)
 	styleBadge       = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
@@ -134,13 +141,26 @@ func (a *App) drawBrowserOverlay(w, h int) {
 // goto-line prompt can be open while this overlay owns input) — on the
 // right.
 func (a *App) drawBrowserSplitView(w, h, browserWidth, previewWidth int) {
-	a.drawHeader(w, a.browserHeaderText(w))
+	browserTop := 1
+	if a.jumpActive {
+		// SPEC.md §5.2: while jump-to-file (§4.3) is active, the header's
+		// left side shows the "JUMP" mode label rather than the literal
+		// query — user-entered text has no business appearing in the
+		// title bar — and the query itself moves to its own input row
+		// directly below the header, the same convention quick open and
+		// content search already use for their own queries.
+		a.drawHeaderMode(w, "JUMP", jumpLegend)
+		a.drawText(0, 1, w, "/"+a.jumpQuery, styleSearchInput)
+		browserTop = 2
+	} else {
+		a.drawHeaderMode(w, "BROWSE", browserLegend)
+	}
 
-	browserHeight := h - 1
+	browserHeight := h - browserTop
 	if a.browserMessage != "" {
 		browserHeight--
 	}
-	a.drawBrowser(0, 1, browserWidth, browserHeight)
+	a.drawBrowser(0, browserTop, browserWidth, browserHeight)
 	if a.browserMessage != "" {
 		a.drawText(0, h-1, browserWidth, a.browserMessage, styleError)
 	}
@@ -184,24 +204,11 @@ func (a *App) drawBrowserPopup(w, h int) {
 	a.drawText(innerX, innerY+footerRow, innerW, a.browserFooterText(innerW), styleNormal)
 }
 
-// browserHeaderText composes the browser's own header/title-bar row
-// (SPEC.md §5.2): the normal root-path-plus-legend content, or, while
-// jump-to-file typing mode (§4.3) is active, the literal query
-// (prefixed `/`) plus jump mode's own keybinding legend in its place —
-// the root path is dropped in favor of the query the same way it would
-// be dropped for width reasons elsewhere, since the query is the more
-// relevant thing to show while actively typing it.
-func (a *App) browserHeaderText(w int) string {
-	if a.jumpActive {
-		return headerText(w, "/"+a.jumpQuery, jumpLegend)
-	}
-	return a.menuBarText(w, browserLegend)
-}
-
-// browserFooterText is the popup layout's footer-line equivalent of
-// browserHeaderText, since the popup shows the browser's legend as a
-// dedicated footer row rather than sharing the top header row with the
-// root path (SPEC.md §5.1).
+// browserFooterText is the popup layout's footer-line equivalent of the
+// split view's header row content below it (in the popup layout, the
+// top header row stays the primary preview view's own root path per
+// §5.2, so the browser's legend/query instead render as a dedicated
+// footer row, SPEC.md §5.1).
 func (a *App) browserFooterText(w int) string {
 	if a.jumpActive {
 		return headerText(w, "/"+a.jumpQuery, jumpLegend)
@@ -250,7 +257,7 @@ func (a *App) fillRect(x0, y0, w, h int, style tcell.Style) {
 // query on its own row directly below (the same input-row convention
 // content search uses, §9.2), and the flat match list.
 func (a *App) drawQuickOpen(w, h int) {
-	a.drawHeader(w, headerText(w, "quick open", "[return] open  [esc] cancel"))
+	a.drawHeaderMode(w, "QUICK OPEN", "[return] open  [esc] cancel")
 	a.drawText(0, 1, w, "> "+a.finderQuery, styleSearchInput)
 	a.drawFinderList(w, h)
 }
@@ -422,11 +429,11 @@ func openFilesLegend(multiPage bool) string {
 // disclosing (unless collapsed) its own matching-line rows below it —
 // or a placeholder while there's nothing to show yet.
 func (a *App) drawSearch(w, h int) {
-	title := "search"
+	title := "SEARCH"
 	if a.searchRegex {
-		title = "search (regex)"
+		title = "SEARCH (REGEX)"
 	}
-	a.drawHeader(w, headerText(w, title, searchLegend))
+	a.drawHeaderMode(w, title, searchLegend)
 	a.drawText(0, 1, w, "> "+a.searchQuery, styleSearchInput)
 
 	const listTop = 2
@@ -569,11 +576,21 @@ func (a *App) menuBarText(w int, legend string) string {
 // fit with that minimum separation, left is dropped entirely, since the
 // legend is what makes the overlay usable and always takes priority.
 func headerText(w int, left, legend string) string {
+	text, _ := headerFit(w, left, legend)
+	return text
+}
+
+// headerFit is headerText's underlying fit computation, additionally
+// reporting whether left was included (as opposed to dropped for width
+// reasons), so a caller that needs to style left differently from
+// legend (drawHeaderMode, below) knows whether left actually appears in
+// the returned text.
+func headerFit(w int, left, legend string) (text string, leftIncluded bool) {
 	leftLen, legendLen := len([]rune(left)), len([]rune(legend))
 	if gap := w - leftLen - legendLen; gap >= 1 {
-		return left + strings.Repeat(" ", gap) + legend
+		return left + strings.Repeat(" ", gap) + legend, true
 	}
-	return legend
+	return legend, false
 }
 
 // drawFileTitleBar renders the currently-displayed file's own title bar
@@ -788,6 +805,21 @@ func centerPad(s string, w int) string {
 
 func (a *App) drawHeader(w int, text string) {
 	a.drawText(0, 0, w, text, styleHeader)
+}
+
+// drawHeaderMode renders the header/title bar with label (a bold,
+// all-caps mode name, e.g. "BROWSE" or "SEARCH") standing in for the
+// tree root path on the left, and legend right-aligned, using the same
+// fit/drop rule headerText uses elsewhere — label is dropped first (in
+// favor of legend alone) if the terminal is too narrow, exactly like
+// the root path is. Only label itself is bold; legend keeps the normal
+// header weight.
+func (a *App) drawHeaderMode(w int, label, legend string) {
+	text, included := headerFit(w, label, legend)
+	a.drawText(0, 0, w, text, styleHeader)
+	if included {
+		a.drawText(0, 0, len([]rune(label)), label, styleHeaderMode)
+	}
 }
 
 // drawBrowser renders the browser's currently-visible flattened list
