@@ -110,6 +110,26 @@ func TestJumpMatchesScopedToVisibleRows(t *testing.T) {
 	}
 }
 
+func TestJumpMatchesScopeNarrowsToSubdirectory(t *testing.T) {
+	rootPath := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(rootPath, "a_dir", "dup_in_a"), 0o755))
+	must(t, os.MkdirAll(filepath.Join(rootPath, "b_dir", "dup_in_b"), 0o755))
+	root := NewRoot(rootPath, nil)
+	aDir := findChild(root, "a_dir")
+	bDir := findChild(root, "b_dir")
+	aDir.Expand(rootPath, nil)
+	bDir.Expand(rootPath, nil)
+
+	if matches := JumpMatches(root, "dup"); len(matches) != 2 {
+		t.Fatalf("expected both dup_in_a and dup_in_b visible tree-wide, got %v", matches)
+	}
+
+	matches := JumpMatches(aDir, "dup")
+	if len(matches) != 1 || matches[0].Name != "dup_in_a" {
+		t.Fatalf("expected scoping matches to aDir to exclude b_dir's descendant, got %v", matches)
+	}
+}
+
 func TestJumpMatchesPrefixOnLeafNameOnly(t *testing.T) {
 	rootPath := buildFixture(t)
 	root := NewRoot(rootPath, nil)

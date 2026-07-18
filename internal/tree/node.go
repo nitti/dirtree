@@ -302,14 +302,18 @@ func (n *Node) Flatten() []*Node {
 	return out
 }
 
-// JumpMatches returns, in display order, every node in root's current
+// JumpMatches returns, in display order, every node in scope's current
 // flattened row list (Flatten) whose own leaf Name case-insensitively
 // prefix-matches query — jump to file's candidate set and matching rule
-// (SPEC.md §4.3). An empty query returns no matches (jump to file
-// treats that as "haven't looked yet," not "matches everything" —
+// (SPEC.md §4.3). scope is normally the tree root, but narrows to a
+// directory the user has just drilled into via jump-to-file's
+// slash-to-expand shortcut (SPEC.md §4.3's "scoped drill-down"), so
+// scope's own name is also checked against query, not just its
+// descendants'. An empty query returns no matches (jump to file treats
+// that as "haven't looked yet," not "matches everything" —
 // match.PrefixMatches' own empty-query rule already encodes this).
-func JumpMatches(root *Node, query string) []*Node {
-	flat := root.Flatten()
+func JumpMatches(scope *Node, query string) []*Node {
+	flat := scope.Flatten()
 	matches := make([]*Node, 0, len(flat))
 	for _, n := range flat {
 		if match.PrefixMatches(query, n.Name) {
