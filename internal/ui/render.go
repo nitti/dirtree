@@ -48,12 +48,6 @@ var (
 	// position) and from the lasting "●" already-open indicator every
 	// open file's row shows regardless of when it was opened.
 	styleFlash = tcell.StyleDefault.Background(tcell.ColorGreen).Foreground(tcell.ColorBlack).Bold(true)
-	// styleDir sets quick open's directory-path rows apart from file
-	// rows (SPEC.md §4.2), so it's clear at a glance which matches are
-	// openable (files) versus just path segments shown for context
-	// (directories, never a valid quick open target since only files
-	// can be opened into the open-files list).
-	styleDir = tcell.StyleDefault.Foreground(tcell.ColorTeal).Bold(true)
 )
 
 const (
@@ -241,17 +235,11 @@ func (a *App) drawFinderList(w, h int) {
 			if i >= len(a.finderMatches) {
 				break
 			}
-			match := a.finderMatches[i]
 			style := styleNormal
-			if match.IsDir {
-				style = styleDir
-			}
 			if i == a.finderSelected {
-				// SPEC.md §5.2: the cursor's own highlight always wins
-				// over any other row styling.
 				style = styleSelected
 			}
-			a.drawText(0, listTop+row, w, match.RelPath, style)
+			a.drawText(0, listTop+row, w, a.finderMatches[i].RelPath, style)
 		}
 	}
 
