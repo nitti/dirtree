@@ -16,16 +16,16 @@ import (
 )
 
 var (
-	styleNormal      = tcell.StyleDefault
-	styleSelected    = tcell.StyleDefault.Reverse(true)
-	styleHeader      = tcell.StyleDefault.Background(tcell.ColorDarkBlue).Foreground(tcell.ColorWhite)
+	styleNormal   = tcell.StyleDefault
+	styleSelected = tcell.StyleDefault.Reverse(true)
+	styleHeader   = tcell.StyleDefault.Background(tcell.ColorDarkBlue).Foreground(tcell.ColorWhite)
 	// styleHeaderMode is styleHeader with bold applied, used only for the
 	// mode-name label (e.g. "BROWSE", "SEARCH") that replaces the tree
 	// root path on the header/title bar's left side while a mode other
 	// than the primary preview view is active — bold sets the label
 	// apart from the plain-weight legend sharing the same row, similar
 	// to how editors like hx render their current mode name.
-	styleHeaderMode = styleHeader.Bold(true)
+	styleHeaderMode  = styleHeader.Bold(true)
 	styleFileTitle   = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
 	styleError       = tcell.StyleDefault.Foreground(tcell.ColorRed)
 	styleBadge       = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
