@@ -909,7 +909,30 @@ func (a *App) drawToast(w, h int) {
 	if len(visible) == 0 {
 		return
 	}
-	a.drawCornerBadge(w, h, string(visible), styleBadge)
+	x := max(w-len(visible), 0)
+	y := h - 1
+	if y < 0 {
+		return
+	}
+	for i, r := range visible {
+		style := styleBadge
+		if inBoldRange(a.toastBoldRanges, hiddenPrefix+i) {
+			style = style.Bold(true)
+		}
+		a.screen.SetContent(x+i, y, r, nil, style)
+	}
+}
+
+// inBoldRange reports whether rune index idx falls within any of the
+// [start, end) ranges toastBoldRanges marks for bold rendering (e.g.
+// reloaded file names, SPEC.md §6.1a).
+func inBoldRange(ranges [][2]int, idx int) bool {
+	for _, r := range ranges {
+		if idx >= r[0] && idx < r[1] {
+			return true
+		}
+	}
+	return false
 }
 
 // drawCornerBadge draws text right-anchored on the bottom row, the
