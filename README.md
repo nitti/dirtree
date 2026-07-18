@@ -29,6 +29,7 @@ This installs from the [`nitti/homebrew-tap`](https://github.com/nitti/homebrew-
 - [`specs/SPEC.md`](specs/SPEC.md) — full behavioral specification: CLI, data model, traversal/ignore rules, navigation, background indexing, quick open and jump to file, preview pane, layout, rendering conventions, keybindings, resize handling.
 - [`specs/TESTING.md`](specs/TESTING.md) — acceptance criteria, expressed as test cases the implementation must satisfy.
 - [`docs/GO_STYLE.md`](docs/GO_STYLE.md) — Go-specific style and architecture rules (layering, error conventions, concurrency, tooling), enforced via `.golangci.yml` and `make lint`.
+- [`docs/ANIMATION_IDEAS.md`](docs/ANIMATION_IDEAS.md) — brainstormed, not-yet-decided animation ideas, checked against the animation principles in `specs/SPEC.md` §5.3.
 - `cmd/dirtree/` — CLI entry point (argument parsing, path resolution, startup error handling, `--version`).
 - `internal/tree/` — the lazily-loaded node model, flattening, navigation semantics, and the refresh/merge logic behind live updates (spec §3.1, §3.4, §6.1).
 - `internal/ignore/` — the dependency-free `.gitignore`/`.dirtreeignore` pattern subset (spec §3.2).
