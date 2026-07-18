@@ -292,7 +292,7 @@ func (a *App) Run() error {
 		case <-watchEvents:
 			a.handleFSChange()
 			if a.overlay == overlayQuickOpen {
-				a.recomputeFinderMatches()
+				a.refreshFinderMatches()
 			}
 			a.draw()
 		case out := <-a.searchDone:
@@ -314,7 +314,7 @@ func (a *App) Run() error {
 			// while quick open is open with an unchanged query, so
 			// matches don't go stale until the next keystroke.
 			if a.overlay == overlayQuickOpen {
-				a.recomputeFinderMatches()
+				a.refreshFinderMatches()
 			}
 			// Same idea for content search (SPEC.md §9.1): a query typed
 			// before the index finished is held pending (searchResults
@@ -926,11 +926,29 @@ func (a *App) finderListHeight() int {
 }
 
 // recomputeFinderMatches rebuilds finderMatches from the current query
-// against the background index (SPEC.md §4.1), used by quick open.
-// While the index hasn't finished building, matches are nil/unavailable
-// rather than an empty "no matches" result (SPEC.md §5.2).
+// against the background index (SPEC.md §4.1), resetting match-selection
+// and scroll to the top — used only where the query itself just changed
+// (typing, backspace) or the overlay just opened, per §4.2's "reset
+// match-selection and scroll to the top" rule.
 func (a *App) recomputeFinderMatches() {
+	a.finderSelected = 0
 	a.finderScroll = 0
+	a.refreshFinderMatches()
+}
+
+// refreshFinderMatches rebuilds finderMatches from the current query
+// against the background index (SPEC.md §4.1), without disturbing
+// finderSelected/finderScroll — used for background refreshes (the
+// index finishing or a live-refresh rebuild, and the periodic tick that
+// catches the index finishing while quick open sits open with an
+// unchanged query) where the query hasn't changed, so the user's
+// current position in the list shouldn't jump. finderSelected is
+// clamped in case the match count shrank out from under it; finderScroll
+// is left for drawFinderList's own clamp to reconcile against the
+// (possibly new) selected index and match count next frame. While the
+// index hasn't finished building, matches are nil/unavailable rather
+// than an empty "no matches" result (SPEC.md §5.2).
+func (a *App) refreshFinderMatches() {
 	entries, done := a.idx.Snapshot()
 	if !done {
 		a.finderMatches = nil
@@ -943,6 +961,9 @@ func (a *App) recomputeFinderMatches() {
 		}
 	}
 	a.finderMatches = matches
+	if a.finderSelected >= len(matches) {
+		a.finderSelected = max(len(matches)-1, 0)
+	}
 }
 
 // handleFinderTypingKey handles quick open's navigation/query-editing
