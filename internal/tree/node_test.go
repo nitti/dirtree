@@ -88,6 +88,98 @@ func TestFlattenRespectsAncestorExpansion(t *testing.T) {
 	}
 }
 
+// --- Jump to file matching (§4.3) ---
+
+func TestJumpMatchesScopedToVisibleRows(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+
+	if len(JumpMatches(root, "leaf")) != 0 {
+		t.Fatal("expected leaf.txt, inside a currently-collapsed directory, to not be a candidate")
+	}
+
+	aDir := findChild(root, "a_dir")
+	aDir.Expand(rootPath, nil)
+	deep := findChild(aDir, "deep")
+	deep.Expand(rootPath, nil)
+
+	matches := JumpMatches(root, "leaf")
+	if len(matches) != 1 || matches[0].Name != "leaf.txt" {
+		t.Fatalf("expected leaf.txt to become a candidate once its ancestors are expanded, got %v", matches)
+	}
+}
+
+func TestJumpMatchesPrefixOnLeafNameOnly(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+
+	matches := JumpMatches(root, "a")
+	if len(matches) != 2 {
+		t.Fatalf("expected a_dir and a.txt to match prefix \"a\", got %v", matches)
+	}
+	for _, m := range matches {
+		if m.Name != "a_dir" && m.Name != "a.txt" {
+			t.Fatalf("unexpected match %q", m.Name)
+		}
+	}
+}
+
+func TestJumpMatchesCaseInsensitive(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+
+	matches := JumpMatches(root, "B")
+	if len(matches) != 1 || matches[0].Name != "B_dir" {
+		t.Fatalf("expected case-insensitive prefix match on B_dir, got %v", matches)
+	}
+}
+
+func TestJumpMatchesIncludesDirsAndFiles(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+
+	if len(JumpMatches(root, "a_dir")) != 1 {
+		t.Fatal("expected a directory row to be a valid match target")
+	}
+	if len(JumpMatches(root, "a.txt")) != 1 {
+		t.Fatal("expected a file row to be a valid match target")
+	}
+}
+
+func TestJumpMatchesEmptyQueryReturnsNone(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+
+	if matches := JumpMatches(root, ""); len(matches) != 0 {
+		t.Fatalf("expected empty query to match nothing, got %v", matches)
+	}
+}
+
+func TestJumpMatchesDisplayOrder(t *testing.T) {
+	rootPath := buildFixture(t)
+	root := NewRoot(rootPath, nil)
+
+	matches := JumpMatches(root, "a")
+	flat := root.Flatten()
+	var lastIdx = -1
+	for _, m := range matches {
+		idx := indexOfNode(flat, m)
+		if idx <= lastIdx {
+			t.Fatalf("expected matches in display order, got %v", matches)
+		}
+		lastIdx = idx
+	}
+}
+
+func indexOfNode(list []*Node, n *Node) int {
+	for i, c := range list {
+		if c == n {
+			return i
+		}
+	}
+	return -1
+}
+
 func containsNode(list []*Node, n *Node) bool {
 	for _, c := range list {
 		if c == n {
@@ -399,53 +491,6 @@ func TestRelativeDisplayPathIsPosix(t *testing.T) {
 	rel := RelativeDisplayPath(rootPath, target)
 	if rel != "a/b/c.txt" {
 		t.Fatalf("got %q, want %q", rel, "a/b/c.txt")
-	}
-}
-
-func TestRevealPathDeeplyNested(t *testing.T) {
-	rootPath := buildFixture(t)
-	root := NewRoot(rootPath, nil)
-	target := filepath.Join(rootPath, "a_dir", "deep", "leaf.txt")
-	n := RevealPath(root, rootPath, target, nil)
-	if n == nil || n.Name != "leaf.txt" {
-		t.Fatal("expected reveal to find leaf.txt")
-	}
-	d := findChild(root, "a_dir")
-	if !d.Expanded {
-		t.Fatal("expected intermediate ancestor a_dir to be expanded")
-	}
-	if !findChild(d, "deep").Expanded {
-		t.Fatal("expected intermediate ancestor deep to be expanded")
-	}
-}
-
-func TestRevealPathRootLevel(t *testing.T) {
-	rootPath := buildFixture(t)
-	root := NewRoot(rootPath, nil)
-	target := filepath.Join(rootPath, "a.txt")
-	n := RevealPath(root, rootPath, target, nil)
-	if n == nil || n.Name != "a.txt" {
-		t.Fatal("expected reveal to find root-level a.txt")
-	}
-}
-
-func TestRevealPathNotFound(t *testing.T) {
-	rootPath := buildFixture(t)
-	root := NewRoot(rootPath, nil)
-	target := filepath.Join(rootPath, "does", "not", "exist")
-	n := RevealPath(root, rootPath, target, nil)
-	if n != nil {
-		t.Fatal("expected reveal of missing path to return nil")
-	}
-}
-
-func TestRevealPathOutsideRoot(t *testing.T) {
-	rootPath := buildFixture(t)
-	root := NewRoot(rootPath, nil)
-	outside := t.TempDir()
-	n := RevealPath(root, rootPath, filepath.Join(outside, "x.txt"), nil)
-	if n != nil {
-		t.Fatal("expected reveal of path outside root to return nil")
 	}
 }
 

@@ -10,6 +10,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/nitti/dirtree/internal/match"
 )
 
 // Node is one entry in the lazily-loaded tree.
@@ -258,6 +260,23 @@ func (n *Node) Flatten() []*Node {
 	return out
 }
 
+// JumpMatches returns, in display order, every node in root's current
+// flattened row list (Flatten) whose own leaf Name case-insensitively
+// prefix-matches query — jump to file's candidate set and matching rule
+// (SPEC.md §4.3). An empty query returns no matches (jump to file
+// treats that as "haven't looked yet," not "matches everything" —
+// match.PrefixMatches' own empty-query rule already encodes this).
+func JumpMatches(root *Node, query string) []*Node {
+	flat := root.Flatten()
+	matches := make([]*Node, 0, len(flat))
+	for _, n := range flat {
+		if match.PrefixMatches(query, n.Name) {
+			matches = append(matches, n)
+		}
+	}
+	return matches
+}
+
 // Expand marks a collapsed directory expanded, loading its children if
 // needed. A no-op on files. rootPath is passed through to LoadChildren.
 func (n *Node) Expand(rootPath string, ignorer Ignorer) {
@@ -346,43 +365,4 @@ func MoveSelection(current, delta, count int) int {
 // POSIX slash-delimited string (SPEC.md §6, §"Path display and reveal").
 func RelativeDisplayPath(root, target string) string {
 	return relSlashPath(root, target)
-}
-
-// RevealPath walks down from root following relSlashPath's segments,
-// expanding every intermediate ancestor directory (loading children as
-// needed) so the target becomes visible, and returns the target node.
-// It returns nil if the path doesn't exist under root or falls outside
-// it entirely.
-func RevealPath(root *Node, rootPath, targetAbsPath string, ignorer Ignorer) *Node {
-	rel := relSlashPath(rootPath, targetAbsPath)
-	if rel == "." {
-		return root
-	}
-	if rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
-		return nil
-	}
-
-	segments := strings.Split(rel, "/")
-	current := root
-	for i, seg := range segments {
-		if !current.IsDir {
-			return nil
-		}
-		current.Expand(rootPath, ignorer)
-		var next *Node
-		for _, c := range current.Children {
-			if c.Name == seg {
-				next = c
-				break
-			}
-		}
-		if next == nil {
-			return nil
-		}
-		if i < len(segments)-1 {
-			next.Expand(rootPath, ignorer)
-		}
-		current = next
-	}
-	return current
 }

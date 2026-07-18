@@ -45,6 +45,7 @@ var (
 const (
 	previewLegend = "[b] browse  [tab] open files  [o] quick open  [s] search  [q] quit"
 	browserLegend = "[return] open  [/] jump to file  [o] quick open  [s] search  [b/esc] close"
+	jumpLegend    = "[tab] next match  [return] done  [esc] cancel"
 	// searchLegend documents the content search overlay's actions (SPEC.md
 	// §9.2): Return opens the selected row (jumping to its line if it's a
 	// hit row) and leaves the overlay open, for opening several hits in a
@@ -99,9 +100,6 @@ func (a *App) draw() {
 	case overlayQuickOpen:
 		a.drawQuickOpen(w, h)
 		a.drawBadge(w, h)
-	case overlayJumpToFile:
-		a.drawJumpToFile(w, h)
-		a.drawBadge(w, h)
 	case overlayOpenFiles:
 		a.drawOpenFiles(w, h)
 	case overlaySearch:
@@ -135,7 +133,7 @@ func (a *App) drawBrowserOverlay(w, h int) {
 // goto-line prompt can be open while this overlay owns input) — on the
 // right.
 func (a *App) drawBrowserSplitView(w, h, browserWidth, previewWidth int) {
-	a.drawHeader(w, a.menuBarText(w, browserLegend))
+	a.drawHeader(w, a.browserHeaderText(w))
 
 	browserHeight := h - 1
 	if a.browserMessage != "" {
@@ -182,7 +180,32 @@ func (a *App) drawBrowserPopup(w, h int) {
 	if a.browserMessage != "" {
 		a.drawText(innerX, innerY+browserHeight, innerW, a.browserMessage, styleError)
 	}
-	a.drawText(innerX, innerY+footerRow, innerW, browserLegend, styleNormal)
+	a.drawText(innerX, innerY+footerRow, innerW, a.browserFooterText(innerW), styleNormal)
+}
+
+// browserHeaderText composes the browser's own header/title-bar row
+// (SPEC.md §5.2): the normal root-path-plus-legend content, or, while
+// jump-to-file typing mode (§4.3) is active, the literal query
+// (prefixed `/`) plus jump mode's own keybinding legend in its place —
+// the root path is dropped in favor of the query the same way it would
+// be dropped for width reasons elsewhere, since the query is the more
+// relevant thing to show while actively typing it.
+func (a *App) browserHeaderText(w int) string {
+	if a.jumpActive {
+		return headerText(w, "/"+a.jumpQuery, jumpLegend)
+	}
+	return a.menuBarText(w, browserLegend)
+}
+
+// browserFooterText is the popup layout's footer-line equivalent of
+// browserHeaderText, since the popup shows the browser's legend as a
+// dedicated footer row rather than sharing the top header row with the
+// root path (SPEC.md §5.1).
+func (a *App) browserFooterText(w int) string {
+	if a.jumpActive {
+		return headerText(w, "/"+a.jumpQuery, jumpLegend)
+	}
+	return browserLegend
 }
 
 // drawBox draws a bordered rectangle with an optional title embedded in
@@ -223,25 +246,15 @@ func (a *App) fillRect(x0, y0, w, h int, style tcell.Style) {
 
 // drawQuickOpen renders the quick open overlay (SPEC.md §4.2, §5.2): a
 // header showing the query and its single action (Return opens the
-// selected match), and the shared flat match list.
+// selected match), and the flat match list.
 func (a *App) drawQuickOpen(w, h int) {
 	a.drawHeader(w, headerText(w, a.finderQuery, "[return] open  [esc] cancel"))
 	a.drawFinderList(w, h)
 }
 
-// drawJumpToFile renders the jump-to-file overlay (SPEC.md §4.3, §5.2):
-// a header showing the query and its single action (Return reveals the
-// selected match in the browser), and the shared flat match list. This
-// replaces the browser view it was opened from.
-func (a *App) drawJumpToFile(w, h int) {
-	a.drawHeader(w, headerText(w, a.finderQuery, "[return] reveal in browser  [esc] cancel"))
-	a.drawFinderList(w, h)
-}
-
-// drawFinderList renders the flat, root-relative match list shared by
-// quick open and jump to file (SPEC.md §4.1's index, §5.2's
-// indexing/no-matches placeholder), plus any inline failure message
-// from a failed open (quick open only — jump to file never sets one).
+// drawFinderList renders quick open's flat, root-relative match list
+// (SPEC.md §4.1's index, §5.2's indexing/no-matches placeholder), plus
+// any inline failure message from a failed open.
 func (a *App) drawFinderList(w, h int) {
 	listHeight := h - 1
 	if a.finderMessage != "" {
@@ -722,6 +735,14 @@ func (a *App) drawBrowser(x0, y0, w, h int) {
 		a.browserScroll = 0
 	}
 
+	var isMatch map[*tree.Node]bool
+	if a.jumpActive && len(a.jumpMatches) > 0 {
+		isMatch = make(map[*tree.Node]bool, len(a.jumpMatches))
+		for _, m := range a.jumpMatches {
+			isMatch[m] = true
+		}
+	}
+
 	for row := range h {
 		i := a.browserScroll + row
 		if i >= len(flat) {
@@ -729,8 +750,14 @@ func (a *App) drawBrowser(x0, y0, w, h int) {
 		}
 		n := flat[i]
 		style := styleNormal
-		if n == a.browserSelected {
+		switch {
+		case n == a.browserSelected:
+			// SPEC.md §5.2: the cursor's own highlight always wins over
+			// jump mode's match highlight, since the selected row is
+			// itself one of the matches whenever jump mode is active.
 			style = styleSelected
+		case isMatch[n]:
+			style = styleFindMatch
 		}
 		a.drawText(x0, y0+row, w, browserLabel(n), style)
 	}

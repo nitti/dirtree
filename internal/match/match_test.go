@@ -28,3 +28,24 @@ func TestWildcardQueryIsGlobMatch(t *testing.T) {
 		t.Fatal("expected non-matching glob to fail")
 	}
 }
+
+func TestPrefixMatchesEmptyQueryMatchesNothing(t *testing.T) {
+	if PrefixMatches("", "anything") {
+		t.Fatal("expected empty query to match nothing")
+	}
+}
+
+func TestPrefixMatchesCaseInsensitivePrefix(t *testing.T) {
+	if !PrefixMatches("Read", "README.md") {
+		t.Fatal("expected case-insensitive prefix match")
+	}
+	if !PrefixMatches("read", "README.md") {
+		t.Fatal("expected case-insensitive prefix match")
+	}
+}
+
+func TestPrefixMatchesRejectsNonPrefixSubstring(t *testing.T) {
+	if PrefixMatches("me", "README.md") {
+		t.Fatal("expected a mid-string substring to not match under prefix rules")
+	}
+}

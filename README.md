@@ -1,6 +1,6 @@
 # dirtree
 
-`dirtree` is a terminal directory-tree browser: progressive-disclosure navigation in the browser overlay, a background-indexed quick open and jump-to-file finder, a background content-search mode, a syntax-highlighted file preview pane, and live refresh as files change on disk, all in a single dependency-free binary.
+`dirtree` is a terminal directory-tree browser: progressive-disclosure navigation in the browser overlay, a background-indexed quick open finder, an in-browser incremental jump-to-file typing mode, a background content-search mode, a syntax-highlighted file preview pane, and live refresh as files change on disk, all in a single dependency-free binary.
 
 The spec was derived from a working Python/curses prototype (iterated on directly in a terminal, feature by feature, against real usage) and generalized so it can be reimplemented in any language, with no assumption of a particular runtime. The implementation here is Go, using `tcell` for terminal rendering — see "Language and Dependencies" in `CLAUDE.md` for the rationale.
 
@@ -30,10 +30,10 @@ This installs from the [`nitti/homebrew-tap`](https://github.com/nitti/homebrew-
 - [`specs/TESTING.md`](specs/TESTING.md) — acceptance criteria, expressed as test cases the implementation must satisfy.
 - [`docs/GO_STYLE.md`](docs/GO_STYLE.md) — Go-specific style and architecture rules (layering, error conventions, concurrency, tooling), enforced via `.golangci.yml` and `make lint`.
 - `cmd/dirtree/` — CLI entry point (argument parsing, path resolution, startup error handling, `--version`).
-- `internal/tree/` — the lazily-loaded node model, flattening, navigation semantics, and the refresh/merge logic behind live updates (spec §3.1, §3.4, §6.1).
+- `internal/tree/` — the lazily-loaded node model, flattening, navigation semantics, jump-to-file's visible-row matching (`JumpMatches`), and the refresh/merge logic behind live updates (spec §3.1, §3.4, §4.3, §6.1).
 - `internal/ignore/` — the dependency-free `.gitignore`/`.dirtreeignore` pattern subset (spec §3.2).
-- `internal/index/` — the background full-tree index used by quick open and jump to file, including live rebuilds (spec §4.1, §6.1).
-- `internal/match/` — the shared substring/glob query-matching rule (spec §4.1).
+- `internal/index/` — the background full-tree index used by quick open and content search, including live rebuilds (spec §4.1, §6.1).
+- `internal/match/` — quick open's substring/glob query-matching rule and jump to file's simpler leaf-name prefix rule (spec §4.1, §4.3).
 - `internal/search/` — the background content-search scan: case-insensitive substring matching against each indexed file's (byte-capped, binary-excluded) content, cancelable mid-scan when a newer query supersedes it (spec §9).
 - `internal/preview/` — file reading (`Load`, distinguishing a failed open from a successful one per spec §2.2), best-effort syntax highlighting, and line wrapping for the preview pane (spec §2.1).
 - `internal/find/` — in-file find: case-insensitive substring matching over an already-open file's lines, in rune coordinates that compose with `internal/preview`'s wrapped display rows (spec §2.4).
@@ -100,6 +100,8 @@ The pure-logic layers (`internal/tree`, `internal/ignore`, `internal/index`, `in
 **Word-wrapping**, replacing the original fixed-column wrap: `wrapLineSegments` now only breaks mid-word as a last resort (a word that doesn't fit within a full-width row even on its own) — otherwise it breaks at the end of a run of spaces (dropping them, the standard word-wrap convention) or immediately after a dash/hyphen (keeping it, since the dash is itself the visual break marker). Unit-tested for the space-preferred case, moving a word whole to the next row rather than splitting it, dash breaks, the mid-word hard-break fallback, and triggering-space-dropped-vs-real-trailing-space-preserved.
 
 Word-wrapping briefly led copy mode astray: reasoning that a multi-row mouse selection across wrapped continuation rows copies a line break the file doesn't actually have, copy mode was changed to disable wrapping entirely and clip a long line at the pane's edge instead. That traded a cosmetic problem for a functional one — anything past the clipped edge was never drawn at all, so it couldn't be selected by any means, making it impossible to copy an entire long line rather than just occasionally picking up an extra line break in a multi-row selection. Reverted: copy mode wraps exactly like normal display (gutter/color are still stripped), so every character of every line stays visible and selectable somewhere on screen, accepting the wrap-induced-line-break limitation as inherent to any fixed-width terminal grid rather than something worth losing content over.
+
+**Jump to file reworked from a fuzzy finder into an in-browser incremental jump (spec §4.3)**: it no longer opens a full-screen flat-list overlay searching the entire background-indexed tree — that behavior now belongs solely to quick open. Jump to file is instead a typing mode layered directly on the still-visible browser: candidates are exactly the browser's current flattened row list (whatever the tree's live expand/collapse state already exposes, so it never itself expands or collapses anything on the user's behalf), matched by case-insensitive prefix against each row's own leaf name rather than its full path. Typing live-moves the browser's own selection to the first match; Tab/Shift-Tab (or Down/Up) cycle among several matches in display order; Return simply leaves jump mode with the selection wherever it landed; Escape restores the exact selection/scroll from before `/` was pressed. Because jump to file no longer expands ancestor directories to reveal a match, `tree.RevealPath` (and its "resolution failure" case) became dead code and was removed along with its tests. The new candidate/matching logic is pure and unit-tested (`match.PrefixMatches`, `tree.JumpMatches`); the mode's key handling and live-highlighting are wired in `internal/ui` and hand-verified in a real terminal alongside the rest of that layer.
 
 ## Non-negotiable constraints
 

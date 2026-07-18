@@ -2,7 +2,7 @@
 
 These are the behaviors the pure-logic layer's unit suite must lock down — no terminal/rendering tests, since that layer isn't practically unit-testable. Treat each bullet as a required test case in the implementation, regardless of test framework. Group names below mirror the spec sections in `SPEC.md` they correspond to; they are not meant to prescribe file/module layout.
 
-Groups are ordered the same way `SPEC.md` is: primary view (§2) first, then the browser (§3), then quick open and jump to file (§4), then layout/rendering (§5), then the system behaviors that cut across all of them (§6).
+Groups are ordered the same way `SPEC.md` is: primary view (§2) first, then the browser (§3, including jump to file, §4.3), then quick open (§4.1, §4.2), then layout/rendering (§5), then the system behaviors that cut across all of them (§6).
 
 Wherever these tests reference "the tree," they mean the pure navigation/model layer described in `SPEC.md` §3.1 and §3.4 — keep that layer free of any terminal-rendering dependency in the implementation, the same way the prototype kept its model code free of direct terminal-library calls, so all of the below is testable without a real terminal.
 
@@ -98,7 +98,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - A `.dirtreeignore` pattern uses the same syntax as `.gitignore` (glob, anchoring, directory-only, negation all behave identically).
 - A path matching either the `.gitignore` set or the `.dirtreeignore` set is excluded (union, not intersection).
 - A negation pattern in `.dirtreeignore` does not re-include a path excluded by a `.gitignore` pattern, and vice versa — negation precedence is scoped to a single file's own rule list, not across the two files.
-- The background full-tree index (§4.1) respects `.dirtreeignore` exclusions the same way it respects `.gitignore` ones — this is app-wide filtering, not limited to quick open or jump to file.
+- The background full-tree index (§4.1) respects `.dirtreeignore` exclusions the same way it respects `.gitignore` ones — this is app-wide filtering, not limited to quick open.
 
 ## Right-arrow / left-arrow semantics (§3.4)
 
@@ -119,13 +119,9 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - `move_selection` on a single-item list (count=1) always returns 0 regardless of delta.
 - `move_selection` on an empty list (count=0) returns 0 without dividing by zero or raising.
 
-## Path display and reveal (§3.1, §4.2)
+## Path display (§3.1, §4.2)
 
 - `relative_display_path` renders a path relative to the root as a POSIX (forward-slash) string regardless of host path-separator conventions.
-- `reveal_path` on a deeply nested target expands every intermediate ancestor directory and returns the target node.
-- `reveal_path` on a root-level (depth-1) target works without needing any intermediate expansion beyond the root itself.
-- `reveal_path` on a path that doesn't exist under the root returns "not found" (null/None/equivalent) rather than raising.
-- `reveal_path` on a path outside the root entirely (not a descendant) returns "not found" rather than raising or misbehaving.
 
 ## Background full-tree index (`list_all_paths`-equivalent) (§4.1)
 
@@ -143,15 +139,26 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Filtering the flat full-path index matches on any path segment, including a directory-name component, not just the leaf/file name — e.g. a query matching a middle directory's name returns files nested under it.
 - A query that legitimately matches the same relative path only once returns exactly one result even when the same basename recurs at multiple nesting depths elsewhere in the tree (regression case: verify the matcher isn't accidentally treating differently-nested-but-distinctly-pathed matches as duplicates of each other, and isn't failing to de-duplicate a genuinely repeated symlinked/aliased path either way — assert against a known-good expected set built directly from the fixture layout).
 
-## Quick open and jump to file: single-action wiring (§4.2, §4.3)
+## Quick open: single-action wiring (§4.2)
 
 - Opening quick open from the primary preview view and pressing Return on a match opens/reuses the corresponding open-files entry, closes quick open, and lands on the preview showing it.
 - Opening quick open from the browser and pressing Return on a match behaves identically: opens/reuses the corresponding open-files entry and lands on the primary preview view showing it (not back on the browser).
-- Opening jump to file from the browser and pressing Return on a match expands every ancestor down to it and leaves the browser open with the match selected — jump to file has no other trigger and no other action.
-- Jump to file's resolution failure (path no longer exists) exits the overlay without changing browser selection.
 - Escape from quick open returns to whichever screen it was opened from: the primary preview view's displayed entry (or empty state) unchanged if opened from there, or the browser unchanged (selection untouched) if opened from the browser — in neither case is anything opened.
-- Escape from jump to file returns to the browser, unchanged, without changing selection.
-- Neither overlay exposes the other's action: quick open never reveals in the browser, and jump to file never opens a file into the list.
+
+## Jump to file: in-browser incremental jump (§4.3)
+
+- Candidate matching is scoped to the browser's current flattened row list (§3.1): a file inside a currently-collapsed directory is not a candidate even if its name matches, and becomes one as soon as that directory is expanded.
+- Matching is a case-insensitive prefix match against each candidate's leaf name, not its full path — a query matching only a directory segment further up the path (not the row's own name) does not match that row.
+- Both files and directories are eligible candidates.
+- Typing a character that produces at least one match moves the browser's selection to the first match in display (top-to-bottom) order.
+- Typing a character that produces zero matches leaves the browser's selection wherever it currently was (does not move it, does not clear it).
+- Backspace recomputes matches against the shortened query the same way (jump to new first match, or leave selection in place if none match).
+- With more than one match, Tab (or Down) moves the selection to the next match in display order, wrapping from the last match back to the first; Shift-Tab (or Up) moves to the previous match, wrapping the other way.
+- With only one match, Tab/Shift-Tab is a no-op (nothing to cycle to).
+- Return leaves jump mode without moving the selection any further and without performing the browser's open action.
+- Escape restores the browser's selection (and scroll) to exactly what it was immediately before `/` was pressed, discarding the query, regardless of how much typing/cycling happened in between.
+- While jump mode is active, keys that are otherwise browser commands (`o`, `s`, `b`) are treated as ordinary query characters instead of triggering their normal browser action.
+- Jump to file never expands or collapses any directory itself — its candidate set is a pure function of the tree's expand/collapse state as it already was when `/` was pressed (plus whatever narrower state jump mode's own cycling leaves it in, which never changes disclosure).
 
 ## Content search matching (§9.1)
 
@@ -186,14 +193,14 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Once indexing has crossed the perceptibility threshold but finishes before the minimum display duration has elapsed, the badge keeps showing the spinner (not the completion message) until that minimum duration is reached (boundary-test at exactly the minimum).
 - Once indexing has run at least as long as the minimum display duration before finishing, the badge shows the completion message immediately upon completion (no extension needed).
 - The bottom-right badge stops showing anything once the completion message's display+fade window has fully elapsed.
-- Debug-only always-show mode is a build-time switch (`-tags spinnerdebug`), not something exercised by the normal automated test suite; manual verification is to build once without the tag and confirm the badge behaves normally (threshold-suppressed, then spinner, then completion message + fade), then build with `-tags spinnerdebug` on a small directory and confirm: the spinner appears immediately (threshold bypassed) even though real indexing finishes almost instantly, stays visible for the same minimum display duration as the non-debug path, then hands off to the same completion message and fade; quick open's and jump to file's indexing-blocked behavior is unaffected either way.
+- Debug-only always-show mode is a build-time switch (`-tags spinnerdebug`), not something exercised by the normal automated test suite; manual verification is to build once without the tag and confirm the badge behaves normally (threshold-suppressed, then spinner, then completion message + fade), then build with `-tags spinnerdebug` on a small directory and confirm: the spinner appears immediately (threshold bypassed) even though real indexing finishes almost instantly, stays visible for the same minimum display duration as the non-debug path, then hands off to the same completion message and fade; quick open's indexing-blocked behavior is unaffected either way.
 - The bottom-right badge's background is visually distinct from the default row background (a contrasting/accent color), confirmed by manual inspection in a real terminal alongside the other rendering-layer checks below.
 - When the minimum-display-duration skip is set, the badge shows the completion message in full immediately, treating the moment the skip happened — not the index's actual completion time — as when indexing finished.
 - The minimum-display-duration skip still shows the completion message in full even when the index's real completion time is already well past the completion message's entire display+fade window (e.g. it was masked for a long time by an artificially-held spinner) — this is the regression case for a bug where the badge briefly vanished the instant the picker overlay was opened instead of visibly transitioning.
 - The minimum-display-duration skip does not bypass the completion message's own display+fade timing — it still fades out on schedule, counted forward from the moment of the skip.
-- Opening quick open or jump to file while indexing is already done sets the badge's minimum-display-duration skip and records the elapsed-since-indexing-started value at that moment.
+- Opening quick open while indexing is already done sets the badge's minimum-display-duration skip and records the elapsed-since-indexing-started value at that moment.
 - A filesystem-change-triggered index rebuild resets the minimum-display-duration skip (and its recorded moment), so a fresh indexing cycle gets the flash-prevention floor back.
-- The bottom-right badge renders identically whether the browser, quick open, or jump-to-file overlay is the currently active screen — this is a manual/rendering-layer check (see the notes below), since the corner badge itself is drawn by the terminal-rendering layer, not the underlying pure decision logic already covered above.
+- The bottom-right badge renders identically whether the browser or quick open overlay is the currently active screen (jump to file has no indexing-dependent state and doesn't render the badge itself, though it's layered on top of the browser which does) — this is a manual/rendering-layer check (see the notes below), since the corner badge itself is drawn by the terminal-rendering layer, not the underlying pure decision logic already covered above.
 
 ## Live refresh on filesystem changes (§6.1)
 
@@ -216,8 +223,9 @@ The following require a real terminal (ideally inside a multiplexer like Zellij 
 - Selecting a binary or unreadable file from the browser (Return) or from quick open renders the corresponding failure message ("binary file, preview not available," or the OS error text) inline in that overlay without navigating away or adding an open-files entry.
 - The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Return-to-display and `x`-to-remove, and its empty-list message renders when reachable.
 - Shift-Up/Shift-Down reordering is confirmed against a real terminal/multiplexer, since Shift+arrow key delivery is more library/terminal-dependent than plain arrow keys; if the target terminal library can't reliably distinguish Shift-Up/Shift-Down from plain Up/Down, note the fallback keys actually used here rather than silently shipping non-functional reordering.
-- Quick open's header legend correctly shows Return-to-open, and jump to file's header legend correctly shows Return-to-reveal; neither offers the other's action.
-- Content search overlay (§9): `s` opens it from both the primary preview view (including its empty state) and the browser; the query lives on its own row directly beneath the header (not sharing a row with the legend), rendered with a background distinct from the results list below it; typing (including a literal space) builds the query live and each keystroke's rescan doesn't visibly block input — confirmed by typing further characters while a scan over a large tree is still in flight and seeing them register immediately, not queued up behind the scan; the bottom-right index badge renders in this overlay the same way it does in the browser, quick open, and jump-to-file overlays.
+- Quick open's header legend correctly shows Return-to-open.
+- Jump to file (`/` from within the browser): the browser's row list stays fully visible while typing (no overlay/popup obscures it); the header row switches from the normal browser legend to `/query` plus a Tab/Return/Escape legend while active, and back to the normal legend on Return/Escape; every currently-matching row gets a visible highlight distinct from the cursor's own selection highlight; typing/backspacing visibly moves the cursor to the live first match, and Tab/Shift-Tab visibly cycles it among matches when there's more than one; a query typed with no matches leaves the cursor visibly in place rather than jumping anywhere; typing a letter that's normally a browser command (`o`, `s`, `b`) while jump mode is active is confirmed to type into the query instead of triggering that command.
+- Content search overlay (§9): `s` opens it from both the primary preview view (including its empty state) and the browser; the query lives on its own row directly beneath the header (not sharing a row with the legend), rendered with a background distinct from the results list below it; typing (including a literal space) builds the query live and each keystroke's rescan doesn't visibly block input — confirmed by typing further characters while a scan over a large tree is still in flight and seeing them register immediately, not queued up behind the scan; the bottom-right index badge renders in this overlay the same way it does in the browser and quick open overlays.
 - Content search's two-level result list (§9.2): each matching file appears once as its own row with a disclosure indicator and hit count, expanded by default so all of its hit rows (line number + trimmed text) are visible immediately with no action needed; Left collapses the selected row's file and Right re-expands it, and collapsing one file never affects any other file's disclosure state; Tab/Down and Shift-Tab/Up move the selection through the flattened file+hit row list, including into and out of a file's hit rows, with wraparound at either end.
 - Content search's open actions (§9.2): Return on a file row opens that file and jumps to its first (lowest-line-number) hit; Return on a hit row opens that file and jumps to that specific hit's line — confirmed by checking the preview's scroll position lands on the target line, not just that the file opened; Return leaves the overlay open afterward (confirmed by opening two different hits in a row via Return without the overlay closing in between), and Escape is what closes it back to whichever screen it was opened from.
 - Content search's open-file feedback (§9.2): a file row for a path already in the open-files list (whether opened from this overlay, the browser, quick open, or earlier in the session) shows a lasting "●" indicator next to its disclosure marker, and this indicator never appears on hit rows; pressing Return on a row briefly flashes that file's row in a distinct style before it fades back to normal — confirmed by opening a hit row specifically and observing the flash lands on its parent file row, not the hit row itself — and the flash is purely visual, never blocking or delaying subsequent input (typing, navigating, or opening another result immediately after).
