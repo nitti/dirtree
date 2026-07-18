@@ -6,9 +6,10 @@
 // to be unit-tested — verification is manual, in a real terminal.
 //
 // The primary preview view's own content rendering, scrolling, and
-// goto-line (§2.1) is wired alongside the browser (§3.4), quick open
-// and jump to file (§4), and open-files-list (§2.3) overlays, plus the
-// browser's dual split/popup layout (§5.1).
+// goto-line (§2.1) is wired alongside the browser (§3.4, including its
+// jump-to-file typing mode, §4.3), quick open (§4.2), and
+// open-files-list (§2.3) overlays, plus the browser's dual split/popup
+// layout (§5.1).
 package ui
 
 import (
@@ -39,15 +40,13 @@ const (
 	overlayNone overlay = iota
 	overlayBrowser
 	overlayQuickOpen
-	overlayJumpToFile
 	overlayOpenFiles
 	overlaySearch
 )
 
 // searchEntryPoint records which screen the content search overlay
 // (SPEC.md §9) was opened from, so Escape returns to it. Both entry
-// points behave identically once the overlay is open (§9.2) — there is
-// no per-entry-point default-action split like jump to file.
+// points behave identically once the overlay is open (§9.2).
 type searchEntryPoint int
 
 const (
@@ -99,6 +98,7 @@ const (
 	completionDisplayDuration = 2 * time.Second
 	completionFadeDuration    = 400 * time.Millisecond
 	completionMessage         = "indexing complete"
+	searchFlashDuration       = 400 * time.Millisecond
 	watchDebounce             = 300 * time.Millisecond
 	previewByteCap            = preview.DefaultByteCap
 
@@ -135,9 +135,7 @@ type App struct {
 	browserScroll   int
 	browserMessage  string // transient inline status/failure message (§2.2)
 
-	// finder state, shared by the quick open and jump-to-file overlays
-	// (SPEC.md §4.2, §4.3): which one is active is determined by
-	// App.overlay, not stored here, since only one is ever active.
+	// finder state, used by the quick open overlay (SPEC.md §4.2).
 	finderQuery    string
 	finderMatches  []index.Entry // nil while the background index isn't done yet, distinct from "genuinely zero matches"
 	finderSelected int
@@ -145,20 +143,34 @@ type App struct {
 	finderMessage  string              // transient inline open-failure message, quick open only (§2.2)
 	quickOpenEntry quickOpenEntryPoint // which screen quick open was opened from, so Escape returns to it
 
+	// jump-to-file typing mode (SPEC.md §4.3): not a separate overlay —
+	// App.overlay stays overlayBrowser throughout, and the browser's own
+	// row list keeps rendering. jumpPrevSelected/jumpPrevScroll capture
+	// the browser's selection/scroll at the moment `/` was pressed, so
+	// Escape can restore them exactly.
+	jumpActive       bool
+	jumpQuery        string
+	jumpMatches      []*tree.Node // recomputed on every query change from a.root.Flatten(); rows both files and directories
+	jumpSelected     int          // index into jumpMatches
+	jumpPrevSelected *tree.Node
+	jumpPrevScroll   int
+
 	// content search overlay state (SPEC.md §9)
-	searchEntry     searchEntryPoint
-	searchQuery     string
-	searchRegex     bool                // ModeRegex vs. ModeSubstring toggle (ctrl+r)
-	searchResults   []search.FileResult // nil while not yet searched (empty query, waiting on index, or a scan in flight), distinct from "searched, zero matches"
-	searchError     string              // non-empty only for an invalid regex query (ModeRegex); takes precedence over searchResults' nil/empty distinction
-	searchCollapsed map[string]bool     // AbsPath -> collapsed; absent (or false) means expanded, so results start expanded by default
-	searchSelected  int                 // index into a.searchRows(), not directly into searchResults
-	searchScroll    int
-	searchMessage   string // transient inline failure message for open-into-list (§2.2)
-	searchGen       int
-	searchCancel    context.CancelFunc
-	searchScanStart time.Time // when the in-flight scan (searchCancel != nil) started, for the spinner shown once it runs long enough to be noticeable
-	searchDone      chan searchOutcome
+	searchEntry      searchEntryPoint
+	searchQuery      string
+	searchRegex      bool                // ModeRegex vs. ModeSubstring toggle (ctrl+r)
+	searchResults    []search.FileResult // nil while not yet searched (empty query, waiting on index, or a scan in flight), distinct from "searched, zero matches"
+	searchError      string              // non-empty only for an invalid regex query (ModeRegex); takes precedence over searchResults' nil/empty distinction
+	searchCollapsed  map[string]bool     // AbsPath -> collapsed; absent (or false) means expanded, so results start expanded by default
+	searchSelected   int                 // index into a.searchRows(), not directly into searchResults
+	searchScroll     int
+	searchMessage    string // transient inline failure message for open-into-list (§2.2)
+	searchGen        int
+	searchCancel     context.CancelFunc
+	searchScanStart  time.Time // when the in-flight scan (searchCancel != nil) started, for the spinner shown once it runs long enough to be noticeable
+	searchFlashPath  string    // AbsPath of the file row most recently opened via performSearchOpen, for a brief post-open flash
+	searchFlashStart time.Time // when the flash started; the flash is drawn only while time.Since(searchFlashStart) < searchFlashDuration
+	searchDone       chan searchOutcome
 
 	// files is the open-files list (SPEC.md §2.2, §2.3) the primary
 	// preview view and both overlays' open actions operate on.
@@ -218,8 +230,9 @@ func New(rootPath string) *App {
 // syncWatches adds an fs watch for every directory in the tree that has
 // been loaded at least once, so RefreshTree's re-listing target set
 // matches what's actually being watched. Idempotent and cheap to call
-// after any action that might have loaded a new directory (expand,
-// jump-to-file reveal).
+// after any action that might have loaded a new directory (expand —
+// jump to file, §4.3, never itself expands anything, so it never needs
+// this call).
 func (a *App) syncWatches() {
 	if a.watcher == nil {
 		return
@@ -241,9 +254,9 @@ func (a *App) syncWatches() {
 // the watcher (SPEC.md §6.1): re-list every already-loaded directory,
 // merging by path so unaffected nodes keep their identity/expand
 // state, re-anchor browser selection if the previously-selected node
-// was deleted, kick off a background index rebuild so quick open and
-// jump to file eventually reflect the change too, and pick up watches
-// on any newly-loaded directories.
+// was deleted, kick off a background index rebuild so quick open
+// eventually reflects the change too, and pick up watches on any
+// newly-loaded directories.
 func (a *App) handleFSChange() {
 	tree.RefreshTree(a.root, a.rootPath, a.ignorer)
 	a.browserSelected = tree.NearestSurviving(a.browserSelected)
@@ -313,7 +326,7 @@ func (a *App) Run() error {
 			a.draw()
 		case <-watchEvents:
 			a.handleFSChange()
-			if a.isFinderOverlay() {
+			if a.overlay == overlayQuickOpen {
 				a.recomputeFinderMatches()
 			}
 			a.draw()
@@ -333,10 +346,9 @@ func (a *App) Run() error {
 			a.draw()
 		case <-ticker.C:
 			// Also catches the background index (re)build finishing
-			// while quick open or jump to file is open with an
-			// unchanged query, so matches don't go stale until the
-			// next keystroke.
-			if a.isFinderOverlay() {
+			// while quick open is open with an unchanged query, so
+			// matches don't go stale until the next keystroke.
+			if a.overlay == overlayQuickOpen {
 				a.recomputeFinderMatches()
 			}
 			// Same idea for content search (SPEC.md §9.1): a query typed
@@ -360,8 +372,6 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleBrowserKey(ev)
 	case overlayQuickOpen:
 		a.handleQuickOpenKey(ev)
-	case overlayJumpToFile:
-		a.handleJumpToFileKey(ev)
 	case overlayOpenFiles:
 		a.handleOpenFilesKey(ev)
 	case overlaySearch:
@@ -369,13 +379,6 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	case overlayNone:
 		a.handlePreviewKey(ev)
 	}
-}
-
-// isFinderOverlay reports whether the currently-active overlay is one
-// of the two that share the background index and matcher (SPEC.md
-// §4.2, §4.3): quick open or jump to file.
-func (a *App) isFinderOverlay() bool {
-	return a.overlay == overlayQuickOpen || a.overlay == overlayJumpToFile
 }
 
 // handlePreviewKey handles input at the primary preview view when no
@@ -735,8 +738,15 @@ func clamp(v, lo, hi int) int {
 // handleBrowserKey implements the browser overlay's navigation and open
 // actions (SPEC.md §3.4). `b` is a toggle (SPEC.md §5.1): it closes the
 // browser just like Escape does, since `b` is also the key that opens
-// it from the primary preview view.
+// it from the primary preview view. While jump-to-file typing mode
+// (§4.3) is active, every key below is bypassed in favor of
+// handleJumpKey, since jump mode repurposes all of them as query input.
 func (a *App) handleBrowserKey(ev *tcell.EventKey) {
+	if a.jumpActive {
+		a.handleJumpKey(ev)
+		return
+	}
+
 	flat := a.root.Flatten()
 	idx := indexOf(flat, a.browserSelected)
 
@@ -765,6 +775,69 @@ func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 	case ev.Rune() == 'b', ev.Key() == tcell.KeyEscape:
 		a.browserMessage = ""
 		a.overlay = overlayNone
+	}
+}
+
+// openJumpToFile enters jump-to-file typing mode (SPEC.md §4.3) from
+// within the browser: not an overlay change (a.overlay stays
+// overlayBrowser), just a mode layered on top of it that remembers the
+// current selection/scroll so Escape can restore them.
+func (a *App) openJumpToFile() {
+	a.jumpActive = true
+	a.jumpQuery = ""
+	a.jumpMatches = nil
+	a.jumpSelected = 0
+	a.jumpPrevSelected = a.browserSelected
+	a.jumpPrevScroll = a.browserScroll
+}
+
+// recomputeJumpMatches rebuilds jumpMatches from the current query
+// against the browser's live flattened row list (SPEC.md §4.3's
+// candidate set: whatever the tree's current expand/collapse state
+// already exposes, files and directories alike), matching each row's
+// leaf name by case-insensitive prefix.
+func (a *App) recomputeJumpMatches() {
+	a.jumpSelected = 0
+	a.jumpMatches = tree.JumpMatches(a.root, a.jumpQuery)
+}
+
+// handleJumpKey implements jump-to-file typing mode's input handling
+// (SPEC.md §4.3): every printable rune is query input, Tab/Shift-Tab
+// (or Down/Up) cycle among current matches, and Return/Escape are the
+// only ways out.
+func (a *App) handleJumpKey(ev *tcell.EventKey) {
+	switch {
+	case ev.Key() == tcell.KeyEscape:
+		a.browserSelected = a.jumpPrevSelected
+		a.browserScroll = a.jumpPrevScroll
+		a.jumpActive = false
+	case ev.Key() == tcell.KeyEnter:
+		a.jumpActive = false
+	case ev.Key() == tcell.KeyTab, ev.Key() == tcell.KeyDown:
+		if len(a.jumpMatches) > 0 {
+			a.jumpSelected = tree.MoveSelection(a.jumpSelected, 1, len(a.jumpMatches))
+			a.browserSelected = a.jumpMatches[a.jumpSelected]
+		}
+	case ev.Key() == tcell.KeyBacktab, ev.Key() == tcell.KeyUp:
+		if len(a.jumpMatches) > 0 {
+			a.jumpSelected = tree.MoveSelection(a.jumpSelected, -1, len(a.jumpMatches))
+			a.browserSelected = a.jumpMatches[a.jumpSelected]
+		}
+	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
+		if len(a.jumpQuery) > 0 {
+			r := []rune(a.jumpQuery)
+			a.jumpQuery = string(r[:len(r)-1])
+		}
+		a.recomputeJumpMatches()
+		if len(a.jumpMatches) > 0 {
+			a.browserSelected = a.jumpMatches[0]
+		}
+	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
+		a.jumpQuery += string(ev.Rune())
+		a.recomputeJumpMatches()
+		if len(a.jumpMatches) > 0 {
+			a.browserSelected = a.jumpMatches[0]
+		}
 	}
 }
 
@@ -878,17 +951,8 @@ func (a *App) quickOpenReturnOverlay() overlay {
 	return overlayNone
 }
 
-// openJumpToFile opens the jump-to-file overlay from within the
-// browser (SPEC.md §4.3), replacing the browser view. Same
-// minimum-display-duration short-circuit as openQuickOpen.
-func (a *App) openJumpToFile() {
-	a.overlay = overlayJumpToFile
-	a.openFinder()
-}
-
-// openFinder resets the shared quick-open/jump-to-file state and
-// recomputes matches; the caller has already set a.overlay to whichever
-// of the two is being opened.
+// openFinder resets quick open's query/match state and recomputes
+// matches; the caller has already set a.overlay to overlayQuickOpen.
 func (a *App) openFinder() {
 	a.finderQuery = ""
 	a.finderSelected = 0
@@ -900,10 +964,9 @@ func (a *App) openFinder() {
 }
 
 // recomputeFinderMatches rebuilds finderMatches from the current query
-// against the background index (SPEC.md §4.1), shared by quick open
-// and jump to file. While the index hasn't finished building, matches
-// are nil/unavailable rather than an empty "no matches" result (SPEC.md
-// §5.2).
+// against the background index (SPEC.md §4.1), used by quick open.
+// While the index hasn't finished building, matches are nil/unavailable
+// rather than an empty "no matches" result (SPEC.md §5.2).
 func (a *App) recomputeFinderMatches() {
 	a.finderScroll = 0
 	entries, done := a.idx.Snapshot()
@@ -920,10 +983,9 @@ func (a *App) recomputeFinderMatches() {
 	a.finderMatches = matches
 }
 
-// handleFinderTypingKey handles the navigation/query-editing keys
-// shared by quick open and jump to file (SPEC.md §4.2, §4.3), reporting
-// whether it consumed the event; the caller handles Escape and Enter
-// itself since those differ per overlay.
+// handleFinderTypingKey handles quick open's navigation/query-editing
+// keys (SPEC.md §4.2), reporting whether it consumed the event; the
+// caller handles Escape and Enter itself.
 func (a *App) handleFinderTypingKey(ev *tcell.EventKey) bool {
 	switch {
 	case ev.Key() == tcell.KeyTab, ev.Key() == tcell.KeyDown:
@@ -966,38 +1028,6 @@ func (a *App) handleQuickOpenKey(ev *tcell.EventKey) {
 	default:
 		a.handleFinderTypingKey(ev)
 	}
-}
-
-// handleJumpToFileKey implements jump to file's input handling (SPEC.md
-// §4.3): a single action, revealing the selected match in the browser.
-// Escape always returns to the browser, since that's jump to file's
-// only entry point.
-func (a *App) handleJumpToFileKey(ev *tcell.EventKey) {
-	switch {
-	case ev.Key() == tcell.KeyEscape:
-		a.overlay = overlayBrowser
-	case ev.Key() == tcell.KeyEnter:
-		a.performRevealInBrowser()
-	default:
-		a.handleFinderTypingKey(ev)
-	}
-}
-
-// performRevealInBrowser implements jump to file's Enter action (SPEC.md
-// §4.3): expanding every ancestor down to the selected match and
-// selecting it in the browser, which is left open. Resolution failure
-// (the path no longer exists) exits the overlay without changing
-// browser selection.
-func (a *App) performRevealInBrowser() {
-	if len(a.finderMatches) == 0 {
-		return
-	}
-	target := a.finderMatches[a.finderSelected]
-	if n := tree.RevealPath(a.root, a.rootPath, target.AbsPath, a.ignorer); n != nil {
-		a.browserSelected = n
-		a.syncWatches()
-	}
-	a.overlay = overlayBrowser
 }
 
 // performOpenIntoList implements quick open's Enter action (SPEC.md
@@ -1242,7 +1272,11 @@ func (a *App) searchReturnOverlay() overlay {
 // closes the overlay (and, per openSearch/handleSearchKey, preserves
 // its state when it does). A "failed" result (e.g. the file changed or
 // was removed between scanning and opening) leaves the overlay open
-// with the message shown inline, per §2.2's open-failure signaling.
+// with the message shown inline, per §2.2's open-failure signaling. On
+// success, the opened file's row also gets a brief flash (searchFlashPath/
+// searchFlashStart, drawn in drawSearch) as an on-open confirmation
+// distinct from the lasting "already open" indicator every open file's
+// row shows regardless of whether it was just opened this way.
 func (a *App) performSearchOpen() {
 	rows := a.searchRows()
 	if a.searchSelected < 0 || a.searchSelected >= len(rows) {
@@ -1257,6 +1291,8 @@ func (a *App) performSearchOpen() {
 		return
 	}
 	a.searchMessage = ""
+	a.searchFlashPath = result.AbsPath
+	a.searchFlashStart = time.Now()
 
 	// A file row jumps to its first hit (the file's earliest match); a
 	// hit row jumps to that specific line (SPEC.md §9.2).

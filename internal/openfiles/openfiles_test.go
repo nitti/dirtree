@@ -405,6 +405,30 @@ func TestOpeningAfterReorderStillAppendsAtEnd(t *testing.T) {
 	}
 }
 
+func TestIsOpenReflectsCurrentEntries(t *testing.T) {
+	dir := t.TempDir()
+	a := writeFile(t, dir, "a.txt", []byte("a\n"))
+	b := writeFile(t, dir, "b.txt", []byte("b\n"))
+
+	l := New()
+	if l.IsOpen(a) {
+		t.Fatal("expected a not open before it's ever opened")
+	}
+
+	l.Open(a, preview.DefaultByteCap)
+	if !l.IsOpen(a) {
+		t.Fatal("expected a open after Open")
+	}
+	if l.IsOpen(b) {
+		t.Fatal("expected b not open, it was never opened")
+	}
+
+	l.Remove(0)
+	if l.IsOpen(a) {
+		t.Fatal("expected a no longer open after Remove")
+	}
+}
+
 // --- Open-files dropdown paging (TESTING.md "Open files list (§2.2, §2.3)") ---
 
 func TestPageComputesZeroBasedPageFromIndex(t *testing.T) {

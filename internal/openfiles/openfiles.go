@@ -117,6 +117,16 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 	return OpenResult{Outcome: Opened, Entry: e}
 }
 
+// IsOpen reports whether path already has an entry in the list.
+func (l *List) IsOpen(path string) bool {
+	for _, e := range l.Entries {
+		if e.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
 // Display marks the entry at i as displayed without changing list
 // order (SPEC.md §2.2's "displaying an entry never changes list
 // order"). No-op if i is out of range.
