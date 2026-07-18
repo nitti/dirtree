@@ -959,7 +959,11 @@ func (a *App) recomputeFinderMatches() {
 // is left for drawFinderList's own clamp to reconcile against the
 // (possibly new) selected index and match count next frame. While the
 // index hasn't finished building, matches are nil/unavailable rather
-// than an empty "no matches" result (SPEC.md §5.2).
+// than an empty "no matches" result (SPEC.md §5.2). Directory entries
+// are excluded: quick open can only ever open a file (§4.2), and a
+// directory match still narrows the query via the query's own
+// substring/glob matching against every file's full path, so nothing is
+// lost by never surfacing the directory's own row.
 func (a *App) refreshFinderMatches() {
 	entries, done := a.idx.Snapshot()
 	if !done {
@@ -968,7 +972,7 @@ func (a *App) refreshFinderMatches() {
 	}
 	matches := make([]index.Entry, 0, len(entries))
 	for _, e := range entries {
-		if match.Matches(a.finderQuery, e.RelPath) {
+		if !e.IsDir && match.Matches(a.finderQuery, e.RelPath) {
 			matches = append(matches, e)
 		}
 	}
