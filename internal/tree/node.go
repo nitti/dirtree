@@ -5,6 +5,8 @@
 package tree
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +15,18 @@ import (
 
 	"github.com/nitti/dirtree/internal/match"
 )
+
+// errText extracts the underlying message from a directory-listing
+// error, dropping the "open <path>: " prefix Go's os package adds to a
+// *fs.PathError — the path is already visible via the row this message
+// is displayed inline on (SPEC.md §2.2, §5.2), so repeating it would be
+// redundant.
+func errText(err error) string {
+	if pe, ok := errors.AsType[*fs.PathError](err); ok {
+		return pe.Err.Error()
+	}
+	return err.Error()
+}
 
 // Node is one entry in the lazily-loaded tree.
 type Node struct {
@@ -73,19 +87,25 @@ func NewRoot(absPath string, ignorer Ignorer) *Node {
 // LoadChildren populates n.Children by listing the directory at n.Path
 // on disk. rootPath is the tree root's absolute path, needed to compute
 // each candidate's root-relative path for ignore matching. Loading an
-// already-loaded node is a no-op (SPEC.md §2).
+// already-successfully-loaded node is a no-op (SPEC.md §2); a node whose
+// last load attempt failed (n.Err set) is retried instead of staying
+// permanently stuck with a stale error — e.g. the user fixes the
+// permission problem and collapses/re-expands the directory, rather
+// than only being able to recover via a live-refresh (§6.1) picking up
+// the fix on its own.
 func (n *Node) LoadChildren(rootPath string, ignorer Ignorer) {
-	if !n.IsDir || n.loaded {
+	if !n.IsDir || (n.loaded && n.Err == "") {
 		return
 	}
 	n.loaded = true
 
 	entries, err := os.ReadDir(n.Path)
 	if err != nil {
-		n.Err = err.Error()
+		n.Err = errText(err)
 		n.Children = nil
 		return
 	}
+	n.Err = ""
 
 	if ignorer == nil {
 		ignorer = noopIgnorer{}
@@ -170,7 +190,7 @@ func RefreshTree(n *Node, rootPath string, ignorer Ignorer) []string {
 func (n *Node) refreshChildren(rootPath string, ignorer Ignorer) {
 	entries, err := os.ReadDir(n.Path)
 	if err != nil {
-		n.Err = err.Error()
+		n.Err = errText(err)
 		n.Children = nil
 		return
 	}

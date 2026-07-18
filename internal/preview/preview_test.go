@@ -352,9 +352,14 @@ func TestLoadBinaryFileFails(t *testing.T) {
 }
 
 func TestLoadNonexistentFileFails(t *testing.T) {
-	res := Load(filepath.Join(t.TempDir(), "nope.txt"), DefaultByteCap)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nope.txt")
+	res := Load(path, DefaultByteCap)
 	if !res.Failed || res.Message == "" {
 		t.Fatalf("expected failed result with a message, got %+v", res)
+	}
+	if strings.Contains(res.Message, path) {
+		t.Fatalf("expected message not to repeat the already-visible path, got %q", res.Message)
 	}
 }
 

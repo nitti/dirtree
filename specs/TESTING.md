@@ -30,6 +30,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 
 - Opening a path not already in the open-files list, whose read bytes contain a NUL byte, returns a "failed" result with the message "binary file, preview not available": no entry is created, and the previously-displayed entry (if any) is unaffected.
 - Opening a path not already in the open-files list that raises an OS-level read error (permission denied, path no longer exists) returns a "failed" result with an explanatory message derived from that error: no entry is created, and the previously-displayed entry (if any) is unaffected — this is the same outcome shape as the binary case, just a different message.
+- That explanatory message does not repeat the path being opened, even though the underlying OS error text normally does — it's already visible via whichever row the message ends up displayed inline on.
 - Opening a path not already in the open-files list, whose read succeeds and whose bytes contain no NUL byte, returns an "opened" result and creates/displays an entry as normal — neither failure check false-positives on ordinary readable text content.
 - Opening a path that already has an entry in the open-files list returns an "opened" result and reuses that entry without re-reading the file, regardless of current on-disk content (an existing entry is, by construction, never a "failed" open, since a failed open never creates one).
 - Both the read-error check and the binary check are derived from the same byte-cap-bounded read used for normal preview loading (§2.1) — determining either does not require a second, separate read of the file.
@@ -82,7 +83,8 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - `flatten()` on a root with no expansion beyond itself returns just the root.
 - `flatten()` includes a child's own subtree only when every ancestor down to the root is expanded; collapsing an intermediate ancestor removes its entire subtree from the flattened list even if descendants are individually marked expanded.
 - Loading a directory's children twice is a no-op the second time (doesn't re-list the filesystem or replace the children list).
-- A directory whose listing raises an OS-level error (e.g. permission denied) ends up with zero children and a non-empty error string, not an exception.
+- A directory whose listing raises an OS-level error (e.g. permission denied) ends up with zero children and a non-empty error string, not an exception; that error string does not repeat the directory's own path (it's already visible via the row it's shown on).
+- Loading a directory's children a second time, after the first attempt failed, actually retries the listing (rather than no-oping the way a successful load's second call does) — confirmed by fixing the underlying problem between calls and seeing the error clear and real children appear on the second call.
 - Directory entries are sorted directories-first, then case-insensitively by name.
 
 ## Expand / collapse / toggle (§3.1)
@@ -233,6 +235,7 @@ The following require a real terminal (ideally inside a multiplexer like Zellij 
 
 - Startup shows the empty preview state with the browser auto-opened on top of it.
 - Making an already-loaded, watched directory unreadable (e.g. `chmod 000` it while dirtree is running, with its row visible in the browser) triggers a live refresh that briefly flashes that row's background red, distinct from the green post-open flash and from selection's reverse-video; the row's inline `[error]` text (already covered elsewhere in this list) remains visible after the flash itself fades, rather than disappearing along with it.
+- Making a not-yet-expanded directory unreadable, then selecting it and pressing Right in the browser: the same red flash and inline `[error]` text appear immediately on that attempt, without needing a live-refresh cycle. Restoring its permissions and collapsing/re-expanding it (Left then Right) actually clears the error and shows its real contents, rather than the error lingering forever from the first failed attempt.
 - The browser's Return opens a file and displays it in the primary preview view without closing the browser, allowing several files to be queued before Escape/`b`.
 - Selecting a binary or unreadable file from the browser (Return), quick open, or content search's open action renders the corresponding failure message ("binary file, preview not available," or the OS error text) appended inline on that specific row (browser: `tree.Node.Err`, same as a directory listing error; quick open/content search: tracked by path since their rows aren't backed by a stable node) without navigating away or adding an open-files entry, and briefly flashes that row's background red (styleFlashError, §5.3) the same way a newly-unreadable directory does — the flash decays but the inline text persists until overwritten by a later successful open of that same path.
 - The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Return-to-display and `x`-to-remove, and its empty-list message renders when reachable.

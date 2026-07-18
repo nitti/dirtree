@@ -784,7 +784,12 @@ func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 	case ev.Key() == tcell.KeyDown:
 		a.browserSelected = flat[tree.MoveSelection(idx, 1, len(flat))]
 	case ev.Key() == tcell.KeyRight:
-		a.browserSelected = a.browserSelected.MoveRight(a.rootPath, a.ignorer)
+		target := a.browserSelected
+		hadErr := target.Err != ""
+		a.browserSelected = target.MoveRight(a.rootPath, a.ignorer)
+		if target.Err != "" && !hadErr {
+			a.flagErrorFlashes([]string{target.Path})
+		}
 		a.syncWatches()
 	case ev.Key() == tcell.KeyLeft:
 		a.browserSelected = a.browserSelected.MoveLeft()

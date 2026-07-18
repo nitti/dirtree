@@ -3,6 +3,7 @@ package tree
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nitti/dirtree/internal/ignore"
@@ -224,6 +225,41 @@ func TestPermissionErrorYieldsZeroChildrenAndErrString(t *testing.T) {
 	}
 	if len(n.Children) != 0 {
 		t.Fatal("expected zero children on listing error")
+	}
+	if strings.Contains(n.Err, noperm) {
+		t.Fatalf("expected error message not to repeat the already-visible path, got %q", n.Err)
+	}
+}
+
+func TestLoadChildrenRetriesAfterPreviousFailure(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root, permission denial won't apply")
+	}
+	rootPath := t.TempDir()
+	dir := filepath.Join(rootPath, "fixable")
+	must(t, os.Mkdir(dir, 0o000))
+	must(t, os.WriteFile(filepath.Join(rootPath, "keep.txt"), []byte("z"), 0o644))
+
+	root := NewRoot(rootPath, nil)
+	n := findChild(root, "fixable")
+	n.LoadChildren(rootPath, nil)
+	if n.Err == "" {
+		t.Fatal("expected an error from the first, still-unreadable load attempt")
+	}
+
+	must(t, os.Chmod(dir, 0o755))
+	must(t, os.WriteFile(filepath.Join(dir, "inner.txt"), []byte("z"), 0o644))
+
+	// A second LoadChildren call (mirroring collapse/re-expand in the
+	// UI, SPEC.md §5) must actually retry rather than silently no-op
+	// just because the node was already marked loaded by the failed
+	// attempt.
+	n.LoadChildren(rootPath, nil)
+	if n.Err != "" {
+		t.Fatalf("expected error cleared once the directory became readable, got %q", n.Err)
+	}
+	if findChild(n, "inner.txt") == nil {
+		t.Fatal("expected the retry to actually list the now-readable directory's contents")
 	}
 }
 
