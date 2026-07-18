@@ -14,6 +14,7 @@ package ui
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -120,6 +121,14 @@ type App struct {
 	// Keyed by path since more than one directory could newly error in
 	// the same debounced live-refresh batch.
 	browserErrorFlashes map[string]time.Time
+
+	// toastMessage/toastStart drive the generic bottom-right transient
+	// notification (internal/toast, SPEC.md §5.3) — currently only used
+	// for the open-file live-reload notice (§6.1a), sharing
+	// drawCornerBadge's anchor and fade timing with the indexing badge.
+	// toastMessage == "" means no toast is active.
+	toastMessage string
+	toastStart   time.Time
 
 	// finder state, used by the quick open overlay (SPEC.md §4.2).
 	finderQuery    string
@@ -261,7 +270,8 @@ func (a *App) syncWatches() {
 // merging by path so unaffected nodes keep their identity/expand
 // state, re-anchor browser selection if the previously-selected node
 // was deleted, kick off a background index rebuild so quick open
-// eventually reflects the change too, and pick up watches on any
+// eventually reflects the change too, reload the content of any open
+// file that changed on disk (§6.1a), and pick up watches on any
 // newly-loaded directories.
 func (a *App) handleFSChange() {
 	newlyErrored := tree.RefreshTree(a.root, a.rootPath, a.ignorer)
@@ -272,6 +282,25 @@ func (a *App) handleFSChange() {
 	if len(newlyErrored) > 0 {
 		a.flagErrorFlashes(newlyErrored)
 	}
+	if reloaded := a.files.Reload(previewByteCap); len(reloaded) > 0 {
+		a.showToast(reloadToastMessage(reloaded))
+	}
+}
+
+// reloadToastMessage formats the names of one or more just-reloaded
+// open files (SPEC.md §6.1a) into the transient notification text.
+func reloadToastMessage(names []string) string {
+	if len(names) == 1 {
+		return names[0] + " reloaded (changed on disk)"
+	}
+	return strings.Join(names, ", ") + " reloaded (changed on disk)"
+}
+
+// showToast starts the generic bottom-right transient notification
+// (SPEC.md §5.3) with msg, replacing any toast already in progress.
+func (a *App) showToast(msg string) {
+	a.toastMessage = msg
+	a.toastStart = time.Now()
 }
 
 // flagErrorFlashes starts a brief red flash (SPEC.md §2.2, §6.1, §5.3)
