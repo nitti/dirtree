@@ -110,6 +110,16 @@ type App struct {
 	browserMessage    string    // transient inline status/failure message (§2.2)
 	browserFlashPath  string    // absolute path of the file row most recently opened via browserOpen, for a brief post-open flash (mirrors searchFlashPath below)
 	browserFlashStart time.Time // when the flash started; drawn only while time.Since(browserFlashStart) < flashDuration
+	// browserErrorFlashes tracks a brief red flash (styleFlashError) for
+	// any directory whose listing newly started failing during a
+	// live-refresh (SPEC.md §6.1) — e.g. it lost read permission out from
+	// under the running session. Unlike browserFlashPath above, the flash
+	// itself is only the attention-grabbing part and always decays; the
+	// error text it's drawing attention to (tree.Node.Err, rendered
+	// inline by browserLabel) does not fade with it and stays until the
+	// error clears on its own. Keyed by path since more than one
+	// directory could newly error in the same debounced refresh.
+	browserErrorFlashes map[string]time.Time
 
 	// finder state, used by the quick open overlay (SPEC.md §4.2).
 	finderQuery    string
@@ -171,16 +181,6 @@ type App struct {
 
 	badgeSkip spinner.MinDurationSkip
 
-	// errorToast is a transient error message (SPEC.md §6.1) drawn in the
-	// same bottom-right corner as the indexing badge, built on the same
-	// toast fade timing (internal/toast) — for a non-fatal event that
-	// doesn't fit the per-node inline error indicator (§5.2), e.g. a
-	// live-refresh discovering a directory that just lost read
-	// permission. Empty means nothing to show; it takes priority over the
-	// indexing badge while active, since it's strictly more recent.
-	errorToast      string
-	errorToastStart time.Time
-
 	quit bool
 }
 
@@ -197,15 +197,16 @@ func New(rootPath string) *App {
 	watcher, _ := watch.New(watchDebounce)
 
 	a := &App{
-		rootPath:        rootPath,
-		root:            root,
-		ignorer:         ignorer,
-		idx:             idx,
-		watcher:         watcher,
-		overlay:         overlayBrowser, // SPEC.md §1: browser auto-opens on top of the (empty) primary view at startup
-		browserSelected: root,
-		files:           openfiles.New(),
-		searchDone:      make(chan searchOutcome, 8),
+		rootPath:            rootPath,
+		root:                root,
+		ignorer:             ignorer,
+		idx:                 idx,
+		watcher:             watcher,
+		overlay:             overlayBrowser, // SPEC.md §1: browser auto-opens on top of the (empty) primary view at startup
+		browserSelected:     root,
+		files:               openfiles.New(),
+		searchDone:          make(chan searchOutcome, 8),
+		browserErrorFlashes: map[string]time.Time{},
 	}
 	a.syncWatches()
 	return a
@@ -248,20 +249,26 @@ func (a *App) handleFSChange() {
 	a.badgeSkip.Reset()
 	a.syncWatches()
 	if len(newlyErrored) > 0 {
-		// Only the first is surfaced: a toast is a one-off notification,
-		// not a queue, and simultaneous permission changes across several
-		// directories in one debounced batch is a rare enough edge case
-		// that announcing just one (the per-node indicator still covers
-		// the rest once expanded) is preferable to stacking messages.
-		a.showErrorToast("permission denied: " + tree.RelativeDisplayPath(a.rootPath, newlyErrored[0]))
+		a.flagErrorFlashes(newlyErrored)
 	}
 }
 
-// showErrorToast triggers the transient error toast (see errorToast's
-// doc comment) with message, starting its display+fade timing now.
-func (a *App) showErrorToast(message string) {
-	a.errorToast = message
-	a.errorToastStart = time.Now()
+// flagErrorFlashes starts a brief red flash (SPEC.md §6.1) for each path
+// in paths, drawing attention to the inline error text browserLabel
+// already renders for it (tree.Node.Err) without the error text itself
+// fading — only the flash decays. Also prunes any previously-flashed
+// path whose flash has already finished, so the map doesn't grow
+// unbounded over a long-running session.
+func (a *App) flagErrorFlashes(paths []string) {
+	now := time.Now()
+	for p, start := range a.browserErrorFlashes {
+		if now.Sub(start) >= flashDuration {
+			delete(a.browserErrorFlashes, p)
+		}
+	}
+	for _, p := range paths {
+		a.browserErrorFlashes[p] = now
+	}
 }
 
 // Run configures the terminal and drives the main loop until the user
