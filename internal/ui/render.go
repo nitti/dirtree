@@ -29,10 +29,11 @@ var (
 	// mode's on/off state visually unmistakable, not just the legend
 	// text.
 	styleCopyModeTitle = tcell.StyleDefault.Background(tcell.ColorDarkGreen).Foreground(tcell.ColorWhite)
-	// styleSearchInput sets the content search query row (SPEC.md §9.2)
-	// apart from the plain-background results list below it, so the
-	// "this is where you're typing" row is visually unmistakable at a
-	// glance rather than blending into the rest of the overlay.
+	// styleSearchInput sets the content search (SPEC.md §9.2) and quick
+	// open (§4.2) query rows apart from the plain-background list below
+	// them, so the "this is where you're typing" row is visually
+	// unmistakable at a glance rather than blending into the rest of the
+	// overlay.
 	styleSearchInput = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
 	// styleSearchFlash briefly replaces a search-result file row's normal
 	// style right after it's opened (performSearchOpen/searchFlashPath),
@@ -245,10 +246,12 @@ func (a *App) fillRect(x0, y0, w, h int, style tcell.Style) {
 }
 
 // drawQuickOpen renders the quick open overlay (SPEC.md §4.2, §5.2): a
-// header showing the query and its single action (Return opens the
-// selected match), and the flat match list.
+// header with its single action (Return opens the selected match), the
+// query on its own row directly below (the same input-row convention
+// content search uses, §9.2), and the flat match list.
 func (a *App) drawQuickOpen(w, h int) {
-	a.drawHeader(w, headerText(w, a.finderQuery, "[return] open  [esc] cancel"))
+	a.drawHeader(w, headerText(w, "quick open", "[return] open  [esc] cancel"))
+	a.drawText(0, 1, w, "> "+a.finderQuery, styleSearchInput)
 	a.drawFinderList(w, h)
 }
 
@@ -256,7 +259,8 @@ func (a *App) drawQuickOpen(w, h int) {
 // (SPEC.md §4.1's index, §5.2's indexing/no-matches placeholder), plus
 // any inline failure message from a failed open.
 func (a *App) drawFinderList(w, h int) {
-	listHeight := h - 1
+	const listTop = 2
+	listHeight := h - listTop
 	if a.finderMessage != "" {
 		listHeight--
 	}
@@ -268,9 +272,9 @@ func (a *App) drawFinderList(w, h int) {
 		// indistinguishable from "still indexing" at the pure-decision
 		// level, so the match-list area stays blank either way rather
 		// than claiming "no matches" before indexing has even looked.
-		a.drawText(0, 1, w, centerPad("indexing…", w), styleNormal)
+		a.drawText(0, listTop, w, centerPad("indexing…", w), styleNormal)
 	case len(a.finderMatches) == 0:
-		a.drawText(0, 1, w, centerPad("no matches", w), styleNormal)
+		a.drawText(0, listTop, w, centerPad("no matches", w), styleNormal)
 	default:
 		if listHeight > 0 {
 			if a.finderSelected < a.finderScroll {
@@ -289,7 +293,7 @@ func (a *App) drawFinderList(w, h int) {
 			if i == a.finderSelected {
 				style = styleSelected
 			}
-			a.drawText(0, 1+row, w, a.finderMatches[i].RelPath, style)
+			a.drawText(0, listTop+row, w, a.finderMatches[i].RelPath, style)
 		}
 	}
 
