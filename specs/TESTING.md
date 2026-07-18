@@ -246,7 +246,6 @@ The following require a real terminal (ideally inside a multiplexer like Zellij 
 - Quick open is not a toggle: typing `o` as part of a filter query (e.g. "go") filters normally rather than closing the overlay; only Escape closes it.
 - `o` opens quick open from within the browser overlay too (not just the primary preview view), replacing the browser view; Escape from there returns to the browser, unchanged, while opening a match lands on the primary preview view instead (confirmed for both entry points).
 - Pressing Escape at the primary preview view (no overlay active, no active find) does nothing — it does not quit; only `q` quits.
-- Jump to file (`/` from within the browser) fully replaces the browser view while open, and Escape from it returns to the browser exactly as it was.
 - Browser split-view vs. popup layout flips correctly on live resize, with the preview pane visible-but-inert in split view.
 - The header/title bar shows the tree root path (abbreviated with `~` when under the home directory) alongside the keybinding legend in a wide terminal, and drops the root path (keeping just the legend) once the terminal is narrowed below the point where both fit — confirmed live on resize in both directions.
 - The file title bar, directly above the preview content, shows the displayed entry's root-relative path (not its absolute path) whenever a file is open, in both the primary preview view and the split-view browser's preview pane, and disappears when no file is displayed.
