@@ -12,6 +12,7 @@ import (
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/search"
 	"github.com/nitti/dirtree/internal/spinner"
+	"github.com/nitti/dirtree/internal/toast"
 	"github.com/nitti/dirtree/internal/tree"
 )
 
@@ -25,10 +26,15 @@ var (
 	// than the primary preview view is active — bold sets the label
 	// apart from the plain-weight legend sharing the same row, similar
 	// to how editors like hx render their current mode name.
-	styleHeaderMode  = styleHeader.Bold(true)
-	styleFileTitle   = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
-	styleError       = tcell.StyleDefault.Foreground(tcell.ColorRed)
-	styleBadge       = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
+	styleHeaderMode = styleHeader.Bold(true)
+	styleFileTitle  = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
+	styleError      = tcell.StyleDefault.Foreground(tcell.ColorRed)
+	styleBadge      = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
+	// styleErrorBadge is the transient error toast's corner-badge style
+	// (SPEC.md §6.1) — same contrast-not-intensity treatment as styleBadge
+	// (§5.3's "subtle, not flashy"), just a distinct hue so it doesn't
+	// read as an indexing-status badge.
+	styleErrorBadge  = tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite)
 	styleFindMatch   = tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
 	styleFindCurrent = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack).Bold(true)
 	// styleCopyModeTitle replaces styleFileTitle whenever copy mode
@@ -837,14 +843,22 @@ func browserLabel(n *tree.Node, open bool) string {
 	return label
 }
 
-// drawBadge renders the bottom-right delayed-loading indicator badge
-// (SPEC.md §5.2) if the background index warrants showing one.
+// drawBadge renders the bottom-right corner status area (SPEC.md §5.2,
+// §6.1): the transient error toast when one is active, otherwise the
+// delayed-loading indicator badge if the background index warrants
+// showing one. The two never overlap — the error toast takes priority,
+// since it's strictly the more recent event — so this is a single
+// corner slot, not a stack.
 func (a *App) drawBadge(w, h int) {
+	if text, style, ok := a.errorToastText(); ok {
+		a.drawCornerBadge(w, h, text, style)
+		return
+	}
 	elapsed := a.idx.Elapsed()
 	sinceDone, done := a.idx.SinceDone()
 	text, hiddenPrefix, ok := spinner.BadgeDecision(
 		elapsed, sinceDone, done, spinner.DebugAlwaysShow, a.badgeSkip,
-		spinnerThreshold, spinnerMinDisplayDuration, completionDisplayDuration, completionFadeDuration,
+		spinnerThreshold, spinnerMinDisplayDuration, toastDisplayDuration, toastFadeDuration,
 		spinnerFPS, completionMessage,
 	)
 	if !ok {
@@ -859,12 +873,46 @@ func (a *App) drawBadge(w, h int) {
 	if len(visible) == 0 {
 		return
 	}
+	a.drawCornerBadge(w, h, string(visible), styleBadge)
+}
+
+// errorToastText computes the transient error toast's currently visible
+// text (already trimmed for its left-to-right fade), reporting ok=false
+// once its display+fade window has fully elapsed (and clearing the
+// stored message, so a stale one can't linger past its own decay).
+func (a *App) errorToastText() (string, tcell.Style, bool) {
+	if a.errorToast == "" {
+		return "", tcell.Style{}, false
+	}
+	elapsed := time.Since(a.errorToastStart)
+	phase, hiddenPrefix := toast.Decide(elapsed, toastDisplayDuration, toastFadeDuration, len(a.errorToast))
+	if phase == toast.Hidden {
+		a.errorToast = ""
+		return "", tcell.Style{}, false
+	}
+	visible := []rune(a.errorToast)
+	if hiddenPrefix < len(visible) {
+		visible = visible[hiddenPrefix:]
+	} else {
+		visible = nil
+	}
+	if len(visible) == 0 {
+		return "", tcell.Style{}, false
+	}
+	return string(visible), styleErrorBadge, true
+}
+
+// drawCornerBadge draws text right-anchored on the bottom row, the
+// shared anchor point both the indexing badge and the error toast fade
+// out from (SPEC.md §5.3's "anchored, directional motion").
+func (a *App) drawCornerBadge(w, h int, text string, style tcell.Style) {
+	visible := []rune(text)
 	x := max(w-len(visible), 0)
 	y := h - 1
 	if y < 0 {
 		return
 	}
-	a.drawText(x, y, len(visible), string(visible), styleBadge)
+	a.drawText(x, y, len(visible), text, style)
 }
 
 // drawText draws text starting at (x, y), clipped and padded with

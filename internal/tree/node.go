@@ -131,14 +131,29 @@ func (n *Node) Loaded() bool {
 // "keep it selected by identity" rule). Directories never visited by the
 // user are left alone: they'll pick up current disk state whenever they
 // are eventually expanded, same as today.
-func RefreshTree(n *Node, rootPath string, ignorer Ignorer) {
+//
+// It returns the paths of any directories whose listing newly started
+// failing during this refresh (Err was empty before, non-empty after) —
+// e.g. a directory that lost read permission out from under the running
+// session. A directory that already had an error, or still lists fine,
+// isn't included: the per-node inline error indicator (§5.2) already
+// covers the steady-state case, so this is only for the transition a
+// caller might want to surface as a one-off notification (SPEC.md §6.1),
+// not the ongoing state.
+func RefreshTree(n *Node, rootPath string, ignorer Ignorer) []string {
 	if !n.IsDir || !n.loaded {
-		return
+		return nil
 	}
+	hadErr := n.Err != ""
 	n.refreshChildren(rootPath, ignorer)
-	for _, c := range n.Children {
-		RefreshTree(c, rootPath, ignorer)
+	var newlyErrored []string
+	if n.Err != "" && !hadErr {
+		newlyErrored = append(newlyErrored, n.Path)
 	}
+	for _, c := range n.Children {
+		newlyErrored = append(newlyErrored, RefreshTree(c, rootPath, ignorer)...)
+	}
+	return newlyErrored
 }
 
 // refreshChildren re-lists n's directory and merges the result into

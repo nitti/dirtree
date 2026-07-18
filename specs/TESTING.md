@@ -186,6 +186,12 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - In substring mode, a query containing regex metacharacters (e.g. `foo(bar)`) is matched completely literally — it is never interpreted as a pattern.
 - In regex mode, an invalid pattern returns a non-nil error and no results, without scanning any candidate (verified by using a candidate that would otherwise match, and confirming zero reads/matches occurred).
 
+## Toast primitive (fade timing) (§5.3)
+
+- A toast is shown in full throughout the display-duration window (including at its start and just under its end).
+- A toast starts fading (a nonzero, growing hidden-prefix count) once elapsed time reaches the display duration, and is fully hidden once elapsed time reaches display duration + fade duration (boundary-test both transitions).
+- A zero fade duration hides the toast immediately once the display duration elapses, rather than dividing by zero or leaving it stuck fading forever.
+
 ## Indexing-delay / spinner-suppression logic (§5.2)
 
 - The loading indicator is hidden whenever indexing is already marked done, regardless of elapsed time.
@@ -193,8 +199,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - The loading indicator is shown once indexing is still running and elapsed time has reached/exceeded the configured delay threshold (boundary-test at exactly the threshold).
 - Spinner frame selection is deterministic given the same elapsed time (same input → same glyph, not randomized).
 - Spinner frame advances (cycles to a different glyph) as elapsed time increases across at least one full frame-interval step.
-- The completion message is shown in full throughout the display-duration window (including at its start and just under its end).
-- The completion message starts fading (a nonzero, growing hidden-prefix count) once elapsed time since completion reaches the display duration, and is fully hidden once elapsed time reaches display duration + fade duration (boundary-test both transitions).
+- The completion message's shown/fading/hidden timing itself is covered by the toast-primitive group above (BadgeDecision delegates to it directly); what's specific to the badge and tested here is the sequencing layered on top of that timing:
 - The bottom-right badge shows no completion message at all when indexing finished before the perceptibility threshold — i.e. time-to-completion, not time-since-completion, is what's checked against the threshold — since the spinner never showed for that instant a run in the first place.
 - Once indexing has crossed the perceptibility threshold but finishes before the minimum display duration has elapsed, the badge keeps showing the spinner (not the completion message) until that minimum duration is reached (boundary-test at exactly the minimum).
 - Once indexing has run at least as long as the minimum display duration before finishing, the badge shows the completion message immediately upon completion (no extension needed).
@@ -219,12 +224,15 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - If the currently-selected browser node was deleted by the change, the selection-fallback helper returns its nearest surviving ancestor.
 - If an entire subtree containing the selection was deleted, the selection-fallback helper walks all the way up to the root (which always survives).
 - The background index rebuilds and reflects a newly-created path once the rebuild completes.
+- Refreshing a directory that newly fails to list (e.g. loses read permission) reports that directory's path as newly-erroring.
+- Refreshing a directory that already had a listing error does not re-report it as newly-erroring.
 
 ## Manual / rendering-layer verification (not unit-testable)
 
 The following require a real terminal (ideally inside a multiplexer like Zellij or tmux) and should be explicitly confirmed, and their status stated, whenever a change touching them is reported complete:
 
 - Startup shows the empty preview state with the browser auto-opened on top of it.
+- Making an already-loaded, watched directory unreadable (e.g. `chmod 000` it while dirtree is running) triggers a live refresh that shows a transient error toast in the bottom-right corner naming that directory, distinctly colored from the indexing badge, that shows in full then fades out left-to-right and disappears on the same timing as the indexing-complete message; if the indexing badge would otherwise be showing at that moment, the error toast takes over the corner instead of the two overlapping.
 - The browser's Return opens a file and displays it in the primary preview view without closing the browser, allowing several files to be queued before Escape/`b`.
 - Selecting a binary or unreadable file from the browser (Return) or from quick open renders the corresponding failure message ("binary file, preview not available," or the OS error text) inline in that overlay without navigating away or adding an open-files entry.
 - The open-files-list overlay (`Tab` from preview) correctly lists entries in insertion order, supports Return-to-display and `x`-to-remove, and its empty-list message renders when reachable.

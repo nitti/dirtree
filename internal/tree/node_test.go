@@ -679,6 +679,55 @@ func TestNearestSurvivingFallsBackToRootWhenWholeSubtreeDeleted(t *testing.T) {
 	}
 }
 
+func TestRefreshTreeReportsNewlyErroringDirectory(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root, permission denial won't apply")
+	}
+	rootPath := t.TempDir()
+	dir := filepath.Join(rootPath, "goesbad")
+	must(t, os.Mkdir(dir, 0o755))
+	root := NewRoot(rootPath, nil)
+	n := findChild(root, "goesbad")
+	n.LoadChildren(rootPath, nil)
+	if n.Err != "" {
+		t.Fatalf("expected no error while dir is still readable, got %q", n.Err)
+	}
+
+	must(t, os.Chmod(dir, 0o000))
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+
+	newlyErrored := RefreshTree(root, rootPath, nil)
+
+	if n.Err == "" {
+		t.Fatal("expected refresh to record the new listing error")
+	}
+	if len(newlyErrored) != 1 || newlyErrored[0] != dir {
+		t.Fatalf("expected newlyErrored=[%q], got %v", dir, newlyErrored)
+	}
+}
+
+func TestRefreshTreeDoesNotReReportAlreadyErroringDirectory(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root, permission denial won't apply")
+	}
+	rootPath := t.TempDir()
+	dir := filepath.Join(rootPath, "noperm")
+	must(t, os.Mkdir(dir, 0o000))
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+	root := NewRoot(rootPath, nil)
+	n := findChild(root, "noperm")
+	n.LoadChildren(rootPath, nil)
+	if n.Err == "" {
+		t.Fatal("expected initial load to record an error")
+	}
+
+	newlyErrored := RefreshTree(root, rootPath, nil)
+
+	if len(newlyErrored) != 0 {
+		t.Fatalf("expected an already-erroring directory not to be reported again, got %v", newlyErrored)
+	}
+}
+
 func TestRefreshTreeIgnoresIgnoredEntries(t *testing.T) {
 	rootPath := buildFixture(t)
 	must(t, os.WriteFile(filepath.Join(rootPath, ".gitignore"), []byte("*.log\n"), 0o644))

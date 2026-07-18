@@ -70,9 +70,13 @@ const (
 	spinnerThreshold          = 250 * time.Millisecond
 	spinnerMinDisplayDuration = 1 * time.Second
 	spinnerFPS                = 10.0
-	completionDisplayDuration = 2 * time.Second
-	completionFadeDuration    = 400 * time.Millisecond
-	completionMessage         = "indexing complete"
+	// toastDisplayDuration/toastFadeDuration are the shared "show in full,
+	// then fade left-to-right" timing (internal/toast, SPEC.md §5.3) used
+	// by both the indexing-complete badge message and the transient error
+	// toast below.
+	toastDisplayDuration = 2 * time.Second
+	toastFadeDuration    = 400 * time.Millisecond
+	completionMessage    = "indexing complete"
 	// flashDuration is how long the post-open row flash (§2.2/§3.4/§9.2's
 	// "on-open confirmation") stays visible before fading back to normal,
 	// shared by the browser and content search overlays.
@@ -167,6 +171,16 @@ type App struct {
 
 	badgeSkip spinner.MinDurationSkip
 
+	// errorToast is a transient error message (SPEC.md §6.1) drawn in the
+	// same bottom-right corner as the indexing badge, built on the same
+	// toast fade timing (internal/toast) — for a non-fatal event that
+	// doesn't fit the per-node inline error indicator (§5.2), e.g. a
+	// live-refresh discovering a directory that just lost read
+	// permission. Empty means nothing to show; it takes priority over the
+	// indexing badge while active, since it's strictly more recent.
+	errorToast      string
+	errorToastStart time.Time
+
 	quit bool
 }
 
@@ -228,11 +242,26 @@ func (a *App) syncWatches() {
 // eventually reflects the change too, and pick up watches on any
 // newly-loaded directories.
 func (a *App) handleFSChange() {
-	tree.RefreshTree(a.root, a.rootPath, a.ignorer)
+	newlyErrored := tree.RefreshTree(a.root, a.rootPath, a.ignorer)
 	a.browserSelected = tree.NearestSurviving(a.browserSelected)
 	a.idx.Rebuild(a.rootPath, a.ignorer)
 	a.badgeSkip.Reset()
 	a.syncWatches()
+	if len(newlyErrored) > 0 {
+		// Only the first is surfaced: a toast is a one-off notification,
+		// not a queue, and simultaneous permission changes across several
+		// directories in one debounced batch is a rare enough edge case
+		// that announcing just one (the per-node indicator still covers
+		// the rest once expanded) is preferable to stacking messages.
+		a.showErrorToast("permission denied: " + tree.RelativeDisplayPath(a.rootPath, newlyErrored[0]))
+	}
+}
+
+// showErrorToast triggers the transient error toast (see errorToast's
+// doc comment) with message, starting its display+fade timing now.
+func (a *App) showErrorToast(message string) {
+	a.errorToast = message
+	a.errorToastStart = time.Now()
 }
 
 // Run configures the terminal and drives the main loop until the user
