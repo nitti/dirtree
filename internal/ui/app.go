@@ -925,6 +925,19 @@ func (a *App) openFinder() {
 	}
 }
 
+// finderListHeight returns quick open's match-list viewport height in
+// rows, mirroring drawFinderList's own layout math (header row, query
+// input row, and an inline message row when present) so Page-Up/Page-
+// Down move by the same number of rows the list actually shows.
+func (a *App) finderListHeight() int {
+	_, h := a.screen.Size()
+	height := h - 2 // header row + query input row
+	if a.finderMessage != "" {
+		height--
+	}
+	return height
+}
+
 // recomputeFinderMatches rebuilds finderMatches from the current query
 // against the background index (SPEC.md §4.1), used by quick open.
 // While the index hasn't finished building, matches are nil/unavailable
@@ -957,6 +970,14 @@ func (a *App) handleFinderTypingKey(ev *tcell.EventKey) bool {
 	case ev.Key() == tcell.KeyBacktab, ev.Key() == tcell.KeyUp:
 		if len(a.finderMatches) > 0 {
 			a.finderSelected = tree.MoveSelection(a.finderSelected, -1, len(a.finderMatches))
+		}
+	case ev.Key() == tcell.KeyPgUp:
+		if len(a.finderMatches) > 0 {
+			a.finderSelected = tree.MoveSelectionClamped(a.finderSelected, -a.finderListHeight(), len(a.finderMatches))
+		}
+	case ev.Key() == tcell.KeyPgDn:
+		if len(a.finderMatches) > 0 {
+			a.finderSelected = tree.MoveSelectionClamped(a.finderSelected, a.finderListHeight(), len(a.finderMatches))
 		}
 	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
 		if len(a.finderQuery) > 0 {

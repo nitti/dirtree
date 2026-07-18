@@ -361,6 +361,25 @@ func MoveSelection(current, delta, count int) int {
 	return next
 }
 
+// MoveSelectionClamped returns the new selected index after moving delta
+// from current within a list of the given count, clamped at the first/
+// last index rather than wrapping (SPEC.md §4.2's quick open Page Up/
+// Page Down, and §2.3's open-files list Page Up/Down). count == 0
+// returns 0 without dividing by zero.
+func MoveSelectionClamped(current, delta, count int) int {
+	if count <= 0 {
+		return 0
+	}
+	next := current + delta
+	if next < 0 {
+		return 0
+	}
+	if next > count-1 {
+		return count - 1
+	}
+	return next
+}
+
 // RelativeDisplayPath renders target's path relative to root as a
 // POSIX slash-delimited string (SPEC.md §6, §"Path display and reveal").
 func RelativeDisplayPath(root, target string) string {

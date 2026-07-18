@@ -455,6 +455,36 @@ func TestMoveSelectionEmptyList(t *testing.T) {
 	}
 }
 
+func TestMoveSelectionClampedClampsAtEnd(t *testing.T) {
+	if got := MoveSelectionClamped(4, 1, 5); got != 4 {
+		t.Fatalf("got %d, want 4", got)
+	}
+}
+
+func TestMoveSelectionClampedClampsAtStart(t *testing.T) {
+	if got := MoveSelectionClamped(0, -1, 5); got != 0 {
+		t.Fatalf("got %d, want 0", got)
+	}
+}
+
+func TestMoveSelectionClampedJumpsWithinBounds(t *testing.T) {
+	if got := MoveSelectionClamped(2, 3, 10); got != 5 {
+		t.Fatalf("got %d, want 5", got)
+	}
+	if got := MoveSelectionClamped(8, -3, 10); got != 5 {
+		t.Fatalf("got %d, want 5", got)
+	}
+}
+
+func TestMoveSelectionClampedEmptyList(t *testing.T) {
+	if got := MoveSelectionClamped(0, 1, 0); got != 0 {
+		t.Fatalf("got %d, want 0", got)
+	}
+	if got := MoveSelectionClamped(0, -1, 0); got != 0 {
+		t.Fatalf("got %d, want 0", got)
+	}
+}
+
 // --- .git exclusion (gitignore-specific cases live in internal/ignore) ---
 
 func TestGitDirNeverListed(t *testing.T) {

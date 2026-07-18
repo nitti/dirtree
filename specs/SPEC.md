@@ -193,7 +193,7 @@ Triggered by `o` from the primary preview view (§2.1), including while it's sho
 - The primary preview view is fully replaced by a **flat list view**: every entry from the background index (§4.1), rendered as its root-relative, slash-delimited path (not the browser's indented/marker style) — this is what makes it distinct from the browser, and lets a query match on any path segment, not just a leaf name.
 - A query string starts empty and accumulates/removes characters as the user types/backspaces. It is shown on its own input row directly below the header (see §5.2).
 - **While the background index has not finished building**: matches are empty/unavailable; render the delayed loading indicator described in §5.2 instead of "no matches" (don't claim there are no matches when you simply haven't looked yet).
-- A `selected` index into the current match list, with wraparound cycling: advance forward (Tab, or Down) or backward (Shift-Tab, or Up).
+- A `selected` index into the current match list, with wraparound cycling: advance forward (Tab, or Down) or backward (Shift-Tab, or Up). Page Up/Page Down move the selection by a full match-list-height jump instead of one row at a time, clamped at the first/last match rather than wrapping (the same "jump by a page, don't wrap" convention the open-files list's own Page Up/Down uses, §2.3).
 - **Return**, if there is at least one match: open the selected match's path into the open-files list, per §2.2's open semantics (reusing an existing open-files entry if the path is already open). If the result is "opened," close the overlay, landing on the primary preview view with that file displayed. If the result is "failed" (read error or binary), see §2.2's open-failure signaling — the overlay stays open with the message shown inline instead of exiting.
 - **Backspace**: remove the last character of the query; reset match-selection to the first match and reset scroll.
 - **`o` / Escape**: cancel the overlay and return to the primary preview view, unchanged (query and match selection are discarded; no action is performed).
@@ -331,6 +331,7 @@ Terminal input libraries commonly buffer a short delay after receiving an Escape
 | Backspace | quick open | remove last query character |
 | Tab / Down | quick open | next match (wraps) |
 | Shift-Tab / Up | quick open | previous match (wraps) |
+| Page Up / Page Down | quick open | move the selection up/down by the match list's own visible height (clamped at the first/last match, not wrapping) |
 | Return | quick open | open the selected match into the open-files list, exit overlay (always lands on the primary preview view, regardless of entry point) |
 | Escape | quick open | cancel, return to the primary preview view, unchanged |
 | (typing) | jump to file | append to query; browser selection jumps live to the first matching visible row (prefix match on leaf name), or stays put if none match |
