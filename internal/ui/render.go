@@ -34,6 +34,12 @@ var (
 	// "this is where you're typing" row is visually unmistakable at a
 	// glance rather than blending into the rest of the overlay.
 	styleSearchInput = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
+	// styleSearchFlash briefly replaces a search-result file row's normal
+	// style right after it's opened (performSearchOpen/searchFlashPath),
+	// as an on-open confirmation distinct from styleSelected (cursor
+	// position) and from the lasting "●" already-open indicator every
+	// open file's row shows regardless of when it was opened.
+	styleSearchFlash = tcell.StyleDefault.Background(tcell.ColorGreen).Foreground(tcell.ColorBlack).Bold(true)
 )
 
 const (
@@ -394,7 +400,11 @@ func (a *App) drawSearch(w, h int) {
 			if i == a.searchSelected {
 				style = styleSelected
 			}
-			a.drawText(0, listTop+line, w, searchRowLabel(a.searchResults, a.searchCollapsed, rows[i]), style)
+			row := rows[i]
+			if !row.isHit && a.searchResults[row.file].AbsPath == a.searchFlashPath && time.Since(a.searchFlashStart) < searchFlashDuration {
+				style = styleSearchFlash
+			}
+			a.drawText(0, listTop+line, w, searchRowLabel(a.searchResults, a.searchCollapsed, a.files, row), style)
 		}
 	}
 
@@ -404,10 +414,13 @@ func (a *App) drawSearch(w, h int) {
 }
 
 // searchRowLabel renders one flattened search-result row (SPEC.md
-// §9.2): a file row shows a disclosure indicator plus its root-relative
-// path and hit count; a hit row is indented under its file and shows
-// its 1-based line number and (trimmed) text.
-func searchRowLabel(results []search.FileResult, collapsed map[string]bool, row searchRow) string {
+// §9.2): a file row shows a disclosure indicator, an "already open"
+// indicator (●) when the open-files list already has that file open,
+// then its root-relative path and hit count; a hit row is indented
+// under its file and shows its 1-based line number and (trimmed) text.
+// The open indicator is deliberately file-row-only, not repeated on
+// each hit row underneath, since "open" is a per-file fact.
+func searchRowLabel(results []search.FileResult, collapsed map[string]bool, files *openfiles.List, row searchRow) string {
 	r := results[row.file]
 	if row.isHit {
 		h := r.Hits[row.hit]
@@ -417,11 +430,15 @@ func searchRowLabel(results []search.FileResult, collapsed map[string]bool, row 
 	if collapsed[r.AbsPath] {
 		marker = "▸"
 	}
+	open := " "
+	if files.IsOpen(r.AbsPath) {
+		open = "●"
+	}
 	plural := "es"
 	if len(r.Hits) == 1 {
 		plural = ""
 	}
-	return fmt.Sprintf("%s %s (%d match%s)", marker, r.RelPath, len(r.Hits), plural)
+	return fmt.Sprintf("%s %s %s (%d match%s)", marker, open, r.RelPath, len(r.Hits), plural)
 }
 
 // rootLabel renders the tree root path for display, abbreviated with

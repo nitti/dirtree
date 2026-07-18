@@ -99,6 +99,7 @@ const (
 	completionDisplayDuration = 2 * time.Second
 	completionFadeDuration    = 400 * time.Millisecond
 	completionMessage         = "indexing complete"
+	searchFlashDuration       = 400 * time.Millisecond
 	watchDebounce             = 300 * time.Millisecond
 	previewByteCap            = preview.DefaultByteCap
 
@@ -138,19 +139,21 @@ type App struct {
 	quickOpenEntry quickOpenEntryPoint // which screen quick open was opened from, so Escape returns to it
 
 	// content search overlay state (SPEC.md §9)
-	searchEntry     searchEntryPoint
-	searchQuery     string
-	searchRegex     bool                // ModeRegex vs. ModeSubstring toggle (ctrl+r)
-	searchResults   []search.FileResult // nil while not yet searched (empty query, waiting on index, or a scan in flight), distinct from "searched, zero matches"
-	searchError     string              // non-empty only for an invalid regex query (ModeRegex); takes precedence over searchResults' nil/empty distinction
-	searchCollapsed map[string]bool     // AbsPath -> collapsed; absent (or false) means expanded, so results start expanded by default
-	searchSelected  int                 // index into a.searchRows(), not directly into searchResults
-	searchScroll    int
-	searchMessage   string // transient inline failure message for open-into-list (§2.2)
-	searchGen       int
-	searchCancel    context.CancelFunc
-	searchScanStart time.Time // when the in-flight scan (searchCancel != nil) started, for the spinner shown once it runs long enough to be noticeable
-	searchDone      chan searchOutcome
+	searchEntry      searchEntryPoint
+	searchQuery      string
+	searchRegex      bool                // ModeRegex vs. ModeSubstring toggle (ctrl+r)
+	searchResults    []search.FileResult // nil while not yet searched (empty query, waiting on index, or a scan in flight), distinct from "searched, zero matches"
+	searchError      string              // non-empty only for an invalid regex query (ModeRegex); takes precedence over searchResults' nil/empty distinction
+	searchCollapsed  map[string]bool     // AbsPath -> collapsed; absent (or false) means expanded, so results start expanded by default
+	searchSelected   int                 // index into a.searchRows(), not directly into searchResults
+	searchScroll     int
+	searchMessage    string // transient inline failure message for open-into-list (§2.2)
+	searchGen        int
+	searchCancel     context.CancelFunc
+	searchScanStart  time.Time // when the in-flight scan (searchCancel != nil) started, for the spinner shown once it runs long enough to be noticeable
+	searchFlashPath  string    // AbsPath of the file row most recently opened via performSearchOpen, for a brief post-open flash
+	searchFlashStart time.Time // when the flash started; the flash is drawn only while time.Since(searchFlashStart) < searchFlashDuration
+	searchDone       chan searchOutcome
 
 	// files is the open-files list (SPEC.md §2.2, §2.3) the primary
 	// preview view and both overlays' open actions operate on.
@@ -1211,7 +1214,11 @@ func (a *App) searchReturnOverlay() overlay {
 // closes the overlay (and, per openSearch/handleSearchKey, preserves
 // its state when it does). A "failed" result (e.g. the file changed or
 // was removed between scanning and opening) leaves the overlay open
-// with the message shown inline, per §2.2's open-failure signaling.
+// with the message shown inline, per §2.2's open-failure signaling. On
+// success, the opened file's row also gets a brief flash (searchFlashPath/
+// searchFlashStart, drawn in drawSearch) as an on-open confirmation
+// distinct from the lasting "already open" indicator every open file's
+// row shows regardless of whether it was just opened this way.
 func (a *App) performSearchOpen() {
 	rows := a.searchRows()
 	if a.searchSelected < 0 || a.searchSelected >= len(rows) {
@@ -1226,6 +1233,8 @@ func (a *App) performSearchOpen() {
 		return
 	}
 	a.searchMessage = ""
+	a.searchFlashPath = result.AbsPath
+	a.searchFlashStart = time.Now()
 
 	// A file row jumps to its first hit (the file's earliest match); a
 	// hit row jumps to that specific line (SPEC.md §9.2).
