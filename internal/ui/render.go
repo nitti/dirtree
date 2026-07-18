@@ -122,25 +122,12 @@ func (a *App) draw() {
 	a.screen.Show()
 }
 
-// drawBrowserOverlay picks split-vs-popup layout (SPEC.md §5.1,
-// recomputed every frame so a live resize can flip between them) and
-// renders the browser overlay accordingly.
+// drawBrowserOverlay renders the browser full-screen (SPEC.md §5.1): a
+// header with its mode label/legend, the jump-to-file query on its own
+// input row directly below when active (the same convention quick open
+// and content search use), and the flat row list filling the rest of
+// the screen.
 func (a *App) drawBrowserOverlay(w, h int) {
-	browserWidth, previewWidth, split := a.computeSplitLayout(w)
-	if split {
-		a.drawBrowserSplitView(w, h, browserWidth, previewWidth)
-	} else {
-		a.drawBrowserPopup(w, h)
-	}
-	a.drawBadge(w, h)
-}
-
-// drawBrowserSplitView renders the wide-terminal layout (SPEC.md §5.1):
-// the browser on the left, a vertical rule, and the primary preview
-// view — still visible, showing whatever it had, but read-only (no
-// goto-line prompt can be open while this overlay owns input) — on the
-// right.
-func (a *App) drawBrowserSplitView(w, h, browserWidth, previewWidth int) {
 	browserTop := 1
 	if a.jumpActive {
 		// SPEC.md §5.2: while jump-to-file (§4.3) is active, the header's
@@ -160,60 +147,12 @@ func (a *App) drawBrowserSplitView(w, h, browserWidth, previewWidth int) {
 	if a.browserMessage != "" {
 		browserHeight--
 	}
-	a.drawBrowser(0, browserTop, browserWidth, browserHeight)
+	a.drawBrowser(0, browserTop, w, browserHeight)
 	if a.browserMessage != "" {
-		a.drawText(0, h-1, browserWidth, a.browserMessage, styleError)
+		a.drawText(0, h-1, w, a.browserMessage, styleError)
 	}
 
-	for y := 1; y < h; y++ {
-		a.screen.SetContent(browserWidth, y, '│', nil, styleNormal)
-	}
-
-	titleRows := a.drawFileTitleBar(browserWidth+1, 1, previewWidth, false)
-	a.drawPreview(browserWidth+1, 1+titleRows, previewWidth, h-1-titleRows)
-}
-
-// drawBrowserPopup renders the narrow-terminal layout (SPEC.md §5.1):
-// the primary preview view rendered exactly as it would with no overlay
-// active ("unmodified, last-rendered"), with a centered, bordered
-// floating window containing the browser on top.
-func (a *App) drawBrowserPopup(w, h int) {
-	a.drawHeader(w, a.menuBarText(w, previewLegend))
-	titleRows := a.drawFileTitleBar(0, 1, w, false)
-	a.drawPreview(0, 1+titleRows, w, h-1-titleRows)
-
-	popupW := min(max(w-2*popupMarginX, 10), w)
-	popupH := min(max(h-2*popupMarginY, 5), h)
-	x0 := (w - popupW) / 2
-	y0 := (h - popupH) / 2
-
-	a.drawBox(x0, y0, popupW, popupH, a.rootLabel())
-	a.fillRect(x0+1, y0+1, popupW-2, popupH-2, styleNormal)
-
-	innerX, innerY := x0+1, y0+1
-	innerW, innerH := popupW-2, popupH-2
-	footerRow := innerH - 1
-	browserHeight := footerRow
-	if a.browserMessage != "" {
-		browserHeight--
-	}
-	a.drawBrowser(innerX, innerY, innerW, browserHeight)
-	if a.browserMessage != "" {
-		a.drawText(innerX, innerY+browserHeight, innerW, a.browserMessage, styleError)
-	}
-	a.drawText(innerX, innerY+footerRow, innerW, a.browserFooterText(innerW), styleNormal)
-}
-
-// browserFooterText is the popup layout's footer-line equivalent of the
-// split view's header row content below it (in the popup layout, the
-// top header row stays the primary preview view's own root path per
-// §5.2, so the browser's legend/query instead render as a dedicated
-// footer row, SPEC.md §5.1).
-func (a *App) browserFooterText(w int) string {
-	if a.jumpActive {
-		return headerText(w, "/"+a.jumpQuery, jumpLegend)
-	}
-	return browserLegend
+	a.drawBadge(w, h)
 }
 
 // drawBox draws a bordered rectangle with an optional title embedded in
@@ -311,11 +250,10 @@ func (a *App) drawFinderList(w, h int) {
 
 // drawOpenFiles renders the open-files-list overlay (SPEC.md §2.3): a
 // dropdown-style popup over the (unmodified, last-rendered) primary
-// preview view — the same "floating window over an unchanged
-// background" idiom the browser's popup layout uses (§5.1) — showing at
-// most openfiles.PageSize entries of the current page, each row labeled
-// with its 0-9 position, the currently-displayed entry marked
-// distinctly, or an explanatory message if the list is empty.
+// preview view, showing at most openfiles.PageSize entries of the
+// current page, each row labeled with its 0-9 position, the
+// currently-displayed entry marked distinctly, or an explanatory
+// message if the list is empty.
 func (a *App) drawOpenFiles(w, h int) {
 	a.drawHeader(w, a.menuBarText(w, previewLegend))
 	titleRows := a.drawFileTitleBar(0, 1, w, false)
@@ -597,11 +535,12 @@ func headerFit(w int, left, legend string) (text string, leftIncluded bool) {
 // (its root-relative path) in the row above the preview content, when a
 // file is displayed. Returns the number of rows it occupied (0 or 1) so
 // callers can shrink the preview's rectangle accordingly.
-// interactive is false while the browser overlay owns input (SPEC.md
-// §5.1: the preview pane is read-only in that case, accepting neither
-// scrolling nor goto-line), in which case file-specific action keys
-// like goto-line don't apply and their legend is omitted rather than
-// advertising a key that won't do anything right now.
+// interactive is false while another overlay (e.g. open-files-list,
+// SPEC.md §2.3) owns input and the preview pane underneath it is
+// read-only, accepting neither scrolling nor goto-line — in which case
+// file-specific action keys like goto-line don't apply and their legend
+// is omitted rather than advertising a key that won't do anything right
+// now.
 func (a *App) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	e := a.files.DisplayedEntry()
 	if e == nil {
@@ -662,9 +601,8 @@ func findStatusText(e *openfiles.Entry) string {
 // plus wrapped, highlighted rows for the currently-displayed entry, or
 // an explanatory empty-state message if none is displayed. The
 // goto-line prompt, when open, occupies the bottom row — reachable only
-// when this is the primary (non-overlaid) view, since the goto-line key
-// isn't handled while the browser's split/popup overlay (§5.1) is
-// showing this read-only.
+// when this is the primary (non-overlaid) view, since no overlay leaves
+// the goto-line key handled while this is showing.
 func (a *App) drawPreview(x0, y0, w, h int) {
 	e := a.files.DisplayedEntry()
 	if e == nil {
