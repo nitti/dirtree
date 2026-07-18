@@ -25,11 +25,19 @@
 - Keep the core navigation/model/matching/layout logic free of any terminal-rendering dependency (no direct calls into the terminal library from that layer), so it can be unit-tested without a real terminal or a pty — this was a deliberate design discipline in the prototype and should carry over regardless of language.
 - Terminal-rendering code itself (the actual draw calls) is not expected to be unit-tested the same way; manual verification in a real terminal (ideally including inside a multiplexer like Zellij or tmux, since that's the primary target environment) is the verification path for that layer. State explicitly what was and wasn't verified when reporting a change as complete.
 
+## Working in Isolated Worktrees
+
+- Multiple Claude Code instances may be working in this repo at the same time, each in its own terminal/session, against the same local clone. To avoid two instances clobbering each other's uncommitted work, **isolate code changes to a separate git worktree by default.**
+- Before making any code change, check the state of the current branch: if it's `main` (or any shared branch) with a clean working tree, create a new worktree (and matching feature branch) with `git worktree add` and make the change there, not in the primary checkout.
+- Exception: if the current branch is already a feature branch and already has uncommitted or committed changes in progress (i.e. you're mid-task on it), keep working in place — don't switch to a worktree mid-task just to satisfy this rule.
+- Worktrees must be normal, fully-checked-out working directories (no `--no-checkout`, sparse-checkout, or detached-HEAD-only setups) so the user can `cd` into one and immediately `go build`/`go run` it to smoke test — never leave a worktree in a state that requires extra steps to produce a runnable checkout.
+- Place worktrees as sibling directories of the main checkout (e.g. `../dirtree-<branch-name>`), not nested inside it, so tooling that walks the repo tree doesn't trip over them.
+- When a task is done and its branch is merged, remove the worktree (`git worktree remove`) rather than leaving it around indefinitely.
+
 ## Commits and Pull Requests
 
 - Never push commits directly to `main`. Always create a feature branch, commit there, and open a PR.
 - Write clear, descriptive commit messages that explain what changed and why.
-- Do not open a PR unless explicitly asked to, even after committing and pushing a completed change.
 - Never hard-wrap PR descriptions or PR/issue comments — write each paragraph as a single unbroken line and let the renderer wrap it.
 
 ## Documentation Standards
