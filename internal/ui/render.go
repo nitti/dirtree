@@ -585,12 +585,12 @@ func openFilesLegend(multiPage bool) []legendEntry {
 // disclosing (unless collapsed) its own matching-line rows below it —
 // or a placeholder while there's nothing to show yet.
 func (a *App) drawSearch(w, h int) {
-	title := "SEARCH"
+	a.drawHeaderMode(w, "SEARCH", searchLegend)
+	prompt := "> "
 	if a.searchRegex {
-		title = "SEARCH (REGEX)"
+		prompt = "[regex] > "
 	}
-	a.drawHeaderMode(w, title, searchLegend)
-	a.drawText(0, 1, w, "> "+a.searchQuery, styleSearchInput)
+	a.drawText(0, 1, w, prompt+a.searchQuery, styleSearchInput)
 
 	const listTop = 2
 	listHeight := h - listTop

@@ -126,6 +126,8 @@ Three refinements followed: (1) a directory failing to load when the user direct
 
 **`b` is no longer a toggle on the browser overlay (spec §5.1, §7)**: pressing `b` while the browser is already open used to close it, mirroring quick open's short-lived `o`-as-close-key behavior (removed above for the same reason). Escape is now the sole key that closes any overlay, browser included — `b` inside the browser overlay is simply a no-op, matching the rest of the app's overlays. This mainly removes a footgun for jump-to-file queries starting with `b`, since jump mode already intercepted `b` before it could reach the toggle, and keeps "how do I close this" a single consistent answer across every overlay.
 
+**Content search's regex-mode indicator moved off the header (spec §9.2)**: the header's mode label used to switch between `SEARCH` and `SEARCH (REGEX)` depending on Ctrl+R's toggle state, which competed with the keybinding legend for the header row's width and disappeared entirely once a narrow terminal dropped the mode label. The indicator now lives on the query-input row instead, prefixing the prompt (`[regex] > needle` vs. plain `> needle`) — that row never competes with the legend for space and is never dropped, so the indicator stays visible at any terminal width. The header's mode label is now always the plain `SEARCH`, matching `BROWSE`/`QUICK OPEN`/`JUMP`'s single-state labels.
+
 ## Non-negotiable constraints
 
 - **No required runtime dependencies.**
