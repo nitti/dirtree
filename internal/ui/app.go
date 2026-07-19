@@ -159,6 +159,7 @@ type App struct {
 	// Escape can restore them exactly.
 	jumpActive       bool
 	jumpQuery        string
+	jumpDisclosed    string       // slash-to-expand path segments committed so far (e.g. "internal/ui/"), shown ahead of jumpQuery so disclosing a directory doesn't read as losing what was typed (SPEC.md §4.3)
 	jumpMatches      []*tree.Node // recomputed on every query change from a.jumpScope.Flatten(); rows both files and directories
 	jumpSelected     int          // index into jumpMatches
 	jumpPrevSelected *tree.Node
@@ -236,7 +237,7 @@ func New(rootPath string) *App {
 		ignorer:             ignorer,
 		idx:                 idx,
 		watcher:             watcher,
-		overlay:             overlayBrowser, // SPEC.md §1: browser auto-opens on top of the (empty) primary view at startup
+		overlay:             overlayNone, // SPEC.md §1: startup lands on the (empty) primary preview view
 		browserSelected:     root,
 		files:               openfiles.New(),
 		searchDone:          make(chan searchOutcome, 8),
@@ -874,6 +875,7 @@ func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 func (a *App) openJumpToFile() {
 	a.jumpActive = true
 	a.jumpQuery = ""
+	a.jumpDisclosed = ""
 	a.jumpMatches = nil
 	a.jumpSelected = 0
 	a.jumpPrevSelected = a.browserSelected
@@ -939,12 +941,18 @@ func (a *App) handleJumpKey(ev *tcell.EventKey) {
 		// jump to file's one deliberate exception to "never expands
 		// or collapses anything" — it only ever expands, never
 		// collapses, and only on this explicit unique-match+`/` signal.
+		// jumpDisclosed accumulates the committed segment (jumpQuery,
+		// which named this directory, plus the slash) so it keeps
+		// showing ahead of the next segment's query rather than
+		// vanishing — clearing jumpQuery to start the next segment
+		// must not read as losing what was already typed.
 		target := a.jumpMatches[0]
 		target.Expand(a.rootPath, a.ignorer)
 		if target.Err != "" {
 			a.flagErrorFlashes([]string{target.Path})
 		} else {
 			a.jumpScope = target
+			a.jumpDisclosed += a.jumpQuery + "/"
 			a.jumpQuery = ""
 			a.browserSelected = target
 			a.syncWatches()
@@ -1143,11 +1151,11 @@ func (a *App) refreshFinderMatches() {
 // caller handles Escape and Enter itself.
 func (a *App) handleFinderTypingKey(ev *tcell.EventKey) bool {
 	switch {
-	case ev.Key() == tcell.KeyTab, ev.Key() == tcell.KeyDown:
+	case ev.Key() == tcell.KeyDown:
 		if len(a.finderMatches) > 0 {
 			a.finderSelected = tree.MoveSelection(a.finderSelected, 1, len(a.finderMatches))
 		}
-	case ev.Key() == tcell.KeyBacktab, ev.Key() == tcell.KeyUp:
+	case ev.Key() == tcell.KeyUp:
 		if len(a.finderMatches) > 0 {
 			a.finderSelected = tree.MoveSelection(a.finderSelected, -1, len(a.finderMatches))
 		}
@@ -1403,11 +1411,11 @@ func (a *App) handleSearchKey(ev *tcell.EventKey) {
 		a.recomputeSearch()
 	case ev.Key() == tcell.KeyCtrlU:
 		a.clearSearch()
-	case ev.Key() == tcell.KeyTab, ev.Key() == tcell.KeyDown:
+	case ev.Key() == tcell.KeyDown:
 		if rows := a.searchRows(); len(rows) > 0 {
 			a.searchSelected = tree.MoveSelection(a.searchSelected, 1, len(rows))
 		}
-	case ev.Key() == tcell.KeyBacktab, ev.Key() == tcell.KeyUp:
+	case ev.Key() == tcell.KeyUp:
 		if rows := a.searchRows(); len(rows) > 0 {
 			a.searchSelected = tree.MoveSelection(a.searchSelected, -1, len(rows))
 		}
