@@ -239,7 +239,7 @@ func (a *App) draw() {
 	case overlayBrowser:
 		a.drawBrowserOverlay(w, h)
 	case overlayQuickOpen:
-		a.drawQuickOpen(w, h)
+		a.quickOpen.Draw(w, h)
 		a.drawBadge(w, h)
 	case overlayOpenFiles:
 		a.drawOpenFiles(w, h)
@@ -401,67 +401,6 @@ func (a *App) drawBox(x0, y0, w, h int, title string) {
 func (a *App) fillRect(x0, y0, w, h int, style tcell.Style) {
 	for y := range h {
 		a.drawText(x0, y0+y, w, "", style)
-	}
-}
-
-// drawQuickOpen renders the quick open overlay (SPEC.md §4.2, §5.2): a
-// header with its single action (Return opens the selected match), the
-// query on its own row directly below (the same input-row convention
-// content search uses, §9.2), and the flat match list.
-func (a *App) drawQuickOpen(w, h int) {
-	a.drawHeaderMode(w, "QUICK OPEN", quickOpenLegend)
-	a.drawText(0, 1, w, "> "+a.finderQuery, styleSearchInput)
-	a.drawFinderList(w, h)
-}
-
-// drawFinderList renders quick open's flat, root-relative match list
-// (SPEC.md §4.1's index, §5.2's indexing/no-matches placeholder), with
-// any failed-open match (§2.2) showing its failure message inline,
-// appended the same way tree.Node.Err is in the browser, and flashing
-// red the same brief window (§5.3).
-func (a *App) drawFinderList(w, h int) {
-	const listTop = 2
-	listHeight := h - listTop
-
-	_, done := a.idx.Snapshot()
-	switch {
-	case !done:
-		// SPEC.md §5.2: during the pre-threshold grace period this is
-		// indistinguishable from "still indexing" at the pure-decision
-		// level, so the match-list area stays blank either way rather
-		// than claiming "no matches" before indexing has even looked.
-		a.drawText(0, listTop, w, centerPad("indexing…", w), styleNormal)
-	case len(a.finderMatches) == 0:
-		a.drawText(0, listTop, w, centerPad("no matches", w), styleNormal)
-	default:
-		if listHeight > 0 {
-			if a.finderSelected < a.finderScroll {
-				a.finderScroll = a.finderSelected
-			}
-			if a.finderSelected >= a.finderScroll+listHeight {
-				a.finderScroll = a.finderSelected - listHeight + 1
-			}
-		}
-		for row := range listHeight {
-			i := a.finderScroll + row
-			if i >= len(a.finderMatches) {
-				break
-			}
-			match := a.finderMatches[i]
-			label := match.RelPath
-			errored := a.finderErrorPath != "" && match.AbsPath == a.finderErrorPath
-			if errored {
-				label += " [" + a.finderErrorMessage + "]"
-			}
-			style := styleNormal
-			switch {
-			case errored && time.Since(a.finderErrorFlashStart) < flashDuration:
-				style = styleFlashError
-			case i == a.finderSelected:
-				style = styleSelected
-			}
-			a.drawText(0, listTop+row, w, label, style)
-		}
 	}
 }
 

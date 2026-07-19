@@ -22,7 +22,6 @@ import (
 	"github.com/nitti/dirtree/internal/find"
 	"github.com/nitti/dirtree/internal/ignore"
 	"github.com/nitti/dirtree/internal/index"
-	"github.com/nitti/dirtree/internal/match"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/search"
@@ -134,23 +133,8 @@ type App struct {
 	// scannable part of a toast stands out from its surrounding prose.
 	toastBoldRanges [][2]int
 
-	// finder state, used by the quick open overlay (SPEC.md §4.2).
-	finderQuery    string
-	finderMatches  []index.Entry // nil while the background index isn't done yet, distinct from "genuinely zero matches"
-	finderSelected int
-	finderScroll   int
-	// finderErrorPath/finderErrorMessage/finderErrorFlashStart mirror
-	// tree.Node.Err/browserErrorFlashes for quick open (§2.2, §5.3):
-	// finderMatches has no stable per-entry identity to attach a
-	// persistent error to (it's rebuilt from the index on every
-	// keystroke), so the failed match's path and message are tracked
-	// here instead, appended inline to that row wherever it still
-	// appears and flashed red the same way. Cleared whenever the query
-	// changes, since a new query can't say anything about a stale
-	// open-failure from a previous one.
-	finderErrorPath       string
-	finderErrorMessage    string
-	finderErrorFlashStart time.Time
+	// quickOpen is the quick open overlay's own state (SPEC.md §4.2).
+	quickOpen quickOpenView
 
 	// jump-to-file typing mode (SPEC.md §4.3): not a separate overlay —
 	// App.overlay stays overlayBrowser throughout, and the browser's own
@@ -243,6 +227,7 @@ func New(rootPath string) *App {
 		searchDone:          make(chan searchOutcome, 8),
 		browserErrorFlashes: map[string]time.Time{},
 	}
+	a.quickOpen.app = a
 	a.syncWatches()
 	return a
 }
@@ -412,7 +397,7 @@ func (a *App) Run() error {
 		case <-watchEvents:
 			a.handleFSChange()
 			if a.overlay == overlayQuickOpen {
-				a.refreshFinderMatches()
+				a.quickOpen.refreshMatches()
 			}
 			a.draw()
 		case out := <-a.searchDone:
@@ -434,7 +419,7 @@ func (a *App) Run() error {
 			// while quick open is open with an unchanged query, so
 			// matches don't go stale until the next keystroke.
 			if a.overlay == overlayQuickOpen {
-				a.refreshFinderMatches()
+				a.quickOpen.refreshMatches()
 			}
 			// Same idea for content search (SPEC.md §9.1): a query typed
 			// before the index finished is held pending (searchResults
@@ -456,7 +441,7 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	case overlayBrowser:
 		a.handleBrowserKey(ev)
 	case overlayQuickOpen:
-		a.handleQuickOpenKey(ev)
+		a.quickOpen.HandleKey(ev)
 	case overlayOpenFiles:
 		a.handleOpenFilesKey(ev)
 	case overlaySearch:
@@ -1074,158 +1059,7 @@ func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 // minimum-display-duration floor.
 func (a *App) openQuickOpen() {
 	a.overlay = overlayQuickOpen
-	a.openFinder()
-}
-
-// openFinder resets quick open's query/match state and recomputes
-// matches; the caller has already set a.overlay to overlayQuickOpen.
-func (a *App) openFinder() {
-	a.finderQuery = ""
-	a.finderSelected = 0
-	a.recomputeFinderMatches()
-	if _, done := a.idx.Snapshot(); done {
-		a.badgeSkip.NoteIndexAlreadyDone(true, a.idx.Elapsed())
-	}
-}
-
-// finderListHeight returns quick open's match-list viewport height in
-// rows, mirroring drawFinderList's own layout math (header row and query
-// input row — an open-failure now renders inline on the match row
-// itself rather than reserving a row of its own) so Page-Up/Page-Down
-// move by the same number of rows the list actually shows.
-func (a *App) finderListHeight() int {
-	_, h := a.screen.Size()
-	return h - 2 // header row + query input row
-}
-
-// recomputeFinderMatches rebuilds finderMatches from the current query
-// against the background index (SPEC.md §4.1), resetting match-selection
-// and scroll to the top — used only where the query itself just changed
-// (typing, backspace) or the overlay just opened, per §4.2's "reset
-// match-selection and scroll to the top" rule. Also clears any stale
-// open-failure recorded against the previous query's matches (§2.2),
-// since a new query can't say anything about it.
-func (a *App) recomputeFinderMatches() {
-	a.finderSelected = 0
-	a.finderScroll = 0
-	a.finderErrorPath = ""
-	a.refreshFinderMatches()
-}
-
-// refreshFinderMatches rebuilds finderMatches from the current query
-// against the background index (SPEC.md §4.1), without disturbing
-// finderSelected/finderScroll — used for background refreshes (the
-// index finishing or a live-refresh rebuild, and the periodic tick that
-// catches the index finishing while quick open sits open with an
-// unchanged query) where the query hasn't changed, so the user's
-// current position in the list shouldn't jump. finderSelected is
-// clamped in case the match count shrank out from under it; finderScroll
-// is left for drawFinderList's own clamp to reconcile against the
-// (possibly new) selected index and match count next frame. While the
-// index hasn't finished building, matches are nil/unavailable rather
-// than an empty "no matches" result (SPEC.md §5.2). Directory entries
-// are excluded: quick open can only ever open a file (§4.2), and a
-// directory match still narrows the query via the query's own
-// substring/glob matching against every file's full path, so nothing is
-// lost by never surfacing the directory's own row.
-func (a *App) refreshFinderMatches() {
-	entries, done := a.idx.Snapshot()
-	if !done {
-		a.finderMatches = nil
-		return
-	}
-	matches := make([]index.Entry, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir && match.Matches(a.finderQuery, e.RelPath) {
-			matches = append(matches, e)
-		}
-	}
-	a.finderMatches = matches
-	if a.finderSelected >= len(matches) {
-		a.finderSelected = max(len(matches)-1, 0)
-	}
-}
-
-// handleFinderTypingKey handles quick open's navigation/query-editing
-// keys (SPEC.md §4.2), reporting whether it consumed the event; the
-// caller handles Escape and Enter itself.
-func (a *App) handleFinderTypingKey(ev *tcell.EventKey) bool {
-	switch {
-	case ev.Key() == tcell.KeyDown:
-		if len(a.finderMatches) > 0 {
-			a.finderSelected = tree.MoveSelection(a.finderSelected, 1, len(a.finderMatches))
-		}
-	case ev.Key() == tcell.KeyUp:
-		if len(a.finderMatches) > 0 {
-			a.finderSelected = tree.MoveSelection(a.finderSelected, -1, len(a.finderMatches))
-		}
-	case ev.Key() == tcell.KeyPgUp:
-		if len(a.finderMatches) > 0 {
-			a.finderSelected = tree.MoveSelectionClamped(a.finderSelected, -a.finderListHeight(), len(a.finderMatches))
-		}
-	case ev.Key() == tcell.KeyPgDn:
-		if len(a.finderMatches) > 0 {
-			a.finderSelected = tree.MoveSelectionClamped(a.finderSelected, a.finderListHeight(), len(a.finderMatches))
-		}
-	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
-		if len(a.finderQuery) > 0 {
-			r := []rune(a.finderQuery)
-			a.finderQuery = string(r[:len(r)-1])
-		}
-		a.finderSelected = 0
-		a.recomputeFinderMatches()
-	case ev.Key() == tcell.KeyCtrlU:
-		a.finderQuery = ""
-		a.finderSelected = 0
-		a.recomputeFinderMatches()
-	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
-		a.finderQuery += string(ev.Rune())
-		a.finderSelected = 0
-		a.recomputeFinderMatches()
-	default:
-		return false
-	}
-	return true
-}
-
-// handleQuickOpenKey implements quick open's input handling (SPEC.md
-// §4.2): a single action, opening the selected match into the
-// open-files list. Escape returns to the primary preview view; `o` has
-// no special meaning here — it's a live text filter, and "o" is much
-// too common a letter to double as a close key without breaking
-// ordinary typing.
-func (a *App) handleQuickOpenKey(ev *tcell.EventKey) {
-	switch {
-	case ev.Key() == tcell.KeyEscape:
-		a.overlay = overlayNone
-	case ev.Key() == tcell.KeyEnter:
-		a.performOpenIntoList()
-	default:
-		a.handleFinderTypingKey(ev)
-	}
-}
-
-// performOpenIntoList implements quick open's Enter action (SPEC.md
-// §4.2): open the selected match per §2.2's open semantics. An opened
-// result closes the overlay, landing on the primary preview view; a
-// failed result leaves quick open open with the failure recorded
-// against that match's path (finderErrorPath/finderErrorMessage) and
-// rendered inline on its row by drawFinderList, plus a brief red flash
-// (§2.2, §5.3) — the same treatment browserOpen's failures get.
-func (a *App) performOpenIntoList() {
-	if len(a.finderMatches) == 0 {
-		return
-	}
-	target := a.finderMatches[a.finderSelected]
-	res := a.files.Open(target.AbsPath, previewByteCap)
-	if res.Outcome != openfiles.Opened {
-		a.finderErrorPath = target.AbsPath
-		a.finderErrorMessage = res.Message
-		a.finderErrorFlashStart = time.Now()
-		return
-	}
-	a.revealInBrowser(target.AbsPath)
-	a.overlay = overlayNone
+	a.quickOpen.open()
 }
 
 // revealInBrowser expands the browser tree's disclosure state down to
