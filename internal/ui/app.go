@@ -74,23 +74,9 @@ type App struct {
 
 	overlay views.Overlay
 
-	// browser overlay state (SPEC.md §3.4)
-	browserSelected   *tree.Node
-	browserScroll     int
-	browserFlashPath  string    // absolute path of the file row most recently opened via browserOpen, for a brief post-open flash (mirrors searchFlashPath below)
-	browserFlashStart time.Time // when the flash started; drawn only while time.Since(browserFlashStart) < flashDuration
-	// browserErrorFlashes tracks a brief red flash (styleFlashError) for
-	// any node whose most recent operation failed — a directory that
-	// newly started failing to list during a live-refresh (SPEC.md §6.1),
-	// or a file that failed to open (§2.2, e.g. permission denied or
-	// binary). Unlike browserFlashPath above, the flash itself is only
-	// the attention-grabbing part and always decays; the error text it's
-	// drawing attention to (tree.Node.Err, rendered inline by
-	// browserLabel for both cases) does not fade with it and stays until
-	// overwritten by a later successful operation on that same node.
-	// Keyed by path since more than one directory could newly error in
-	// the same debounced live-refresh batch.
-	browserErrorFlashes map[string]time.Time
+	// Browser is the browser overlay's own state, including jump-to-file
+	// typing mode (SPEC.md §3.4, §4.3).
+	Browser views.BrowserView
 
 	// toastMessage/toastStart drive the generic bottom-right transient
 	// notification (internal/toast, SPEC.md §5.3) — currently only used
@@ -106,20 +92,6 @@ type App struct {
 
 	// QuickOpen is the quick open overlay's own state (SPEC.md §4.2).
 	QuickOpen views.QuickOpenView
-
-	// jump-to-file typing mode (SPEC.md §4.3): not a separate overlay —
-	// App.overlay stays overlayBrowser throughout, and the browser's own
-	// row list keeps rendering. jumpPrevSelected/jumpPrevScroll capture
-	// the browser's selection/scroll at the moment `/` was pressed, so
-	// Escape can restore them exactly.
-	jumpActive       bool
-	jumpQuery        string
-	jumpDisclosed    string       // slash-to-expand path segments committed so far (e.g. "internal/ui/"), shown ahead of jumpQuery so disclosing a directory doesn't read as losing what was typed (SPEC.md §4.3)
-	jumpMatches      []*tree.Node // recomputed on every query change from a.jumpScope.Flatten(); rows both files and directories
-	jumpSelected     int          // index into jumpMatches
-	jumpPrevSelected *tree.Node
-	jumpPrevScroll   int
-	jumpScope        *tree.Node // matching root for jumpMatches: a.root normally, or a directory drilled into via slash-to-expand (SPEC.md §4.3)
 
 	// Search is the content search overlay's own state (SPEC.md §9).
 	Search views.SearchView
@@ -165,15 +137,13 @@ func New(rootPath string) *App {
 	watcher, _ := watch.New(watchDebounce)
 
 	a := &App{
-		rootPath:            rootPath,
-		root:                root,
-		ignorer:             ignorer,
-		idx:                 idx,
-		watcher:             watcher,
-		overlay:             views.OverlayNone, // SPEC.md §1: startup lands on the (empty) primary preview view
-		browserSelected:     root,
-		files:               openfiles.New(),
-		browserErrorFlashes: map[string]time.Time{},
+		rootPath: rootPath,
+		root:     root,
+		ignorer:  ignorer,
+		idx:      idx,
+		watcher:  watcher,
+		overlay:  views.OverlayNone, // SPEC.md §1: startup lands on the (empty) primary preview view
+		files:    openfiles.New(),
 	}
 
 	a.shared = &views.Shared{
@@ -188,6 +158,9 @@ func New(rootPath string) *App {
 	a.QuickOpen.Shared = a.shared
 	a.Search.Shared = a.shared
 	a.Search.Done = make(chan views.SearchOutcome, 8)
+	a.Browser.Shared = a.shared
+	a.Browser.Selected = root
+	a.Browser.ErrorFlashes = map[string]time.Time{}
 
 	a.syncWatches()
 	return a
@@ -226,12 +199,12 @@ func (a *App) syncWatches() {
 // newly-loaded directories.
 func (a *App) handleFSChange() {
 	newlyErrored := tree.RefreshTree(a.root, a.rootPath, a.ignorer)
-	a.browserSelected = tree.NearestSurviving(a.browserSelected)
+	a.Browser.Selected = tree.NearestSurviving(a.Browser.Selected)
 	a.idx.Rebuild(a.rootPath, a.ignorer)
 	a.badgeSkip.Reset()
 	a.syncWatches()
 	if len(newlyErrored) > 0 {
-		a.flagErrorFlashes(newlyErrored)
+		a.Browser.FlagErrorFlashes(newlyErrored)
 	}
 	if reloaded := a.files.Reload(previewByteCap); len(reloaded) > 0 {
 		msg, boldRanges := reloadToastMessage(reloaded)
@@ -266,26 +239,6 @@ func (a *App) showToast(msg string, boldRanges ...[2]int) {
 	a.toastMessage = msg
 	a.toastStart = time.Now()
 	a.toastBoldRanges = boldRanges
-}
-
-// flagErrorFlashes starts a brief red flash (SPEC.md §2.2, §6.1, §5.3)
-// for each path in paths, drawing attention to the inline error text
-// browserLabel already renders for it (tree.Node.Err) without the error
-// text itself fading — only the flash decays. Used both for a
-// live-refresh's newly-erroring directories (handleFSChange, several
-// paths at once) and a single failed file-open (browserOpen). Also
-// prunes any previously-flashed path whose flash has already finished,
-// so the map doesn't grow unbounded over a long-running session.
-func (a *App) flagErrorFlashes(paths []string) {
-	now := time.Now()
-	for p, start := range a.browserErrorFlashes {
-		if now.Sub(start) >= flashDuration {
-			delete(a.browserErrorFlashes, p)
-		}
-	}
-	for _, p := range paths {
-		a.browserErrorFlashes[p] = now
-	}
 }
 
 // Run configures the terminal and drives the main loop until the user
@@ -389,7 +342,7 @@ func (a *App) Run() error {
 func (a *App) handleKey(ev *tcell.EventKey) {
 	switch a.overlay {
 	case views.OverlayBrowser:
-		a.handleBrowserKey(ev)
+		a.Browser.HandleKey(ev)
 	case views.OverlayQuickOpen:
 		a.QuickOpen.HandleKey(ev)
 		// LastOpenedPath is quick open's outbox for a coordinator-level
@@ -398,7 +351,7 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		// open itself has no business knowing how to do — see its doc
 		// comment.
 		if p := a.QuickOpen.LastOpenedPath; p != "" {
-			a.revealInBrowser(p)
+			a.Browser.Reveal(p)
 			a.QuickOpen.LastOpenedPath = ""
 		}
 	case views.OverlayOpenFiles:
@@ -409,7 +362,7 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		// coordinator-level concerns it has no business performing
 		// itself — see SearchView.LastOpenedPath's doc comment.
 		if p := a.Search.LastOpenedPath; p != "" {
-			a.revealInBrowser(p)
+			a.Browser.Reveal(p)
 			a.scrollToLine(a.Search.LastOpenedEntry, a.Search.LastOpenedLine)
 			a.Search.LastOpenedPath = ""
 			a.Search.LastOpenedEntry = nil
@@ -774,190 +727,6 @@ func clamp(v, lo, hi int) int {
 	return v
 }
 
-// handleBrowserKey implements the browser overlay's navigation and open
-// actions (SPEC.md §3.4). Escape is the sole key that closes the
-// browser back to the primary preview view (SPEC.md §5.1); `b` only
-// opens it from there and has no effect once inside. While
-// jump-to-file typing mode (§4.3) is active, every key below is
-// bypassed in favor of handleJumpKey, since jump mode repurposes all
-// of them as query input.
-// `o` and `s` have no effect here — browse, quick open, and content
-// search are mutually exclusive (SPEC.md §5.1): reaching another one
-// requires closing the browser back to the primary preview view first.
-func (a *App) handleBrowserKey(ev *tcell.EventKey) {
-	if a.jumpActive {
-		a.handleJumpKey(ev)
-		return
-	}
-
-	flat := a.root.Flatten()
-	idx := indexOf(flat, a.browserSelected)
-
-	switch {
-	case ev.Key() == tcell.KeyUp:
-		a.browserSelected = flat[tree.MoveSelection(idx, -1, len(flat))]
-	case ev.Key() == tcell.KeyDown:
-		a.browserSelected = flat[tree.MoveSelection(idx, 1, len(flat))]
-	case ev.Key() == tcell.KeyRight:
-		target := a.browserSelected
-		a.browserSelected = target.MoveRight(a.rootPath, a.ignorer)
-		// Flash on every attempt that ends in an error, not just the
-		// first: MoveRight/Expand retries the listing each time (a
-		// still-failing directory never gets marked Expanded, SPEC.md
-		// §3.1), so a still-broken directory the user keeps trying to
-		// disclose should keep giving feedback each time, not just once.
-		if target.Err != "" {
-			a.flagErrorFlashes([]string{target.Path})
-		}
-		a.syncWatches()
-	case ev.Key() == tcell.KeyLeft:
-		a.browserSelected = a.browserSelected.MoveLeft()
-	case ev.Key() == tcell.KeyEnter:
-		a.browserOpen()
-	case ev.Rune() == '/':
-		a.openJumpToFile()
-	case ev.Key() == tcell.KeyEscape:
-		a.overlay = views.OverlayNone
-	}
-}
-
-// openJumpToFile enters jump-to-file typing mode (SPEC.md §4.3) from
-// within the browser: not an overlay change (a.overlay stays
-// overlayBrowser), just a mode layered on top of it that remembers the
-// current selection/scroll so Escape can restore them.
-func (a *App) openJumpToFile() {
-	a.jumpActive = true
-	a.jumpQuery = ""
-	a.jumpDisclosed = ""
-	a.jumpMatches = nil
-	a.jumpSelected = 0
-	a.jumpPrevSelected = a.browserSelected
-	a.jumpPrevScroll = a.browserScroll
-	a.jumpScope = a.root
-}
-
-// recomputeJumpMatches rebuilds jumpMatches from the current query
-// against a.jumpScope's live flattened row list (SPEC.md §4.3's
-// candidate set: whatever the tree's current expand/collapse state
-// already exposes, files and directories alike), matching each row's
-// leaf name by case-insensitive prefix. jumpScope is normally the tree
-// root, but narrows after a slash-to-expand drill-down (see
-// handleJumpKey).
-func (a *App) recomputeJumpMatches() {
-	a.jumpSelected = 0
-	a.jumpMatches = tree.JumpMatches(a.jumpScope, a.jumpQuery)
-}
-
-// handleJumpKey implements jump-to-file typing mode's input handling
-// (SPEC.md §4.3): every printable rune is query input, Tab/Shift-Tab
-// (or Down/Up) cycle among current matches, and Return/Escape are the
-// only ways out.
-func (a *App) handleJumpKey(ev *tcell.EventKey) {
-	switch {
-	case ev.Key() == tcell.KeyEscape:
-		a.browserSelected = a.jumpPrevSelected
-		a.browserScroll = a.jumpPrevScroll
-		a.jumpActive = false
-	case ev.Key() == tcell.KeyEnter:
-		a.jumpActive = false
-	case ev.Key() == tcell.KeyTab, ev.Key() == tcell.KeyDown:
-		if len(a.jumpMatches) > 0 {
-			a.jumpSelected = tree.MoveSelection(a.jumpSelected, 1, len(a.jumpMatches))
-			a.browserSelected = a.jumpMatches[a.jumpSelected]
-		}
-	case ev.Key() == tcell.KeyBacktab, ev.Key() == tcell.KeyUp:
-		if len(a.jumpMatches) > 0 {
-			a.jumpSelected = tree.MoveSelection(a.jumpSelected, -1, len(a.jumpMatches))
-			a.browserSelected = a.jumpMatches[a.jumpSelected]
-		}
-	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
-		if len(a.jumpQuery) > 0 {
-			r := []rune(a.jumpQuery)
-			a.jumpQuery = string(r[:len(r)-1])
-		}
-		a.recomputeJumpMatches()
-		if len(a.jumpMatches) > 0 {
-			a.browserSelected = a.jumpMatches[0]
-		}
-	case ev.Key() == tcell.KeyCtrlU:
-		a.jumpQuery = ""
-		a.recomputeJumpMatches()
-		if len(a.jumpMatches) > 0 {
-			a.browserSelected = a.jumpMatches[0]
-		}
-	case ev.Rune() == '/' && ev.Key() == tcell.KeyRune && len(a.jumpMatches) == 1 && a.jumpMatches[0].IsDir:
-		// Slash-to-expand (SPEC.md §4.3): when the query already
-		// uniquely identifies a directory, `/` disclosed it and
-		// re-scopes matching to its descendants instead of being
-		// consumed as a literal query character (which could never
-		// match anyway, since no filename contains `/`). This is
-		// jump to file's one deliberate exception to "never expands
-		// or collapses anything" — it only ever expands, never
-		// collapses, and only on this explicit unique-match+`/` signal.
-		// jumpDisclosed accumulates the committed segment (jumpQuery,
-		// which named this directory, plus the slash) so it keeps
-		// showing ahead of the next segment's query rather than
-		// vanishing — clearing jumpQuery to start the next segment
-		// must not read as losing what was already typed.
-		target := a.jumpMatches[0]
-		target.Expand(a.rootPath, a.ignorer)
-		if target.Err != "" {
-			a.flagErrorFlashes([]string{target.Path})
-		} else {
-			a.jumpScope = target
-			a.jumpDisclosed += a.jumpQuery + "/"
-			a.jumpQuery = ""
-			a.browserSelected = target
-			a.syncWatches()
-			a.recomputeJumpMatches()
-		}
-	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
-		a.jumpQuery += string(ev.Rune())
-		a.recomputeJumpMatches()
-		if len(a.jumpMatches) > 0 {
-			a.browserSelected = a.jumpMatches[0]
-		}
-	}
-}
-
-// browserOpen implements Enter from the browser, per SPEC.md §3.4 and
-// §2.2's open-failure signaling: a no-op on a directory; on a file, an
-// "opened" result displays it in the primary preview view without
-// closing the browser, so several files can be queued up in a row
-// before returning to the preview; a "failed" result leaves the browser
-// open with the failure recorded on the node itself (tree.Node.Err,
-// browserLabel's existing inline `[error]` rendering) and a brief red
-// flash (browserErrorFlashes/styleFlashError, §5.3) — the same treatment
-// a directory that newly fails to list gets from a live-refresh (§6.1),
-// unified since both are "the last operation on this node failed." On
-// success, the opened row also gets a brief flash (browserFlashPath/
-// browserFlashStart, drawn in drawBrowser) as an on-open confirmation,
-// the same treatment content search gives its own rows
-// (performSearchOpen) — distinct from the lasting "●" open indicator
-// every open file's row shows regardless of when it was opened.
-func (a *App) browserOpen() {
-	if a.browserSelected.IsDir {
-		return
-	}
-	res := a.files.Open(a.browserSelected.Path, previewByteCap)
-	if res.Outcome != openfiles.Opened {
-		a.browserSelected.Err = res.Message
-		a.flagErrorFlashes([]string{a.browserSelected.Path})
-		return
-	}
-	a.browserSelected.Err = ""
-	a.browserFlashPath = a.browserSelected.Path
-	a.browserFlashStart = time.Now()
-}
-
-// handleOpenFilesKey implements the open-files-list overlay's input
-// handling (SPEC.md §2.3): a dropdown-style popup showing at most
-// openfiles.PageSize entries at a time ("a page"), each row labeled
-// with its 0-9 position on the current page. Shift-Page-Up/Shift-Page-
-// Down and Shift-Up/Shift-Down (reorder) are checked ahead of their
-// plain Page-Up/Page-Down and Up/Down counterparts (navigate) since
-// tcell reports the shifted and unshifted forms as the same Key with
-// ModShift set, not a distinct key.
 func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 	n := len(a.files.Entries)
 	shift := ev.Modifiers()&tcell.ModShift != 0
@@ -1030,19 +799,6 @@ func (a *App) openQuickOpen() {
 	a.QuickOpen.Open()
 }
 
-// revealInBrowser expands the browser tree's disclosure state down to
-// absPath and selects it, so opening a file from quick open or content
-// search (which search the whole tree regardless of what's currently
-// expanded) leaves the browser showing where that file lives the next
-// time it's opened (SPEC.md §4.2, §9.2) — not gated on the browser
-// overlay actually being open right now, purely updating its state for
-// later.
-func (a *App) revealInBrowser(absPath string) {
-	if n := tree.RevealPath(a.root, a.rootPath, absPath, a.ignorer); n != nil {
-		a.browserSelected = n
-	}
-}
-
 // openSearch opens the content search overlay (SPEC.md §9.1), reachable
 // only from the primary preview view: browse, quick open, and content
 // search are mutually exclusive (SPEC.md §5.1), so Escape always
@@ -1054,13 +810,4 @@ func (a *App) revealInBrowser(absPath string) {
 func (a *App) openSearch() {
 	a.overlay = views.OverlaySearch
 	a.Search.Open()
-}
-
-func indexOf(list []*tree.Node, n *tree.Node) int {
-	for i, c := range list {
-		if c == n {
-			return i
-		}
-	}
-	return 0
 }
