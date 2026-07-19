@@ -118,7 +118,7 @@ var (
 	// entered with.
 	jumpLegend = []legendEntry{
 		{"[return] done", 1},
-		{"[tab/⇧tab] next/prev match", 1},
+		{"[tab/shift-tab] next/prev match", 1},
 		{"[/] expand", 2},
 		{"[ctrl+u] clear", 2},
 		{"[esc] cancel", 1},
@@ -132,7 +132,7 @@ var (
 	// mode; ctrl+u clears the query.
 	searchLegend = []legendEntry{
 		{"[return] open", 1},
-		{"[tab/⇧tab] next/prev", 1},
+		{"[tab/shift-tab] next/prev", 1},
 		{"[left/right] expand/collapse", 2},
 		{"[ctrl+r] regex", 2},
 		{"[ctrl+u] clear", 3},
@@ -192,7 +192,7 @@ var (
 	// primary preview view.
 	quickOpenLegend = []legendEntry{
 		{"[return] open", 1},
-		{"[tab/⇧tab] next/prev", 2},
+		{"[tab/shift-tab] next/prev", 2},
 		{"[pgup/pgdn] page", 3},
 		{"[ctrl+u] clear", 3},
 		{"[esc] cancel", 1},
