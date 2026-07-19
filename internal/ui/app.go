@@ -27,19 +27,9 @@ import (
 	"github.com/nitti/dirtree/internal/search"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/tree"
+	"github.com/nitti/dirtree/internal/ui/canvas"
+	"github.com/nitti/dirtree/internal/ui/views"
 	"github.com/nitti/dirtree/internal/watch"
-)
-
-// overlay identifies which overlay, if any, is currently active over
-// the primary preview view (SPEC.md §5.1).
-type overlay int
-
-const (
-	overlayNone overlay = iota
-	overlayBrowser
-	overlayQuickOpen
-	overlayOpenFiles
-	overlaySearch
 )
 
 // searchOutcome is what a background content-search scan (SPEC.md §9.1)
@@ -94,14 +84,20 @@ const (
 
 // App holds all interactive state for a running session.
 type App struct {
-	screen   tcell.Screen
 	rootPath string
 	root     *tree.Node
 	ignorer  *ignore.Multi
 	idx      *index.Index
 	watcher  *watch.Watcher
 
-	overlay overlay
+	// shared bundles the state views need to read (and occasionally
+	// write) that isn't specific to any one view — see views.Shared's
+	// own doc comment for why this is a plain struct, not an interface.
+	// Its Canvas field is nil until Run() initializes the real terminal
+	// screen.
+	shared *views.Shared
+
+	overlay views.Overlay
 
 	// browser overlay state (SPEC.md §3.4)
 	browserSelected   *tree.Node
@@ -133,8 +129,8 @@ type App struct {
 	// scannable part of a toast stands out from its surrounding prose.
 	toastBoldRanges [][2]int
 
-	// quickOpen is the quick open overlay's own state (SPEC.md §4.2).
-	quickOpen quickOpenView
+	// QuickOpen is the quick open overlay's own state (SPEC.md §4.2).
+	QuickOpen views.QuickOpenView
 
 	// jump-to-file typing mode (SPEC.md §4.3): not a separate overlay —
 	// App.overlay stays overlayBrowser throughout, and the browser's own
@@ -221,13 +217,24 @@ func New(rootPath string) *App {
 		ignorer:             ignorer,
 		idx:                 idx,
 		watcher:             watcher,
-		overlay:             overlayNone, // SPEC.md §1: startup lands on the (empty) primary preview view
+		overlay:             views.OverlayNone, // SPEC.md §1: startup lands on the (empty) primary preview view
 		browserSelected:     root,
 		files:               openfiles.New(),
 		searchDone:          make(chan searchOutcome, 8),
 		browserErrorFlashes: map[string]time.Time{},
 	}
-	a.quickOpen.app = a
+
+	a.shared = &views.Shared{
+		Files:     a.files,
+		Idx:       a.idx,
+		Root:      a.root,
+		RootPath:  a.rootPath,
+		Ignorer:   a.ignorer,
+		BadgeSkip: &a.badgeSkip,
+		Overlay:   &a.overlay,
+	}
+	a.QuickOpen.Shared = a.shared
+
 	a.syncWatches()
 	return a
 }
@@ -346,7 +353,7 @@ func (a *App) Run() error {
 	screen.SetStyle(tcell.StyleDefault)
 	screen.EnablePaste()
 
-	a.screen = screen
+	a.shared.Canvas = canvas.New(screen)
 
 	if a.watcher != nil {
 		defer func() { _ = a.watcher.Close() }()
@@ -389,15 +396,15 @@ func (a *App) Run() error {
 				// underneath it — resizing back above the minimum
 				// resumes that view exactly as it was, untouched by
 				// anything typed while it was too small to show.
-				if w, h := screen.Size(); w >= minTerminalWidth && h >= minTerminalHeight {
+				if w, h := screen.Size(); w >= canvas.MinTerminalWidth && h >= canvas.MinTerminalHeight {
 					a.handleKey(e)
 				}
 			}
 			a.draw()
 		case <-watchEvents:
 			a.handleFSChange()
-			if a.overlay == overlayQuickOpen {
-				a.quickOpen.refreshMatches()
+			if a.overlay == views.OverlayQuickOpen {
+				a.QuickOpen.RefreshMatches()
 			}
 			a.draw()
 		case out := <-a.searchDone:
@@ -418,14 +425,14 @@ func (a *App) Run() error {
 			// Also catches the background index (re)build finishing
 			// while quick open is open with an unchanged query, so
 			// matches don't go stale until the next keystroke.
-			if a.overlay == overlayQuickOpen {
-				a.quickOpen.refreshMatches()
+			if a.overlay == views.OverlayQuickOpen {
+				a.QuickOpen.RefreshMatches()
 			}
 			// Same idea for content search (SPEC.md §9.1): a query typed
 			// before the index finished is held pending (searchResults
 			// stays nil) until it's done, then run once here rather than
 			// on every tick.
-			if a.overlay == overlaySearch && a.searchQuery != "" && a.searchResults == nil && a.searchCancel == nil {
+			if a.overlay == views.OverlaySearch && a.searchQuery != "" && a.searchResults == nil && a.searchCancel == nil {
 				if _, done := a.idx.Snapshot(); done {
 					a.recomputeSearch()
 				}
@@ -438,15 +445,24 @@ func (a *App) Run() error {
 
 func (a *App) handleKey(ev *tcell.EventKey) {
 	switch a.overlay {
-	case overlayBrowser:
+	case views.OverlayBrowser:
 		a.handleBrowserKey(ev)
-	case overlayQuickOpen:
-		a.quickOpen.HandleKey(ev)
-	case overlayOpenFiles:
+	case views.OverlayQuickOpen:
+		a.QuickOpen.HandleKey(ev)
+		// LastOpenedPath is quick open's outbox for a coordinator-level
+		// concern (keeping the browser's disclosure/selection in sync
+		// with a file opened from elsewhere, SPEC.md §4.2) that quick
+		// open itself has no business knowing how to do — see its doc
+		// comment.
+		if p := a.QuickOpen.LastOpenedPath; p != "" {
+			a.revealInBrowser(p)
+			a.QuickOpen.LastOpenedPath = ""
+		}
+	case views.OverlayOpenFiles:
 		a.handleOpenFilesKey(ev)
-	case overlaySearch:
+	case views.OverlaySearch:
 		a.handleSearchKey(ev)
-	case overlayNone:
+	case views.OverlayNone:
 		a.handlePreviewKey(ev)
 	}
 }
@@ -475,9 +491,9 @@ func (a *App) handlePreviewKey(ev *tcell.EventKey) {
 
 	switch {
 	case ev.Rune() == 'b':
-		a.overlay = overlayBrowser
+		a.overlay = views.OverlayBrowser
 	case ev.Key() == tcell.KeyTab:
-		a.overlay = overlayOpenFiles
+		a.overlay = views.OverlayOpenFiles
 		a.openFilesSelected = max(a.files.Displayed, 0)
 	case ev.Rune() == 'o':
 		a.openQuickOpen()
@@ -737,7 +753,7 @@ func findMatchRow(e *openfiles.Entry, m find.Match) int {
 }
 
 func (a *App) previewViewportHeight() int {
-	_, h := a.screen.Size()
+	_, h := a.shared.Canvas.Size()
 	height := h - 1 // header row
 	if a.files.DisplayedEntry() != nil {
 		height-- // file title bar row, shown whenever a file is displayed
@@ -754,7 +770,7 @@ func (a *App) previewViewportHeight() int {
 // scroll/goto-line key handlers, which are only reachable in that
 // context.
 func (a *App) computedPreviewWidth() int {
-	w, _ := a.screen.Size()
+	w, _ := a.shared.Canvas.Size()
 	e := a.files.DisplayedEntry()
 	if e == nil {
 		return w
@@ -772,7 +788,7 @@ func previewGutterWidth(e *openfiles.Entry) int {
 	if e.CopyMode {
 		return 0
 	}
-	return gutterWidth(len(e.Lines))
+	return canvas.GutterWidth(len(e.Lines))
 }
 
 // ensurePreviewWrapped recomputes e's wrapped display rows if width has
@@ -849,7 +865,7 @@ func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 	case ev.Rune() == '/':
 		a.openJumpToFile()
 	case ev.Key() == tcell.KeyEscape:
-		a.overlay = overlayNone
+		a.overlay = views.OverlayNone
 	}
 }
 
@@ -996,7 +1012,7 @@ func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 
 	switch {
 	case ev.Key() == tcell.KeyEscape:
-		a.overlay = overlayNone
+		a.overlay = views.OverlayNone
 	case ev.Key() == tcell.KeyPgUp && shift:
 		if n > 0 {
 			a.openFilesSelected = a.files.MoveUpPage(a.openFilesSelected, openfiles.PageSize)
@@ -1028,13 +1044,13 @@ func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 	case ev.Key() == tcell.KeyEnter:
 		if n > 0 {
 			a.files.Display(a.openFilesSelected)
-			a.overlay = overlayNone
+			a.overlay = views.OverlayNone
 		}
 	case ev.Rune() >= '0' && ev.Rune() <= '9':
 		if idx, ok := openfiles.SelectDigit(a.openFilesSelected, int(ev.Rune()-'0'), openfiles.PageSize, n); ok {
 			a.openFilesSelected = idx
 			a.files.Display(idx)
-			a.overlay = overlayNone
+			a.overlay = views.OverlayNone
 		}
 	case ev.Rune() == 'x':
 		if n > 0 {
@@ -1044,7 +1060,7 @@ func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 				// overlay to the primary preview view's empty state,
 				// which in turn auto-opens the browser exactly as it
 				// does on startup (§1).
-				a.overlay = overlayBrowser
+				a.overlay = views.OverlayBrowser
 			}
 		}
 	}
@@ -1058,8 +1074,8 @@ func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
 // directly seen indexing is ready, so it short-circuits the badge's
 // minimum-display-duration floor.
 func (a *App) openQuickOpen() {
-	a.overlay = overlayQuickOpen
-	a.quickOpen.open()
+	a.overlay = views.OverlayQuickOpen
+	a.QuickOpen.Open()
 }
 
 // revealInBrowser expands the browser tree's disclosure state down to
@@ -1084,7 +1100,7 @@ func (a *App) revealInBrowser(absPath string) {
 // it) and is only reset by the user explicitly clearing the query
 // themselves (backspacing it to empty, or typing a new one).
 func (a *App) openSearch() {
-	a.overlay = overlaySearch
+	a.overlay = views.OverlaySearch
 	a.searchErrorPath = ""
 }
 
@@ -1233,7 +1249,7 @@ func (a *App) handleSearchKey(ev *tcell.EventKey) {
 		// left alone: content search persists across close/reopen (see
 		// openSearch), so Escape only leaves the overlay rather than
 		// discarding its state.
-		a.overlay = overlayNone
+		a.overlay = views.OverlayNone
 	case ev.Key() == tcell.KeyEnter:
 		// Opening always leaves the overlay open (SPEC.md §9.2) — Escape
 		// is what closes it (and preserves state when it does) — so
