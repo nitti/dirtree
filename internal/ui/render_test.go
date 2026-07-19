@@ -9,17 +9,22 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/nitti/dirtree/internal/openfiles"
+	"github.com/nitti/dirtree/internal/ui/canvas"
+	"github.com/nitti/dirtree/internal/ui/views"
 )
 
 // TestLegendTier1FitsMinTerminalWidth guards SPEC.md §6.4's minimum
 // terminal size against §5.2's legend tiering: every legend's
-// priority-1 (never-dropped) text must fit within minTerminalWidth on
-// its own, with no left-hand label — otherwise a terminal at exactly
+// priority-1 (never-dropped) text must fit within canvas.MinTerminalWidth
+// on its own, with no left-hand label — otherwise a terminal at exactly
 // the enforced minimum would still see a clipped legend, the same class
 // of bug a too-long jumpLegend/searchLegend priority-1 entry caused
-// before those entries were demoted to priority 2.
+// before those entries were demoted to priority 2. Quick open's own
+// legend has an equivalent test alongside its own package
+// (views.TestQuickOpenLegendTier1FitsMinTerminalWidth), since it no
+// longer lives here.
 func TestLegendTier1FitsMinTerminalWidth(t *testing.T) {
-	named := map[string][]legendEntry{
+	named := map[string][]canvas.LegendEntry{
 		"previewLegend":          previewLegend,
 		"browserLegend":          browserLegend,
 		"jumpLegend":             jumpLegend,
@@ -30,101 +35,13 @@ func TestLegendTier1FitsMinTerminalWidth(t *testing.T) {
 		"findPromptLegend":       findPromptLegend,
 		"findLegend":             findLegend,
 		"findLegendNoMatches":    findLegendNoMatches,
-		"quickOpenLegend":        quickOpenLegend,
 		"openFilesLegend(false)": openFilesLegend(false),
 		"openFilesLegend(true)":  openFilesLegend(true),
 	}
 	for name, entries := range named {
-		tier1 := legendString(keepUpToPriority(entries, 1))
-		if n := len([]rune(tier1)); n > minTerminalWidth {
-			t.Errorf("%s's priority-1 text is %d runes, exceeding minTerminalWidth (%d): %q", name, n, minTerminalWidth, tier1)
-		}
-	}
-}
-
-// TestLegendFit covers legendFit's narrow-terminal drop order (SPEC.md
-// §5.2): left and the legend's entries share one drop order, weakest
-// first — priority-3 entries, then left itself (priority "2.5": dropped
-// only once every priority-3 entry already is, but before any
-// priority-2 entry), then priority-2 entries. Priority-1 entries are
-// never dropped. Survivors always keep their original left-to-right
-// order and are never truncated mid-entry. left is always left-aligned;
-// the legend is always right-aligned — flush with the row's right edge
-// whether or not left is present — so the legend's own reading position
-// never jumps between alignments depending on whether left is present.
-func TestLegendFit(t *testing.T) {
-	entries := []legendEntry{
-		{"[return] open", 1},
-		{"[tab] next", 2},
-		{"[ctrl+u] clear", 3},
-		{"[esc] close", 1},
-	}
-	full := legendString(entries)                       // "[return] open  [tab] next  [ctrl+u] clear  [esc] close"
-	tier2 := legendString(keepUpToPriority(entries, 2)) // drop tier 3: "[return] open  [tab] next  [esc] close"
-	tier1 := legendString(keepUpToPriority(entries, 1)) // drop tier 2 and 3: "[return] open  [esc] close"
-	left := "~/dirtree"
-
-	tests := []struct {
-		name       string
-		w          int
-		wantText   string
-		wantLeftIn bool
-	}{
-		{"fits with label and full legend, exact width", len(left) + 1 + len(full), left + " " + full, true},
-		{"fits with label and full legend, slack width pushes legend to the right edge", len(left) + 1 + len(full) + 10, left + strings.Repeat(" ", 11) + full, true},
-		{"tier 3 dropped, label kept (priority 2.5 beats priority 3)", len(left) + 1 + len(tier2), left + " " + tier2, true},
-		{"label dropped once tier 3 is already gone and still doesn't fit", len(tier2), tier2, false},
-		{"legend stays right-aligned once left is dropped, slack width included", len(tier2) + len(left), strings.Repeat(" ", len(left)) + tier2, false},
-		{"tier 2 also dropped, label stays out", len(tier1), tier1, false},
-		{"tier 1 only, still narrower than tier1 text", len(tier1) - 1, tier1, false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			text, leftIncluded := legendFit(tc.w, left, entries)
-			if text != tc.wantText {
-				t.Errorf("legendFit(%d) text = %q, want %q", tc.w, text, tc.wantText)
-			}
-			if leftIncluded != tc.wantLeftIn {
-				t.Errorf("legendFit(%d) leftIncluded = %v, want %v", tc.w, leftIncluded, tc.wantLeftIn)
-			}
-		})
-	}
-}
-
-// TestLegendFitNeverReordersOrTruncatesMidEntry checks that whichever
-// entries survive a drop keep their original relative order, and that no
-// returned text ever contains a partial "[..." fragment cut off mid-entry.
-func TestLegendFitNeverReordersOrTruncatesMidEntry(t *testing.T) {
-	entries := []legendEntry{
-		{"[a] alpha", 1},
-		{"[b] bravo", 3},
-		{"[c] charlie", 2},
-		{"[d] delta", 1},
-	}
-	for w := 0; w <= 60; w++ {
-		text, _ := legendFit(w, "left", entries)
-		idxA := strings.Index(text, "[a] alpha")
-		idxD := strings.Index(text, "[d] delta")
-		if idxA != -1 && idxD != -1 && idxA > idxD {
-			t.Fatalf("w=%d: priority-1 entries out of order in %q", w, text)
-		}
-		if strings.Count(text, "[") != strings.Count(text, "]") {
-			t.Fatalf("w=%d: legend text %q has an unbalanced bracket, suggesting mid-entry truncation", w, text)
-		}
-	}
-}
-
-// TestKeepUpToPriority checks the tier-filtering building block directly.
-func TestKeepUpToPriority(t *testing.T) {
-	entries := []legendEntry{{"a", 1}, {"b", 2}, {"c", 3}, {"d", 1}}
-	got := keepUpToPriority(entries, 2)
-	want := []legendEntry{{"a", 1}, {"b", 2}, {"d", 1}}
-	if len(got) != len(want) {
-		t.Fatalf("keepUpToPriority = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("keepUpToPriority = %v, want %v", got, want)
+		tier1 := canvas.LegendString(canvas.KeepUpToPriority(entries, 1))
+		if n := len([]rune(tier1)); n > canvas.MinTerminalWidth {
+			t.Errorf("%s's priority-1 text is %d runes, exceeding MinTerminalWidth (%d): %q", name, n, canvas.MinTerminalWidth, tier1)
 		}
 	}
 }
@@ -147,7 +64,7 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 	sim.SetSize(w, h)
 
 	a := &App{
-		screen: sim,
+		shared: &views.Shared{Canvas: canvas.New(sim)},
 		files:  openfiles.New(),
 	}
 	if res := a.files.Open(path, 1<<20); res.Outcome != openfiles.Opened {

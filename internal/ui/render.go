@@ -14,78 +14,9 @@ import (
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/toast"
 	"github.com/nitti/dirtree/internal/tree"
+	"github.com/nitti/dirtree/internal/ui/canvas"
+	"github.com/nitti/dirtree/internal/ui/views"
 )
-
-var (
-	styleNormal   = tcell.StyleDefault
-	styleSelected = tcell.StyleDefault.Reverse(true)
-	styleHeader   = tcell.StyleDefault.Background(tcell.ColorDarkBlue).Foreground(tcell.ColorWhite)
-	// styleHeaderMode is styleHeader with bold applied, used only for the
-	// mode-name label (e.g. "BROWSE", "SEARCH") that replaces the tree
-	// root path on the header/title bar's left side while a mode other
-	// than the primary preview view is active — bold sets the label
-	// apart from the plain-weight legend sharing the same row, similar
-	// to how editors like hx render their current mode name.
-	styleHeaderMode  = styleHeader.Bold(true)
-	styleFileTitle   = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
-	styleError       = tcell.StyleDefault.Foreground(tcell.ColorRed)
-	styleBadge       = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
-	styleFindMatch   = tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
-	styleFindCurrent = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack).Bold(true)
-	// styleCopyModeTitle replaces styleFileTitle whenever copy mode
-	// (SPEC.md §2.1) is active, so the file title bar itself makes copy
-	// mode's on/off state visually unmistakable, not just the legend
-	// text.
-	styleCopyModeTitle = tcell.StyleDefault.Background(tcell.ColorDarkGreen).Foreground(tcell.ColorWhite)
-	// styleSearchInput sets the content search (SPEC.md §9.2) and quick
-	// open (§4.2) query rows apart from the plain-background list below
-	// them, so the "this is where you're typing" row is visually
-	// unmistakable at a glance rather than blending into the rest of the
-	// overlay.
-	styleSearchInput = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
-	// styleFlash briefly replaces a just-opened file row's normal style
-	// (browserOpen/browserFlashPath, performSearchOpen/searchFlashPath),
-	// as an on-open confirmation distinct from styleSelected (cursor
-	// position) and from the lasting "●" already-open indicator every
-	// open file's row shows regardless of when it was opened.
-	styleFlash = tcell.StyleDefault.Background(tcell.ColorGreen).Foreground(tcell.ColorBlack).Bold(true)
-	// styleFlashError is styleFlash's counterpart for a live-refresh
-	// discovering a directory that newly failed to list (SPEC.md §6.1):
-	// same brief-attention-grabbing role, red instead of green so it
-	// reads as a problem rather than a confirmation. Unlike styleFlash,
-	// what it's drawing attention to (the inline `[error]` text
-	// browserLabel already appends from tree.Node.Err) does not disappear
-	// when the flash itself fades — only the highlight is transient.
-	styleFlashError = tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite).Bold(true)
-)
-
-const (
-	// minTerminalWidth/minTerminalHeight (SPEC.md §6.4) gate every other
-	// screen: below either threshold, none of the app's other layouts
-	// (header + legend, popups, split content) can render without
-	// truncating or overlapping in ways that are actively misleading
-	// rather than just cramped, so drawTooSmall takes over the whole
-	// frame instead of drawing a mangled version of whatever view was
-	// active. minTerminalWidth matches openFilesMinWidth's existing
-	// "40 columns is the narrowest we design any component for"
-	// precedent; minTerminalHeight is header + file title bar + a
-	// handful of content/legend rows, the shortest any overlay's own
-	// layout assumes it can rely on.
-	minTerminalWidth  = 40
-	minTerminalHeight = 10
-)
-
-// legendEntry is one "[key] action" segment of a keybinding legend,
-// tagged with a drop priority for narrow terminals (SPEC.md §5.2):
-// priority 1 entries are never dropped, priority 2 entries are dropped
-// before priority 1, and priority 3 entries are dropped before priority
-// 2 — see legendFit below. Entries always render left-to-right in the
-// order they're declared; dropping only ever omits an entry, it never
-// reorders the survivors.
-type legendEntry struct {
-	text     string
-	priority int
-}
 
 var (
 	// previewLegend is the primary preview view's app-wide legend
@@ -95,23 +26,23 @@ var (
 	// alongside quit (the only way out of the app); quick open and
 	// search are alternate entry points to the same goal and drop first
 	// on a narrow terminal.
-	previewLegend = []legendEntry{
-		{"[b] browse", 1},
-		{"[tab] open files", 1},
-		{"[o] quick open", 2},
-		{"[s] search", 2},
-		{"[q] quit", 1},
+	previewLegend = []canvas.LegendEntry{
+		{Text: "[b] browse", Priority: 1},
+		{Text: "[tab] open files", Priority: 1},
+		{Text: "[o] quick open", Priority: 2},
+		{Text: "[s] search", Priority: 2},
+		{Text: "[q] quit", Priority: 1},
 	}
 	// browserLegend documents the browser overlay's own actions (SPEC.md
 	// §3.4): Return opens the selected file, left/right collapse/expand
 	// a directory (or move to its parent/first child), `/` enters jump
 	// to file (§4.3), Escape closes the overlay (the sole close key —
 	// `b` is not a toggle here).
-	browserLegend = []legendEntry{
-		{"[return] open", 1},
-		{"[left/right] expand/collapse", 2},
-		{"[/] jump to file", 2},
-		{"[esc] close", 1},
+	browserLegend = []canvas.LegendEntry{
+		{Text: "[return] open", Priority: 1},
+		{Text: "[left/right] expand/collapse", Priority: 2},
+		{Text: "[/] jump to file", Priority: 2},
+		{Text: "[esc] close", Priority: 1},
 	}
 	// jumpLegend documents jump-to-file mode's own actions (SPEC.md
 	// §4.3): Return leaves jump mode keeping the current selection,
@@ -120,16 +51,16 @@ var (
 	// query, Escape cancels back to the selection/scroll jump mode was
 	// entered with. Tab/Shift-Tab is priority 2, not 1, like quick
 	// open's and content search's own match-cycling entries below —
-	// keeping every legend's priority-1-only text under minTerminalWidth
+	// keeping every legend's priority-1-only text under the terminal-size floor
 	// (§6.4) means the "done"/"cancel" pair stays legible even at the
 	// enforced minimum, where this entry's own long text (it names both
 	// directions) would otherwise still overflow and clip.
-	jumpLegend = []legendEntry{
-		{"[return] done", 1},
-		{"[tab/shift-tab] next/prev match", 2},
-		{"[/] expand", 2},
-		{"[ctrl+u] clear", 2},
-		{"[esc] cancel", 1},
+	jumpLegend = []canvas.LegendEntry{
+		{Text: "[return] done", Priority: 1},
+		{Text: "[tab/shift-tab] next/prev match", Priority: 2},
+		{Text: "[/] expand", Priority: 2},
+		{Text: "[ctrl+u] clear", Priority: 2},
+		{Text: "[esc] cancel", Priority: 1},
 	}
 	// searchLegend documents the content search overlay's actions (SPEC.md
 	// §9.2): Return opens the selected row (jumping to its line if it's a
@@ -139,21 +70,21 @@ var (
 	// already cover this, so it's not spelled out as its own legend entry
 	// alongside left/right); left/right collapse/expand a file's hit
 	// rows; ctrl+r toggles regex mode; ctrl+u clears the query.
-	searchLegend = []legendEntry{
-		{"[return] open", 1},
-		{"[left/right] expand/collapse", 2},
-		{"[ctrl+r] regex", 2},
-		{"[ctrl+u] clear", 3},
-		{"[esc] close", 1},
+	searchLegend = []canvas.LegendEntry{
+		{Text: "[return] open", Priority: 1},
+		{Text: "[left/right] expand/collapse", Priority: 2},
+		{Text: "[ctrl+r] regex", Priority: 2},
+		{Text: "[ctrl+u] clear", Priority: 3},
+		{Text: "[esc] close", Priority: 1},
 	}
 	// fileLegend lists actions specific to the currently-displayed file
 	// (as opposed to app-wide navigation), shown in the file title bar
 	// rather than the global menu bar (§5.2) — new file-specific actions
 	// belong here going forward.
-	fileLegend = []legendEntry{
-		{"[/] find", 1},
-		{"[g] goto line", 2},
-		{"[c] copy mode", 2},
+	fileLegend = []canvas.LegendEntry{
+		{Text: "[/] find", Priority: 1},
+		{Text: "[g] goto line", Priority: 2},
+		{Text: "[c] copy mode", Priority: 2},
 	}
 	// fileLegendCopyModeOn replaces fileLegend once copy mode is active
 	// (§2.1): goto-line and find are omitted since the point of copy
@@ -161,109 +92,80 @@ var (
 	// scrolling/goto/find remain reachable via their own keys regardless
 	// of whether they're listed here, the same way arrow-key scrolling
 	// already is.
-	fileLegendCopyModeOn = []legendEntry{
-		{"[c] normal view", 1},
+	fileLegendCopyModeOn = []canvas.LegendEntry{
+		{Text: "[c] normal view", Priority: 1},
 	}
 	// gotoLegend documents the goto-line prompt's own actions (SPEC.md
 	// §5.2): Return jumps to the entered line and closes the prompt,
 	// Ctrl+U clears the entered digits, Escape cancels without changing
 	// scroll.
-	gotoLegend = []legendEntry{
-		{"[return] jump", 1},
-		{"[ctrl+u] clear", 2},
-		{"[esc] cancel", 1},
+	gotoLegend = []canvas.LegendEntry{
+		{Text: "[return] jump", Priority: 1},
+		{Text: "[ctrl+u] clear", Priority: 2},
+		{Text: "[esc] cancel", Priority: 1},
 	}
 	// findPromptLegend documents the in-file find prompt's own actions
 	// (SPEC.md §2.4): Return executes the search and closes the prompt,
 	// Ctrl+U clears the query, Escape cancels leaving any existing find
 	// state unchanged.
-	findPromptLegend = []legendEntry{
-		{"[return] search", 1},
-		{"[ctrl+u] clear", 2},
-		{"[esc] cancel", 1},
+	findPromptLegend = []canvas.LegendEntry{
+		{Text: "[return] search", Priority: 1},
+		{Text: "[ctrl+u] clear", Priority: 2},
+		{Text: "[esc] cancel", Priority: 1},
 	}
-	findLegend = []legendEntry{
-		{"[n] next", 1},
-		{"[N] prev", 1},
-		{"[esc] clear", 1},
+	findLegend = []canvas.LegendEntry{
+		{Text: "[n] next", Priority: 1},
+		{Text: "[N] prev", Priority: 1},
+		{Text: "[esc] clear", Priority: 1},
 	}
 	// findLegendNoMatches is shown instead of findLegend when a find's
 	// query matched nothing — there's no next/previous to step between,
 	// but esc still clears it back to the idle file title bar.
-	findLegendNoMatches = []legendEntry{
-		{"[esc] clear", 1},
-	}
-	// quickOpenLegend documents the quick open overlay's actions
-	// (SPEC.md §4.2): Return opens the selected match into the
-	// open-files list, Page Up/Down move the selection by a page
-	// (up/down move it by one row, already covered by arrow keys and so
-	// not spelled out here), Ctrl+U clears the query, Escape cancels
-	// back to the primary preview view.
-	quickOpenLegend = []legendEntry{
-		{"[return] open", 1},
-		{"[pgup/pgdn] page", 3},
-		{"[ctrl+u] clear", 3},
-		{"[esc] cancel", 1},
+	findLegendNoMatches = []canvas.LegendEntry{
+		{Text: "[esc] clear", Priority: 1},
 	}
 )
 
-var categoryStyles = map[preview.Category]tcell.Style{
-	preview.CategoryComment:  tcell.StyleDefault.Foreground(tcell.ColorGray),
-	preview.CategoryString:   tcell.StyleDefault.Foreground(tcell.ColorGreen),
-	preview.CategoryNumber:   tcell.StyleDefault.Foreground(tcell.ColorPurple),
-	preview.CategoryKeyword:  tcell.StyleDefault.Foreground(tcell.ColorTeal).Bold(true),
-	preview.CategoryFunction: tcell.StyleDefault.Foreground(tcell.ColorBlue),
-	preview.CategoryOperator: tcell.StyleDefault.Foreground(tcell.ColorYellow),
-	preview.CategoryText:     tcell.StyleDefault,
-}
-
-func styleFor(cat preview.Category) tcell.Style {
-	if s, ok := categoryStyles[cat]; ok {
-		return s
-	}
-	return styleNormal
-}
-
 // draw renders one frame.
 func (a *App) draw() {
-	a.screen.Clear()
-	w, h := a.screen.Size()
+	a.shared.Canvas.Clear()
+	w, h := a.shared.Canvas.Size()
 
-	if w < minTerminalWidth || h < minTerminalHeight {
+	if w < canvas.MinTerminalWidth || h < canvas.MinTerminalHeight {
 		a.drawTooSmall(w, h)
-		a.screen.Show()
+		a.shared.Canvas.Show()
 		return
 	}
 
 	switch a.overlay {
-	case overlayBrowser:
+	case views.OverlayBrowser:
 		a.drawBrowserOverlay(w, h)
-	case overlayQuickOpen:
-		a.drawQuickOpen(w, h)
+	case views.OverlayQuickOpen:
+		a.QuickOpen.Draw(w, h)
 		a.drawBadge(w, h)
-	case overlayOpenFiles:
+	case views.OverlayOpenFiles:
 		a.drawOpenFiles(w, h)
-	case overlaySearch:
+	case views.OverlaySearch:
 		a.drawSearch(w, h)
 		a.drawBadge(w, h)
 	default:
-		a.drawHeader(w, a.menuBarText(w, previewLegend))
+		a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
 		titleRows := a.drawFileTitleBar(0, 1, w, true)
 		a.drawPreview(0, 1+titleRows, w, h-1-titleRows)
 	}
 	a.drawToast(w, h)
 
-	a.screen.Show()
+	a.shared.Canvas.Show()
 }
 
 // drawTooSmall renders the too-small screen (SPEC.md §6.4), which
 // supersedes every other view/overlay whenever the terminal is below
-// minTerminalWidth or minTerminalHeight in either dimension: none of
+// the terminal-size floor in either dimension: none of
 // the app's other layouts can be trusted to degrade gracefully below
 // that floor, so this replaces the frame outright rather than drawing
 // a truncated/overlapping version of whatever was active. It only
 // assumes it can address individual cells directly (SetContent), not
-// that a full row (drawText's w-wide loop) or centered layout is safe
+// that a full row (DrawText's w-wide loop) or centered layout is safe
 // at any particular size, since it must remain legible-as-possible
 // even far below its own stated minimum.
 //
@@ -282,20 +184,20 @@ func (a *App) draw() {
 // that dimension makes the other one (if still short) take its place
 // on the next frame.
 func (a *App) drawTooSmall(w, h int) {
-	widthShort := w < minTerminalWidth
-	heightShort := h < minTerminalHeight
+	widthShort := w < canvas.MinTerminalWidth
+	heightShort := h < canvas.MinTerminalHeight
 
 	showWidth := widthShort
 	if widthShort && heightShort {
-		widthRatio := float64(w) / float64(minTerminalWidth)
-		heightRatio := float64(h) / float64(minTerminalHeight)
+		widthRatio := float64(w) / float64(canvas.MinTerminalWidth)
+		heightRatio := float64(h) / float64(canvas.MinTerminalHeight)
 		showWidth = widthRatio <= heightRatio
 	}
 
 	if showWidth {
-		a.drawTooSmallHorizontal(w, h, minTerminalWidth)
+		a.drawTooSmallHorizontal(w, h, canvas.MinTerminalWidth)
 	} else {
-		a.drawTooSmallVertical(w, h, minTerminalHeight)
+		a.drawTooSmallVertical(w, h, canvas.MinTerminalHeight)
 	}
 }
 
@@ -308,7 +210,7 @@ func (a *App) drawTooSmallCell(x, y, w, h int, r rune) {
 	if x < 0 || x >= w || y < 0 || y >= h {
 		return
 	}
-	a.screen.SetContent(x, y, r, nil, styleError)
+	a.shared.Canvas.SetContent(x, y, r, canvas.StyleError)
 }
 
 // drawTooSmallHorizontal renders "← need →" on the vertical-center
@@ -356,113 +258,16 @@ func (a *App) drawBrowserOverlay(w, h int) {
 		// disclosed via slash-to-expand (jumpDisclosed) render ahead of
 		// the live query so committing a segment doesn't read as losing
 		// what was typed.
-		a.drawHeaderMode(w, "BROWSE", jumpLegend)
-		a.drawText(0, 1, w, "> "+a.jumpDisclosed+a.jumpQuery, styleSearchInput)
+		a.shared.Canvas.DrawHeaderMode(w, "BROWSE", jumpLegend)
+		a.shared.Canvas.DrawText(0, 1, w, "> "+a.jumpDisclosed+a.jumpQuery, canvas.StyleSearchInput)
 		browserTop = 2
 	} else {
-		a.drawHeaderMode(w, "BROWSE", browserLegend)
+		a.shared.Canvas.DrawHeaderMode(w, "BROWSE", browserLegend)
 	}
 
 	a.drawBrowser(0, browserTop, w, h-browserTop)
 
 	a.drawBadge(w, h)
-}
-
-// drawBox draws a bordered rectangle with an optional title embedded in
-// the top border.
-func (a *App) drawBox(x0, y0, w, h int, title string) {
-	if w < 2 || h < 2 {
-		return
-	}
-	for x := 1; x < w-1; x++ {
-		a.screen.SetContent(x0+x, y0, '─', nil, styleNormal)
-		a.screen.SetContent(x0+x, y0+h-1, '─', nil, styleNormal)
-	}
-	for y := 1; y < h-1; y++ {
-		a.screen.SetContent(x0, y0+y, '│', nil, styleNormal)
-		a.screen.SetContent(x0+w-1, y0+y, '│', nil, styleNormal)
-	}
-	a.screen.SetContent(x0, y0, '┌', nil, styleNormal)
-	a.screen.SetContent(x0+w-1, y0, '┐', nil, styleNormal)
-	a.screen.SetContent(x0, y0+h-1, '└', nil, styleNormal)
-	a.screen.SetContent(x0+w-1, y0+h-1, '┘', nil, styleNormal)
-
-	if title != "" && w > 4 {
-		label := " " + title + " "
-		if len(label) > w-2 {
-			label = label[:w-2]
-		}
-		a.drawText(x0+1, y0, len(label), label, styleNormal)
-	}
-}
-
-// fillRect blanks a rectangle at style, used to erase whatever was
-// drawn underneath a popup before drawing its contents on top.
-func (a *App) fillRect(x0, y0, w, h int, style tcell.Style) {
-	for y := range h {
-		a.drawText(x0, y0+y, w, "", style)
-	}
-}
-
-// drawQuickOpen renders the quick open overlay (SPEC.md §4.2, §5.2): a
-// header with its single action (Return opens the selected match), the
-// query on its own row directly below (the same input-row convention
-// content search uses, §9.2), and the flat match list.
-func (a *App) drawQuickOpen(w, h int) {
-	a.drawHeaderMode(w, "QUICK OPEN", quickOpenLegend)
-	a.drawText(0, 1, w, "> "+a.finderQuery, styleSearchInput)
-	a.drawFinderList(w, h)
-}
-
-// drawFinderList renders quick open's flat, root-relative match list
-// (SPEC.md §4.1's index, §5.2's indexing/no-matches placeholder), with
-// any failed-open match (§2.2) showing its failure message inline,
-// appended the same way tree.Node.Err is in the browser, and flashing
-// red the same brief window (§5.3).
-func (a *App) drawFinderList(w, h int) {
-	const listTop = 2
-	listHeight := h - listTop
-
-	_, done := a.idx.Snapshot()
-	switch {
-	case !done:
-		// SPEC.md §5.2: during the pre-threshold grace period this is
-		// indistinguishable from "still indexing" at the pure-decision
-		// level, so the match-list area stays blank either way rather
-		// than claiming "no matches" before indexing has even looked.
-		a.drawText(0, listTop, w, centerPad("indexing…", w), styleNormal)
-	case len(a.finderMatches) == 0:
-		a.drawText(0, listTop, w, centerPad("no matches", w), styleNormal)
-	default:
-		if listHeight > 0 {
-			if a.finderSelected < a.finderScroll {
-				a.finderScroll = a.finderSelected
-			}
-			if a.finderSelected >= a.finderScroll+listHeight {
-				a.finderScroll = a.finderSelected - listHeight + 1
-			}
-		}
-		for row := range listHeight {
-			i := a.finderScroll + row
-			if i >= len(a.finderMatches) {
-				break
-			}
-			match := a.finderMatches[i]
-			label := match.RelPath
-			errored := a.finderErrorPath != "" && match.AbsPath == a.finderErrorPath
-			if errored {
-				label += " [" + a.finderErrorMessage + "]"
-			}
-			style := styleNormal
-			switch {
-			case errored && time.Since(a.finderErrorFlashStart) < flashDuration:
-				style = styleFlashError
-			case i == a.finderSelected:
-				style = styleSelected
-			}
-			a.drawText(0, listTop+row, w, label, style)
-		}
-	}
 }
 
 // drawOpenFiles renders the open-files-list overlay (SPEC.md §2.3): a
@@ -472,7 +277,7 @@ func (a *App) drawFinderList(w, h int) {
 // currently-displayed entry marked distinctly, or an explanatory
 // message if the list is empty.
 func (a *App) drawOpenFiles(w, h int) {
-	a.drawHeader(w, a.menuBarText(w, previewLegend))
+	a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
 	titleRows := a.drawFileTitleBar(0, 1, w, false)
 	a.drawPreview(0, 1+titleRows, w, h-1-titleRows)
 
@@ -488,8 +293,8 @@ func (a *App) drawOpenFiles(w, h int) {
 		x0 := (w - boxW) / 2
 		a.drawOpenFilesBox(x0, y0, boxW, boxH, "open files", false, false)
 		innerW := boxW - 2
-		a.drawText(x0+1, y0+1, innerW, centerPad("no open files", innerW), styleNormal)
-		a.drawText(x0+1, y0+2, innerW, centerPad("[esc] close", innerW), styleNormal)
+		a.shared.Canvas.DrawText(x0+1, y0+1, innerW, canvas.CenterPad("no open files", innerW), canvas.StyleNormal)
+		a.shared.Canvas.DrawText(x0+1, y0+2, innerW, canvas.CenterPad("[esc] close", innerW), canvas.StyleNormal)
 		return
 	}
 
@@ -501,12 +306,12 @@ func (a *App) drawOpenFiles(w, h int) {
 	legendEntries := openFilesLegend(pageCount > 1)
 
 	// Content-driven width: the header row (counter + a 1-column gap +
-	// legend) needs only the border columns around it, since legendText
+	// legend) needs only the border columns around it, since LegendText
 	// already accounts for its own internal spacing; row labels get 2
 	// extra columns of breathing room around them. Sized off the full,
 	// untiered legend text so the box is wide enough that its own
-	// narrow-terminal tiering (legendText below) rarely has to kick in.
-	longest := len([]rune(counter)) + 1 + len([]rune(legendString(legendEntries))) + 2
+	// narrow-terminal tiering (LegendText below) rarely has to kick in.
+	longest := len([]rune(counter)) + 1 + len([]rune(canvas.LegendString(legendEntries))) + 2
 	for i := start; i < end; i++ {
 		label := openFilesRowLabel(i-start, i == a.files.Displayed, tree.RelativeDisplayPath(a.rootPath, entries[i].Path))
 		if n := len([]rune(label)) + 4; n > longest {
@@ -523,34 +328,34 @@ func (a *App) drawOpenFiles(w, h int) {
 	innerW := boxW - 2
 
 	a.drawOpenFilesBox(x0, y0, boxW, boxH, "open files", page > 0, page < pageCount-1)
-	a.drawText(x0+1, y0+1, innerW, legendText(innerW, counter, legendEntries), styleNormal)
+	a.shared.Canvas.DrawText(x0+1, y0+1, innerW, canvas.LegendText(innerW, counter, legendEntries), canvas.StyleNormal)
 
 	for row := 0; row < itemRows && y0+2+row < y0+boxH-1; row++ {
 		i := start + row
-		style := styleNormal
+		style := canvas.StyleNormal
 		if i == a.openFilesSelected {
-			style = styleSelected
+			style = canvas.StyleSelected
 		}
 		label := openFilesRowLabel(row, i == a.files.Displayed, tree.RelativeDisplayPath(a.rootPath, entries[i].Path))
-		a.drawText(x0+1, y0+2+row, innerW, label, style)
+		a.shared.Canvas.DrawText(x0+1, y0+2+row, innerW, label, style)
 	}
 }
 
 // drawOpenFilesBox draws the open-files dropdown's bordered box: the
-// title embedded in the top border like drawBox, plus a "▲" in the top
-// border's right end when a previous page exists and a "▼" in the
-// bottom border's right end when a next page exists — so "more items
-// available" is visible right at the edge it refers to (above/below)
-// without spending a content row on it.
+// title embedded in the top border like canvas.Canvas.DrawBox, plus a
+// "▲" in the top border's right end when a previous page exists and a
+// "▼" in the bottom border's right end when a next page exists — so
+// "more items available" is visible right at the edge it refers to
+// (above/below) without spending a content row on it.
 func (a *App) drawOpenFilesBox(x0, y0, w, h int, title string, hasPrev, hasNext bool) {
-	a.drawBox(x0, y0, w, h, title)
+	a.shared.Canvas.DrawBox(x0, y0, w, h, title)
 	if hasPrev && w > 2 {
-		a.screen.SetContent(x0+w-2, y0, '▲', nil, styleNormal)
+		a.shared.Canvas.SetContent(x0+w-2, y0, '▲', canvas.StyleNormal)
 	}
 	if hasNext && w > 2 {
-		a.screen.SetContent(x0+w-2, y0+h-1, '▼', nil, styleNormal)
+		a.shared.Canvas.SetContent(x0+w-2, y0+h-1, '▼', canvas.StyleNormal)
 	}
-	a.fillRect(x0+1, y0+1, w-2, h-2, styleNormal)
+	a.shared.Canvas.FillRect(x0+1, y0+1, w-2, h-2, canvas.StyleNormal)
 }
 
 // openFilesRowLabel renders one dropdown row: its 0-9 on-page position,
@@ -572,16 +377,16 @@ func openFilesRowLabel(digit int, displayed bool, path string) string {
 // accelerator) is intentionally left off even on a multi-page list —
 // it's a bulk variant of the already-listed shift+↑↓, the same way
 // arrow-key scrolling is never listed at the primary view either.
-func openFilesLegend(multiPage bool) []legendEntry {
-	entries := []legendEntry{
-		{"[return/0-9] open", 1},
-		{"[x] remove", 2},
-		{"[shift+↑↓] move", 3},
+func openFilesLegend(multiPage bool) []canvas.LegendEntry {
+	entries := []canvas.LegendEntry{
+		{Text: "[return/0-9] open", Priority: 1},
+		{Text: "[x] remove", Priority: 2},
+		{Text: "[shift+↑↓] move", Priority: 3},
 	}
 	if multiPage {
-		entries = append(entries, legendEntry{"[pgup/pgdn] page", 2})
+		entries = append(entries, canvas.LegendEntry{Text: "[pgup/pgdn] page", Priority: 2})
 	}
-	return append(entries, legendEntry{"[esc] close", 1})
+	return append(entries, canvas.LegendEntry{Text: "[esc] close", Priority: 1})
 }
 
 // drawSearch renders the content search overlay (SPEC.md §9.2): a
@@ -590,21 +395,21 @@ func openFilesLegend(multiPage bool) []legendEntry {
 // disclosing (unless collapsed) its own matching-line rows below it —
 // or a placeholder while there's nothing to show yet.
 func (a *App) drawSearch(w, h int) {
-	a.drawHeaderMode(w, "SEARCH", searchLegend)
+	a.shared.Canvas.DrawHeaderMode(w, "SEARCH", searchLegend)
 	prompt := "> "
 	if a.searchRegex {
 		prompt = "[regex] > "
 	}
-	a.drawText(0, 1, w, prompt+a.searchQuery, styleSearchInput)
+	a.shared.Canvas.DrawText(0, 1, w, prompt+a.searchQuery, canvas.StyleSearchInput)
 
 	const listTop = 2
 	listHeight := h - listTop
 
 	switch {
 	case a.searchQuery == "":
-		a.drawText(0, listTop, w, centerPad("type to search file contents", w), styleNormal)
+		a.shared.Canvas.DrawText(0, listTop, w, canvas.CenterPad("type to search file contents", w), canvas.StyleNormal)
 	case a.searchError != "":
-		a.drawText(0, listTop, w, centerPad("invalid regex: "+a.searchError, w), styleError)
+		a.shared.Canvas.DrawText(0, listTop, w, canvas.CenterPad("invalid regex: "+a.searchError, w), canvas.StyleError)
 	case a.searchResults == nil:
 		// SPEC.md §9.1: covers both "index not done yet" and "a scan for
 		// this query is still running" — either way, nothing has been
@@ -630,9 +435,9 @@ func (a *App) drawSearch(w, h int) {
 			frame := spinner.Frame(time.Since(a.searchScanStart), spinnerFPS, spinner.DefaultFrames)
 			msg = string(frame) + " searching…"
 		}
-		a.drawText(0, listTop, w, centerPad(msg, w), styleNormal)
+		a.shared.Canvas.DrawText(0, listTop, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
 	case len(a.searchResults) == 0:
-		a.drawText(0, listTop, w, centerPad("no matches", w), styleNormal)
+		a.shared.Canvas.DrawText(0, listTop, w, canvas.CenterPad("no matches", w), canvas.StyleNormal)
 	default:
 		rows := a.searchRows()
 		if listHeight > 0 {
@@ -654,16 +459,16 @@ func (a *App) drawSearch(w, h int) {
 			if fileErrored {
 				label += " [" + a.searchErrorMessage + "]"
 			}
-			style := styleNormal
+			style := canvas.StyleNormal
 			switch {
 			case fileErrored && time.Since(a.searchErrorFlashStart) < flashDuration:
-				style = styleFlashError
+				style = canvas.StyleFlashError
 			case i == a.searchSelected:
-				style = styleSelected
+				style = canvas.StyleSelected
 			case !row.isHit && a.searchResults[row.file].AbsPath == a.searchFlashPath && time.Since(a.searchFlashStart) < flashDuration:
-				style = styleFlash
+				style = canvas.StyleFlash
 			}
-			a.drawText(0, listTop+line, w, label, style)
+			a.shared.Canvas.DrawText(0, listTop+line, w, label, style)
 		}
 	}
 }
@@ -727,116 +532,10 @@ func shellAbbreviate(path string) string {
 // tree root path left-aligned and a short keybinding legend
 // right-aligned, with at least one space of separation between them.
 // The root path is dropped once even priority-3 legend entries can't
-// buy back enough room (legendFit's drop order), re-evaluated every
-// frame so a live resize can bring it back.
-func (a *App) menuBarText(w int, entries []legendEntry) string {
-	return legendText(w, a.rootLabel(), entries)
-}
-
-// legendString joins entries' text left-to-right, in declaration order,
-// with the app's standard two-space separator between legend segments.
-func legendString(entries []legendEntry) string {
-	parts := make([]string, len(entries))
-	for i, e := range entries {
-		parts[i] = e.text
-	}
-	return strings.Join(parts, "  ")
-}
-
-// keepUpToPriority returns the subset of entries whose priority is
-// maxPriority or lower, preserving their original order — the building
-// block legendFit uses to progressively drop the lowest-priority tier
-// first (SPEC.md §5.2's narrow-terminal drop order).
-func keepUpToPriority(entries []legendEntry, maxPriority int) []legendEntry {
-	out := make([]legendEntry, 0, len(entries))
-	for _, e := range entries {
-		if e.priority <= maxPriority {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// rightAlign right-pads text with leading spaces so its own right edge
-// lands on column w-1 — used for the legend once left-hand content has
-// been dropped entirely for width, so the legend is right-aligned
-// there too, the same as it is whenever left-hand content precedes it
-// (fitPair, below). Without this, drawText's own padding (which always
-// lands on the right of whatever it's given) would make the legend
-// read as left-aligned the moment left-hand content drops out — a
-// visible alignment jump on every resize crossing that boundary.
-func rightAlign(w int, text string) string {
-	if n := len([]rune(text)); n < w {
-		return strings.Repeat(" ", w-n) + text
-	}
-	return text
-}
-
-// fitPair left-aligns left and right-aligns legend within w columns,
-// with at least one space of separation between them, reporting whether
-// they both fit at all.
-func fitPair(w int, left, legend string) (text string, ok bool) {
-	leftLen, legendLen := len([]rune(left)), len([]rune(legend))
-	if gap := w - leftLen - legendLen; gap >= 1 {
-		return left + strings.Repeat(" ", gap) + legend, true
-	}
-	return "", false
-}
-
-// legendText composes left and entries the same way legendFit does,
-// discarding the leftIncluded flag for callers that don't need it (most
-// don't — it exists only for drawHeaderMode's bold-label styling).
-func legendText(w int, left string, entries []legendEntry) string {
-	text, _ := legendFit(w, left, entries)
-	return text
-}
-
-// legendFit is legendText's underlying fit computation (SPEC.md §5.2's
-// header/title bar convention, applied everywhere a header combines
-// some left-hand content with a keybinding legend), additionally
-// reporting whether left was included (as opposed to dropped for width
-// reasons), so a caller that needs to style left differently from the
-// legend (drawHeaderMode, below) knows whether left actually appears in
-// the returned text.
-//
-// left and the legend's entries share one drop order, weakest first:
-// priority-3 entries, then left itself (conceptually priority "2.5" —
-// dropped only once every priority-3 entry already has been, but before
-// any priority-2 entry is), then priority-2 entries. Priority-1 entries
-// are never dropped. This means left survives being squeezed by a
-// disposable priority-3 key hint (e.g. "[ctrl+u] clear") rather than
-// being sacrificed first regardless of how little space that would
-// actually free — losing the root path/mode label is a real loss of
-// context, so it's worth less-essential legend entries going first if
-// that's enough on its own. Entries are only ever omitted wholesale,
-// never truncated mid-entry, and survivors keep their original
-// left-to-right order. Priority-1 entries are never dropped; by
-// construction every legend's priority-1 subset is short enough to fit
-// any terminal wide enough to run the app at all (SPEC.md §6.4), but as
-// a last-resort fallback if it somehow still doesn't, that priority-1
-// text is returned anyway and left to drawText's own column clip.
-//
-// The legend itself is always right-aligned — flush with the row's
-// right edge whether or not left is present (rightAlign handles the
-// no-left case; fitPair's variable-width gap handles it whenever left
-// precedes the legend) — so its own right edge, and therefore its
-// reading position, never jumps between alignments as left is dropped
-// or restored across a resize.
-func legendFit(w int, left string, entries []legendEntry) (text string, leftIncluded bool) {
-	full := legendString(entries)
-	tier2 := legendString(keepUpToPriority(entries, 2))
-	tier1 := legendString(keepUpToPriority(entries, 1))
-
-	if fit, ok := fitPair(w, left, full); ok {
-		return fit, true
-	}
-	if fit, ok := fitPair(w, left, tier2); ok {
-		return fit, true
-	}
-	if len([]rune(tier2)) <= w {
-		return rightAlign(w, tier2), false
-	}
-	return rightAlign(w, tier1), false
+// buy back enough room (canvas.LegendFit's drop order), re-evaluated
+// every frame so a live resize can bring it back.
+func (a *App) menuBarText(w int, entries []canvas.LegendEntry) string {
+	return canvas.LegendText(w, a.rootLabel(), entries)
 }
 
 // drawFileTitleBar renders the currently-displayed file's own title bar
@@ -868,37 +567,37 @@ func (a *App) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	var text string
 	switch {
 	case interactive && a.findPromptOpen:
-		text = legendText(w, "/"+a.findInput, findPromptLegend)
+		text = canvas.LegendText(w, "/"+a.findInput, findPromptLegend)
 	case !interactive:
 		text = left
 	case e.FindQuery != "" && len(e.FindMatches) > 0:
-		text = legendText(w, left, withStatus(findStatusText(e), findLegend))
+		text = canvas.LegendText(w, left, withStatus(findStatusText(e), findLegend))
 	case e.FindQuery != "":
-		text = legendText(w, left, withStatus(findStatusText(e), findLegendNoMatches))
+		text = canvas.LegendText(w, left, withStatus(findStatusText(e), findLegendNoMatches))
 	case e.CopyMode:
-		text = legendText(w, left, fileLegendCopyModeOn)
+		text = canvas.LegendText(w, left, fileLegendCopyModeOn)
 	default:
-		text = legendText(w, rel, fileLegend)
+		text = canvas.LegendText(w, rel, fileLegend)
 	}
 
-	style := styleFileTitle
+	style := canvas.StyleFileTitle
 	if e.CopyMode {
-		style = styleCopyModeTitle
+		style = canvas.StyleCopyModeTitle
 	}
-	a.drawText(x0, y0, w, text, style)
+	a.shared.Canvas.DrawText(x0, y0, w, text, style)
 	return 1
 }
 
 // withStatus prepends a synthetic, always-shown (priority 1) legend
 // entry carrying the in-file find's live status text (query, match
 // position/count, wrap note — findStatusText below) ahead of legend's
-// own entries, so status and legend tier together through legendFit the
-// same way the path and the legend used to be concatenated directly:
+// own entries, so status and legend tier together through canvas.LegendFit
+// the same way the path and the legend used to be concatenated directly:
 // status is never dropped for width, exactly like a priority-1 legend
 // key, while legend's own lower-priority entries (e.g. findLegend's, all
 // priority 1 today) still drop first if it ever came to that.
-func withStatus(status string, legend []legendEntry) []legendEntry {
-	return append([]legendEntry{{status, 1}}, legend...)
+func withStatus(status string, legend []canvas.LegendEntry) []canvas.LegendEntry {
+	return append([]canvas.LegendEntry{{Text: status, Priority: 1}}, legend...)
 }
 
 // findStatusText renders in-file find's live status (SPEC.md §2.4): the
@@ -928,7 +627,7 @@ func (a *App) drawPreview(x0, y0, w, h int) {
 	if e == nil {
 		msg := "no files open — press b to browse, o to quick-open, s to search contents"
 		row := y0 + max(h/2, 1)
-		a.drawText(x0, row, w, centerPad(msg, w), styleNormal)
+		a.shared.Canvas.DrawText(x0, row, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
 		return
 	}
 
@@ -954,20 +653,20 @@ func (a *App) drawPreview(x0, y0, w, h int) {
 			if dr.HasNumber {
 				numField = fmt.Sprintf("%*d", digits, dr.SourceLine+1)
 			}
-			a.drawText(x0, y, gw, numField+"  ", styleNormal)
+			a.shared.Canvas.DrawText(x0, y, gw, numField+"  ", canvas.StyleNormal)
 		}
 		a.drawSegments(x0+gw, y, contentWidth, dr.Segments, findHighlightsForRow(e, dr), e.CopyMode)
 	}
 
 	if a.gotoPromptOpen {
-		a.drawText(x0, y0+h-1, w, legendText(w, "goto line: "+a.gotoInput, gotoLegend), styleNormal)
+		a.shared.Canvas.DrawText(x0, y0+h-1, w, canvas.LegendText(w, "goto line: "+a.gotoInput, gotoLegend), canvas.StyleNormal)
 	}
 }
 
 // findHighlight is one in-file find match's column range within a
 // single wrapped display row, in row-relative rune columns (SPEC.md
-// §2.4) — Current picks styleFindCurrent over styleFindMatch so the
-// active match stands out from the rest.
+// §2.4) — Current picks canvas.StyleFindCurrent over canvas.StyleFindMatch
+// so the active match stands out from the rest.
 type findHighlight struct {
 	Start, End int
 	Current    bool
@@ -1014,20 +713,20 @@ func findHighlightsForRow(e *openfiles.Entry, row preview.DisplayRow) []findHigh
 func (a *App) drawSegments(x, y, w int, segs []preview.Segment, highlights []findHighlight, plain bool) {
 	col := 0
 	for _, seg := range segs {
-		style := styleNormal
+		style := canvas.StyleNormal
 		if !plain {
-			style = styleFor(seg.Category)
+			style = canvas.StyleFor(seg.Category)
 		}
 		for _, r := range seg.Text {
 			if col >= w {
 				return
 			}
-			a.screen.SetContent(x+col, y, r, nil, highlightStyleAt(col, highlights, style))
+			a.shared.Canvas.SetContent(x+col, y, r, highlightStyleAt(col, highlights, style))
 			col++
 		}
 	}
 	for ; col < w; col++ {
-		a.screen.SetContent(x+col, y, ' ', nil, styleNormal)
+		a.shared.Canvas.SetContent(x+col, y, ' ', canvas.StyleNormal)
 	}
 }
 
@@ -1037,47 +736,12 @@ func highlightStyleAt(col int, highlights []findHighlight, base tcell.Style) tce
 	for _, h := range highlights {
 		if col >= h.Start && col < h.End {
 			if h.Current {
-				return styleFindCurrent
+				return canvas.StyleFindCurrent
 			}
-			return styleFindMatch
+			return canvas.StyleFindMatch
 		}
 	}
 	return base
-}
-
-// gutterWidth returns the gutter column width for a file with numLines
-// source lines: wide enough for the largest line number, plus a
-// two-column separator (SPEC.md §2.1).
-func gutterWidth(numLines int) int {
-	digits := max(len(fmt.Sprintf("%d", numLines)), 1)
-	return digits + 2
-}
-
-func centerPad(s string, w int) string {
-	if len(s) >= w {
-		return s
-	}
-	pad := (w - len(s)) / 2
-	return strings.Repeat(" ", pad) + s
-}
-
-func (a *App) drawHeader(w int, text string) {
-	a.drawText(0, 0, w, text, styleHeader)
-}
-
-// drawHeaderMode renders the header/title bar with label (a bold,
-// all-caps mode name, e.g. "BROWSE" or "SEARCH") standing in for the
-// tree root path on the left, and legend right-aligned, using the same
-// fit/drop rule legendText uses elsewhere — label is dropped once
-// legend can't buy back enough room some other way, exactly like the
-// root path is. Only label itself is bold; legend keeps the normal
-// header weight.
-func (a *App) drawHeaderMode(w int, label string, entries []legendEntry) {
-	text, included := legendFit(w, label, entries)
-	a.drawText(0, 0, w, text, styleHeader)
-	if included {
-		a.drawText(0, 0, len([]rune(label)), label, styleHeaderMode)
-	}
 }
 
 // drawBrowser renders the browser's currently-visible flattened list
@@ -1113,14 +777,14 @@ func (a *App) drawBrowser(x0, y0, w, h int) {
 			break
 		}
 		n := flat[i]
-		style := styleNormal
+		style := canvas.StyleNormal
 		switch {
 		// SPEC.md §6.1: same reasoning as the open-flash case below —
 		// the errored directory could well be the currently-selected
 		// row, and reverse-video would otherwise mask the flash
 		// entirely, so it takes precedence even over selection.
 		case isErrorFlashing(a.browserErrorFlashes, n.Path):
-			style = styleFlashError
+			style = canvas.StyleFlashError
 		// SPEC.md §5.2: the flash takes precedence here, unlike content
 		// search's own flash/selected precedence — Return never moves
 		// the browser's selection (§3.4), so the just-opened row is
@@ -1128,13 +792,13 @@ func (a *App) drawBrowser(x0, y0, w, h int) {
 		// same way it does in content search, the flash would be
 		// permanently masked by reverse-video and never actually visible.
 		case n.Path == a.browserFlashPath && time.Since(a.browserFlashStart) < flashDuration:
-			style = styleFlash
+			style = canvas.StyleFlash
 		case n == a.browserSelected:
-			style = styleSelected
+			style = canvas.StyleSelected
 		case isMatch[n]:
-			style = styleFindMatch
+			style = canvas.StyleFindMatch
 		}
-		a.drawText(x0, y0+row, w, browserLabel(n, a.files.IsOpen(n.Path)), style)
+		a.shared.Canvas.DrawText(x0, y0+row, w, browserLabel(n, a.files.IsOpen(n.Path)), style)
 	}
 }
 
@@ -1192,12 +856,12 @@ func (a *App) drawBadge(w, h int) {
 	if len(visible) == 0 {
 		return
 	}
-	a.drawCornerBadge(w, h, string(visible), styleBadge)
+	a.shared.Canvas.DrawCornerBadge(w, h, string(visible), canvas.StyleBadge)
 }
 
 // drawToast renders the generic bottom-right transient notification
 // (SPEC.md §5.3, e.g. the open-file live-reload notice, §6.1a) if one
-// is currently active, sharing drawCornerBadge's anchor/style with the
+// is currently active, sharing DrawCornerBadge's anchor/style with the
 // indexing badge; drawn after it in draw() so an active toast wins the
 // corner over the badge on the rare frame both would otherwise want it.
 // Clears toastMessage once its fade has fully completed, so a finished
@@ -1228,11 +892,11 @@ func (a *App) drawToast(w, h int) {
 		return
 	}
 	for i, r := range visible {
-		style := styleBadge
+		style := canvas.StyleBadge
 		if inBoldRange(a.toastBoldRanges, hiddenPrefix+i) {
 			style = style.Bold(true)
 		}
-		a.screen.SetContent(x+i, y, r, nil, style)
+		a.shared.Canvas.SetContent(x+i, y, r, style)
 	}
 }
 
@@ -1246,32 +910,4 @@ func inBoldRange(ranges [][2]int, idx int) bool {
 		}
 	}
 	return false
-}
-
-// drawCornerBadge draws text right-anchored on the bottom row, the
-// shared anchor point both the indexing badge and the error toast fade
-// out from (SPEC.md §5.3's "anchored, directional motion").
-func (a *App) drawCornerBadge(w, h int, text string, style tcell.Style) {
-	visible := []rune(text)
-	x := max(w-len(visible), 0)
-	y := h - 1
-	if y < 0 {
-		return
-	}
-	a.drawText(x, y, len(visible), text, style)
-}
-
-// drawText draws text starting at (x, y), clipped and padded with
-// spaces to exactly w columns so style (e.g. selection reverse-video,
-// the header/badge backgrounds) fills the full row width regardless of
-// text length.
-func (a *App) drawText(x, y, w int, text string, style tcell.Style) {
-	runes := []rune(text)
-	for i := range w {
-		r := ' '
-		if i < len(runes) {
-			r = runes[i]
-		}
-		a.screen.SetContent(x+i, y, r, nil, style)
-	}
 }
