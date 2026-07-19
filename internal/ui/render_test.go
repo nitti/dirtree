@@ -19,16 +19,16 @@ import (
 // on its own, with no left-hand label — otherwise a terminal at exactly
 // the enforced minimum would still see a clipped legend, the same class
 // of bug a too-long jumpLegend/searchLegend priority-1 entry caused
-// before those entries were demoted to priority 2. Quick open's and
-// content search's own legends have equivalent tests alongside their
-// own package (views.TestQuickOpenLegendTier1FitsMinTerminalWidth,
-// views.TestSearchLegendTier1FitsMinTerminalWidth), since they no
+// before those entries were demoted to priority 2. Quick open's,
+// content search's, and the browser's own legends (including
+// jump-to-file mode's) have equivalent tests alongside their own
+// package (views.TestQuickOpenLegendTier1FitsMinTerminalWidth,
+// views.TestSearchLegendTier1FitsMinTerminalWidth,
+// views.TestBrowserLegendsTier1FitMinTerminalWidth), since they no
 // longer live here.
 func TestLegendTier1FitsMinTerminalWidth(t *testing.T) {
 	named := map[string][]canvas.LegendEntry{
 		"previewLegend":          previewLegend,
-		"browserLegend":          browserLegend,
-		"jumpLegend":             jumpLegend,
 		"fileLegend":             fileLegend,
 		"fileLegendCopyModeOn":   fileLegendCopyModeOn,
 		"gotoLegend":             gotoLegend,

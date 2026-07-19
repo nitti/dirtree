@@ -32,35 +32,6 @@ var (
 		{Text: "[s] search", Priority: 2},
 		{Text: "[q] quit", Priority: 1},
 	}
-	// browserLegend documents the browser overlay's own actions (SPEC.md
-	// §3.4): Return opens the selected file, left/right collapse/expand
-	// a directory (or move to its parent/first child), `/` enters jump
-	// to file (§4.3), Escape closes the overlay (the sole close key —
-	// `b` is not a toggle here).
-	browserLegend = []canvas.LegendEntry{
-		{Text: "[return] open", Priority: 1},
-		{Text: "[left/right] expand/collapse", Priority: 2},
-		{Text: "[/] jump to file", Priority: 2},
-		{Text: "[esc] close", Priority: 1},
-	}
-	// jumpLegend documents jump-to-file mode's own actions (SPEC.md
-	// §4.3): Return leaves jump mode keeping the current selection,
-	// Tab/Shift-Tab cycle the match set, `/` slash-to-expand narrows the
-	// jump scope into a single-matching directory, Ctrl+U clears the
-	// query, Escape cancels back to the selection/scroll jump mode was
-	// entered with. Tab/Shift-Tab is priority 2, not 1, like quick
-	// open's and content search's own match-cycling entries below —
-	// keeping every legend's priority-1-only text under the terminal-size floor
-	// (§6.4) means the "done"/"cancel" pair stays legible even at the
-	// enforced minimum, where this entry's own long text (it names both
-	// directions) would otherwise still overflow and clip.
-	jumpLegend = []canvas.LegendEntry{
-		{Text: "[return] done", Priority: 1},
-		{Text: "[tab/shift-tab] next/prev match", Priority: 2},
-		{Text: "[/] expand", Priority: 2},
-		{Text: "[ctrl+u] clear", Priority: 2},
-		{Text: "[esc] cancel", Priority: 1},
-	}
 	// fileLegend lists actions specific to the currently-displayed file
 	// (as opposed to app-wide navigation), shown in the file title bar
 	// rather than the global menu bar (§5.2) — new file-specific actions
@@ -123,7 +94,8 @@ func (a *App) draw() {
 
 	switch a.overlay {
 	case views.OverlayBrowser:
-		a.drawBrowserOverlay(w, h)
+		a.Browser.Draw(w, h)
+		a.drawBadge(w, h)
 	case views.OverlayQuickOpen:
 		a.QuickOpen.Draw(w, h)
 		a.drawBadge(w, h)
@@ -222,36 +194,6 @@ func (a *App) drawTooSmallVertical(w, h, need int) {
 	center("↑", startY)
 	center(numStr, startY+1)
 	center("↓", startY+2)
-}
-
-// drawBrowserOverlay renders the browser full-screen (SPEC.md §5.1): a
-// header with its mode label/legend, the jump-to-file query on its own
-// input row directly below when active (the same convention quick open
-// and content search use), and the flat row list filling the rest of
-// the screen.
-func (a *App) drawBrowserOverlay(w, h int) {
-	browserTop := 1
-	if a.jumpActive {
-		// SPEC.md §5.2: while jump-to-file (§4.3) is active, the header's
-		// left side keeps showing the "BROWSE" mode label — jump to file
-		// is a typing mode layered on the browser, not a distinct mode of
-		// its own, per §4.3 — and the query itself moves to its own input
-		// row directly below the header, the same convention quick open
-		// and content search already use for their own queries, prefixed
-		// `> ` the same way theirs are. Any path segments already
-		// disclosed via slash-to-expand (jumpDisclosed) render ahead of
-		// the live query so committing a segment doesn't read as losing
-		// what was typed.
-		a.shared.Canvas.DrawHeaderMode(w, "BROWSE", jumpLegend)
-		a.shared.Canvas.DrawText(0, 1, w, "> "+a.jumpDisclosed+a.jumpQuery, canvas.StyleSearchInput)
-		browserTop = 2
-	} else {
-		a.shared.Canvas.DrawHeaderMode(w, "BROWSE", browserLegend)
-	}
-
-	a.drawBrowser(0, browserTop, w, h-browserTop)
-
-	a.drawBadge(w, h)
 }
 
 // drawOpenFiles renders the open-files-list overlay (SPEC.md §2.3): a
@@ -610,96 +552,6 @@ func highlightStyleAt(col int, highlights []findHighlight, base tcell.Style) tce
 		}
 	}
 	return base
-}
-
-// drawBrowser renders the browser's currently-visible flattened list
-// (SPEC.md §3.1, §5.2), keeping the selected row scrolled into view.
-func (a *App) drawBrowser(x0, y0, w, h int) {
-	if h < 1 {
-		return
-	}
-	flat := a.root.Flatten()
-	selIdx := indexOf(flat, a.browserSelected)
-
-	if selIdx < a.browserScroll {
-		a.browserScroll = selIdx
-	}
-	if selIdx >= a.browserScroll+h {
-		a.browserScroll = selIdx - h + 1
-	}
-	if a.browserScroll < 0 {
-		a.browserScroll = 0
-	}
-
-	var isMatch map[*tree.Node]bool
-	if a.jumpActive && len(a.jumpMatches) > 0 {
-		isMatch = make(map[*tree.Node]bool, len(a.jumpMatches))
-		for _, m := range a.jumpMatches {
-			isMatch[m] = true
-		}
-	}
-
-	for row := range h {
-		i := a.browserScroll + row
-		if i >= len(flat) {
-			break
-		}
-		n := flat[i]
-		style := canvas.StyleNormal
-		switch {
-		// SPEC.md §6.1: same reasoning as the open-flash case below —
-		// the errored directory could well be the currently-selected
-		// row, and reverse-video would otherwise mask the flash
-		// entirely, so it takes precedence even over selection.
-		case isErrorFlashing(a.browserErrorFlashes, n.Path):
-			style = canvas.StyleFlashError
-		// SPEC.md §5.2: the flash takes precedence here, unlike content
-		// search's own flash/selected precedence — Return never moves
-		// the browser's selection (§3.4), so the just-opened row is
-		// always the already-selected row; if styleSelected won here the
-		// same way it does in content search, the flash would be
-		// permanently masked by reverse-video and never actually visible.
-		case n.Path == a.browserFlashPath && time.Since(a.browserFlashStart) < flashDuration:
-			style = canvas.StyleFlash
-		case n == a.browserSelected:
-			style = canvas.StyleSelected
-		case isMatch[n]:
-			style = canvas.StyleFindMatch
-		}
-		a.shared.Canvas.DrawText(x0, y0+row, w, browserLabel(n, a.files.IsOpen(n.Path)), style)
-	}
-}
-
-// isErrorFlashing reports whether path's brief red error flash (SPEC.md
-// §6.1) is still within its display window.
-func isErrorFlashing(flashes map[string]time.Time, path string) bool {
-	start, ok := flashes[path]
-	return ok && time.Since(start) < flashDuration
-}
-
-// browserLabel renders one browser row's indentation, expand/collapse
-// marker, lasting "●" open indicator (files already in the open-files
-// list, SPEC.md §2.2/§5.2 — the same indicator content search's own
-// file rows use, §9.2), name, and any per-node error indicator.
-func browserLabel(n *tree.Node, open bool) string {
-	indent := strings.Repeat("  ", n.Depth)
-	marker := "  "
-	if n.IsDir {
-		if n.Expanded {
-			marker = "v "
-		} else {
-			marker = "> "
-		}
-	}
-	openMarker := " "
-	if open {
-		openMarker = "●"
-	}
-	label := indent + marker + openMarker + " " + n.Name
-	if n.Err != "" {
-		label += " [" + n.Err + "]"
-	}
-	return label
 }
 
 // drawBadge renders the bottom-right delayed-loading indicator badge
