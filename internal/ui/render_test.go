@@ -43,10 +43,12 @@ func TestLegendTier1FitsMinTerminalWidth(t *testing.T) {
 }
 
 // TestLegendFit covers legendFit's narrow-terminal drop order (SPEC.md
-// §5.2): the full label+legend, then legend-only (label dropped), then
-// whole priority-3 entries dropped, then priority-2 entries additionally
-// dropped — survivors always keep their original left-to-right order and
-// are never truncated mid-entry.
+// §5.2): left and the legend's entries share one drop order, weakest
+// first — priority-3 entries, then left itself (priority "2.5": dropped
+// only once every priority-3 entry already is, but before any
+// priority-2 entry), then priority-2 entries. Priority-1 entries are
+// never dropped. Survivors always keep their original left-to-right
+// order and are never truncated mid-entry.
 func TestLegendFit(t *testing.T) {
 	entries := []legendEntry{
 		{"[return] open", 1},
@@ -54,9 +56,9 @@ func TestLegendFit(t *testing.T) {
 		{"[ctrl+u] clear", 3},
 		{"[esc] close", 1},
 	}
-	full := legendString(entries)                        // "[return] open  [tab] next  [ctrl+u] clear  [esc] close"
-	tier12 := legendString(keepUpToPriority(entries, 2)) // drop tier 3
-	tier1 := legendString(keepUpToPriority(entries, 1))  // drop tier 2 and 3
+	full := legendString(entries)                       // "[return] open  [tab] next  [ctrl+u] clear  [esc] close"
+	tier2 := legendString(keepUpToPriority(entries, 2)) // drop tier 3: "[return] open  [tab] next  [esc] close"
+	tier1 := legendString(keepUpToPriority(entries, 1)) // drop tier 2 and 3: "[return] open  [esc] close"
 	left := "~/dirtree"
 
 	tests := []struct {
@@ -65,10 +67,10 @@ func TestLegendFit(t *testing.T) {
 		wantText   string
 		wantLeftIn bool
 	}{
-		{"fits with label", len(left) + 1 + len(full), left + " " + full, true},
-		{"label dropped, full legend fits", len(full), full, false},
-		{"tier 3 dropped", len(tier12), tier12, false},
-		{"tier 2 and 3 dropped", len(tier1), tier1, false},
+		{"fits with label and full legend", len(left) + 1 + len(full), left + " " + full, true},
+		{"tier 3 dropped, label kept (priority 2.5 beats priority 3)", len(left) + 1 + len(tier2), left + " " + tier2, true},
+		{"label dropped once tier 3 is already gone and still doesn't fit", len(tier2), tier2, false},
+		{"tier 2 also dropped, label stays out", len(tier1), tier1, false},
 		{"tier 1 only, still narrower than tier1 text", len(tier1) - 1, tier1, false},
 	}
 	for _, tc := range tests {

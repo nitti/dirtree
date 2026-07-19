@@ -716,10 +716,9 @@ func shellAbbreviate(path string) string {
 // menuBarText composes the top menu bar's content (SPEC.md §5.2): the
 // tree root path left-aligned and a short keybinding legend
 // right-aligned, with at least one space of separation between them.
-// The root path is dropped when the terminal is too narrow to fit both
-// alongside each other, re-evaluated every frame so a live resize can
-// bring it back; the legend always takes priority since it's what
-// makes the app usable.
+// The root path is dropped once even priority-3 legend entries can't
+// buy back enough room (legendFit's drop order), re-evaluated every
+// frame so a live resize can bring it back.
 func (a *App) menuBarText(w int, entries []legendEntry) string {
 	return legendText(w, a.rootLabel(), entries)
 }
@@ -775,28 +774,37 @@ func legendText(w int, left string, entries []legendEntry) string {
 // legend (drawHeaderMode, below) knows whether left actually appears in
 // the returned text.
 //
-// The legend always takes priority over left: first the full legend is
-// tried alongside left, then with left dropped entirely (the existing
-// drop-left rule). If the legend still doesn't fit on its own, whole
-// priority-3 entries are dropped, then priority-2 entries as well —
-// entries are only ever omitted wholesale, never truncated mid-entry,
-// and survivors keep their original left-to-right order. Priority-1
-// entries are never dropped; by construction every legend's priority-1
-// subset is short enough to fit any terminal wide enough to run the app
-// at all, but as a last-resort fallback if it somehow still doesn't,
-// that priority-1 text is returned anyway and left to drawText's own
-// column clip.
+// left and the legend's entries share one drop order, weakest first:
+// priority-3 entries, then left itself (conceptually priority "2.5" —
+// dropped only once every priority-3 entry already has been, but before
+// any priority-2 entry is), then priority-2 entries. Priority-1 entries
+// are never dropped. This means left survives being squeezed by a
+// disposable priority-3 key hint (e.g. "[ctrl+u] clear") rather than
+// being sacrificed first regardless of how little space that would
+// actually free — losing the root path/mode label is a real loss of
+// context, so it's worth less-essential legend entries going first if
+// that's enough on its own. Entries are only ever omitted wholesale,
+// never truncated mid-entry, and survivors keep their original
+// left-to-right order. Priority-1 entries are never dropped; by
+// construction every legend's priority-1 subset is short enough to fit
+// any terminal wide enough to run the app at all (SPEC.md §6.4), but as
+// a last-resort fallback if it somehow still doesn't, that priority-1
+// text is returned anyway and left to drawText's own column clip.
 func legendFit(w int, left string, entries []legendEntry) (text string, leftIncluded bool) {
-	if fit, ok := fitPair(w, left, legendString(entries)); ok {
+	full := legendString(entries)
+	tier2 := legendString(keepUpToPriority(entries, 2))
+	tier1 := legendString(keepUpToPriority(entries, 1))
+
+	if fit, ok := fitPair(w, left, full); ok {
 		return fit, true
 	}
-	for maxPriority := 3; maxPriority >= 1; maxPriority-- {
-		legend := legendString(keepUpToPriority(entries, maxPriority))
-		if len([]rune(legend)) <= w || maxPriority == 1 {
-			return legend, false
-		}
+	if fit, ok := fitPair(w, left, tier2); ok {
+		return fit, true
 	}
-	return "", false
+	if len([]rune(tier2)) <= w {
+		return tier2, false
+	}
+	return tier1, false
 }
 
 // drawFileTitleBar renders the currently-displayed file's own title bar

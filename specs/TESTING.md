@@ -250,9 +250,9 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 ## Legend fit/drop order (§5.2)
 
 - A legend fits alongside its left-hand content (root path, mode label, file path) at a width wide enough for both, with at least one space of separation.
-- At a width too narrow for both but wide enough for the full legend alone, the left-hand content is dropped and the full legend is shown, unchanged.
-- At a width too narrow for the full legend alone, every priority-3 entry is dropped first, in one step, while priority-1 and priority-2 entries remain.
-- At a width still too narrow for that, every priority-2 entry is additionally dropped, leaving only priority-1 entries.
+- At a width too narrow for the left-hand content plus the full legend, but wide enough for the left-hand content plus the legend with priority-3 entries dropped, the priority-3 entries are dropped and the left-hand content is kept — the left-hand content is not dropped merely because the full legend doesn't fit if dropping only priority-3 entries is enough on its own (left-hand content's effective priority is "2.5": weaker than priority 2, stronger than priority 3).
+- At a width too narrow for that, the left-hand content is dropped and the legend (with priority-3 entries already dropped) is shown alone.
+- At a width still too narrow for that, priority-2 entries are additionally dropped, leaving only priority-1 entries, still with no left-hand content.
 - Surviving entries, at every width above, keep their original left-to-right declaration order — dropping never reorders them.
 - No returned legend text is ever truncated mid-entry (e.g. a partial `"[ret"` fragment) — an entry is either present in full or entirely absent.
 - The goto-line prompt (§2.1) renders a keybinding legend (Return jump, Ctrl+U clear, Escape cancel) alongside its input, where previously it had none.
