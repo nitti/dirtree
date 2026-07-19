@@ -104,11 +104,12 @@ var (
 	}
 	// browserLegend documents the browser overlay's own actions (SPEC.md
 	// §3.4): Return opens the selected file, `/` enters jump to file
-	// (§4.3), `b`/Escape close the overlay.
+	// (§4.3), Escape closes the overlay (the sole close key — `b` is not
+	// a toggle here).
 	browserLegend = []legendEntry{
 		{"[return] open", 1},
 		{"[/] jump to file", 2},
-		{"[b/esc] close", 1},
+		{"[esc] close", 1},
 	}
 	// jumpLegend documents jump-to-file mode's own actions (SPEC.md
 	// §4.3): Return leaves jump mode keeping the current selection,
