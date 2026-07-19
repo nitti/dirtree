@@ -60,6 +60,20 @@ var (
 )
 
 const (
+	// minTerminalWidth/minTerminalHeight (SPEC.md §6.4) gate every other
+	// screen: below either threshold, none of the app's other layouts
+	// (header + legend, popups, split content) can render without
+	// truncating or overlapping in ways that are actively misleading
+	// rather than just cramped, so drawTooSmall takes over the whole
+	// frame instead of drawing a mangled version of whatever view was
+	// active. minTerminalWidth matches openFilesMinWidth's existing
+	// "40 columns is the narrowest we design any component for"
+	// precedent; minTerminalHeight is header + file title bar + a
+	// handful of content/legend rows, the shortest any overlay's own
+	// layout assumes it can rely on.
+	minTerminalWidth  = 40
+	minTerminalHeight = 10
+
 	previewLegend = "[b] browse  [tab] open files  [o] quick open  [s] search  [q] quit"
 	browserLegend = "[return] open  [/] jump to file  [b/esc] close"
 	jumpLegend    = "[tab] next match  [ctrl+u] clear  [return] done  [esc] cancel"
@@ -111,6 +125,12 @@ func (a *App) draw() {
 	a.screen.Clear()
 	w, h := a.screen.Size()
 
+	if w < minTerminalWidth || h < minTerminalHeight {
+		a.drawTooSmall(w, h)
+		a.screen.Show()
+		return
+	}
+
 	switch a.overlay {
 	case overlayBrowser:
 		a.drawBrowserOverlay(w, h)
@@ -130,6 +150,88 @@ func (a *App) draw() {
 	a.drawToast(w, h)
 
 	a.screen.Show()
+}
+
+// drawTooSmall renders the too-small screen (SPEC.md §6.4), which
+// supersedes every other view/overlay whenever the terminal is below
+// minTerminalWidth or minTerminalHeight in either dimension: none of
+// the app's other layouts can be trusted to degrade gracefully below
+// that floor, so this replaces the frame outright rather than drawing
+// a truncated/overlapping version of whatever was active. It only
+// assumes it can address individual cells directly (SetContent), not
+// that a full row (drawText's w-wide loop) or centered layout is safe
+// at any particular size, since it must remain legible-as-possible
+// even far below its own stated minimum.
+//
+// Rather than a block of text, it shows the single undersized
+// dimension as a pair of red arrows pointing apart with that
+// dimension's required size centered between them — "stretch this
+// direction to at least this much" — since that's more compact than
+// spelling out current/required sizes as prose and reads as a direct
+// resize instruction rather than an error report. When both
+// dimensions are short, only one is shown at a time (drawing both
+// widths a horizontal and a vertical indicator into a space too small
+// for either individually would just recreate the overlap problem this
+// screen exists to avoid): whichever is proportionally further below
+// its own minimum, on the theory that it's the bigger blocker and
+// worth fixing first — ties favor width. Resizing far enough to clear
+// that dimension makes the other one (if still short) take its place
+// on the next frame.
+func (a *App) drawTooSmall(w, h int) {
+	widthShort := w < minTerminalWidth
+	heightShort := h < minTerminalHeight
+
+	showWidth := widthShort
+	if widthShort && heightShort {
+		widthRatio := float64(w) / float64(minTerminalWidth)
+		heightRatio := float64(h) / float64(minTerminalHeight)
+		showWidth = widthRatio <= heightRatio
+	}
+
+	if showWidth {
+		a.drawTooSmallHorizontal(w, h, minTerminalWidth)
+	} else {
+		a.drawTooSmallVertical(w, h, minTerminalHeight)
+	}
+}
+
+// drawTooSmallCell places a single rune at (x, y), silently doing
+// nothing if that cell falls outside [0,w)x[0,h) — every caller here
+// works from computed centering math that can land off-screen at
+// sizes well below either minimum, and this is the one shared bounds
+// check they all lean on rather than duplicating it inline.
+func (a *App) drawTooSmallCell(x, y, w, h int, r rune) {
+	if x < 0 || x >= w || y < 0 || y >= h {
+		return
+	}
+	a.screen.SetContent(x, y, r, nil, styleError)
+}
+
+// drawTooSmallHorizontal renders "← need →" on the vertical-center
+// row, horizontally centered.
+func (a *App) drawTooSmallHorizontal(w, h, need int) {
+	line := fmt.Sprintf("← %d →", need)
+	y := h / 2
+	x := (w - len([]rune(line))) / 2
+	for i, r := range []rune(line) {
+		a.drawTooSmallCell(x+i, y, w, h, r)
+	}
+}
+
+// drawTooSmallVertical renders a three-row block — "↑", the required
+// height, "↓" — centered as a unit both horizontally and vertically.
+func (a *App) drawTooSmallVertical(w, h, need int) {
+	numStr := fmt.Sprintf("%d", need)
+	startY := (h - 3) / 2
+	center := func(text string, y int) {
+		x := (w - len([]rune(text))) / 2
+		for i, r := range []rune(text) {
+			a.drawTooSmallCell(x+i, y, w, h, r)
+		}
+	}
+	center("↑", startY)
+	center(numStr, startY+1)
+	center("↓", startY+2)
 }
 
 // drawBrowserOverlay renders the browser full-screen (SPEC.md §5.1): a
