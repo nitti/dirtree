@@ -397,7 +397,15 @@ func (a *App) Run() error {
 			case *tcell.EventResize:
 				screen.Sync()
 			case *tcell.EventKey:
-				a.handleKey(e)
+				// SPEC.md §6.4: while the terminal is below the minimum
+				// size, the too-small screen owns the frame and no key
+				// is processed against whatever view/overlay is
+				// underneath it — resizing back above the minimum
+				// resumes that view exactly as it was, untouched by
+				// anything typed while it was too small to show.
+				if w, h := screen.Size(); w >= minTerminalWidth && h >= minTerminalHeight {
+					a.handleKey(e)
+				}
 			}
 			a.draw()
 		case <-watchEvents:

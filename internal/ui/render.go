@@ -60,6 +60,20 @@ var (
 )
 
 const (
+	// minTerminalWidth/minTerminalHeight (SPEC.md §6.4) gate every other
+	// screen: below either threshold, none of the app's other layouts
+	// (header + legend, popups, split content) can render without
+	// truncating or overlapping in ways that are actively misleading
+	// rather than just cramped, so drawTooSmall takes over the whole
+	// frame instead of drawing a mangled version of whatever view was
+	// active. minTerminalWidth matches openFilesMinWidth's existing
+	// "40 columns is the narrowest we design any component for"
+	// precedent; minTerminalHeight is header + file title bar + a
+	// handful of content/legend rows, the shortest any overlay's own
+	// layout assumes it can rely on.
+	minTerminalWidth  = 40
+	minTerminalHeight = 10
+
 	previewLegend = "[b] browse  [tab] open files  [o] quick open  [s] search  [q] quit"
 	browserLegend = "[return] open  [/] jump to file  [b/esc] close"
 	jumpLegend    = "[tab] next match  [ctrl+u] clear  [return] done  [esc] cancel"
@@ -111,6 +125,12 @@ func (a *App) draw() {
 	a.screen.Clear()
 	w, h := a.screen.Size()
 
+	if w < minTerminalWidth || h < minTerminalHeight {
+		a.drawTooSmall(w, h)
+		a.screen.Show()
+		return
+	}
+
 	switch a.overlay {
 	case overlayBrowser:
 		a.drawBrowserOverlay(w, h)
@@ -130,6 +150,39 @@ func (a *App) draw() {
 	a.drawToast(w, h)
 
 	a.screen.Show()
+}
+
+// drawTooSmall renders the too-small screen (SPEC.md §6.4), which
+// supersedes every other view/overlay whenever the terminal is below
+// minTerminalWidth or minTerminalHeight in either dimension: none of
+// the app's other layouts can be trusted to degrade gracefully below
+// that floor, so this replaces the frame outright rather than drawing
+// a truncated/overlapping version of whatever was active. It only
+// assumes it can address individual cells directly (SetContent), not
+// that a full row (drawText's w-wide loop) or centered layout is safe
+// at any particular size, since it must remain legible-as-possible
+// even far below its own stated minimum.
+func (a *App) drawTooSmall(w, h int) {
+	lines := []string{
+		"Terminal too small",
+		fmt.Sprintf("Need at least %dx%d", minTerminalWidth, minTerminalHeight),
+		fmt.Sprintf("Have %dx%d", w, h),
+	}
+	startY := max((h-len(lines))/2, 0)
+	for i, line := range lines {
+		y := startY + i
+		if y < 0 || y >= h {
+			continue
+		}
+		x := max((w-len(line))/2, 0)
+		for j, r := range line {
+			cx := x + j
+			if cx < 0 || cx >= w {
+				continue
+			}
+			a.screen.SetContent(cx, y, r, nil, styleError)
+		}
+	}
 }
 
 // drawBrowserOverlay renders the browser full-screen (SPEC.md §5.1): a
