@@ -468,10 +468,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 // handlePreviewKey handles input at the primary preview view when no
 // overlay is active: reaching the browser, quick open, and open-files
 // overlays, preview scrolling/goto-line/in-file-find, and quitting
-// (SPEC.md §7). `b` is a toggle on its own overlay (SPEC.md §5.1), but
-// since this handler only runs when no overlay is active, pressing it
-// here always opens rather than closes (quick open, opened by `o`, is
-// not a toggle — see handleQuickOpenKey). Escape does not quit and
+// (SPEC.md §7). `b` only opens the browser overlay (SPEC.md §5.1);
+// closing it back to this view is Escape's job alone, handled in
+// handleBrowserKey (quick open, opened by `o`, is likewise not a
+// toggle — see handleQuickOpenKey). Escape does not quit and
 // there is no overlay to back out of here (`q` is the only way to
 // quit, so an accidental Escape press can't lose the session's
 // open-files state) — its only effect at this view is clearFind,
@@ -821,11 +821,12 @@ func clamp(v, lo, hi int) int {
 }
 
 // handleBrowserKey implements the browser overlay's navigation and open
-// actions (SPEC.md §3.4). `b` is a toggle (SPEC.md §5.1): it closes the
-// browser just like Escape does, since `b` is also the key that opens
-// it from the primary preview view. While jump-to-file typing mode
-// (§4.3) is active, every key below is bypassed in favor of
-// handleJumpKey, since jump mode repurposes all of them as query input.
+// actions (SPEC.md §3.4). Escape is the sole key that closes the
+// browser back to the primary preview view (SPEC.md §5.1); `b` only
+// opens it from there and has no effect once inside. While
+// jump-to-file typing mode (§4.3) is active, every key below is
+// bypassed in favor of handleJumpKey, since jump mode repurposes all
+// of them as query input.
 // `o` and `s` have no effect here — browse, quick open, and content
 // search are mutually exclusive (SPEC.md §5.1): reaching another one
 // requires closing the browser back to the primary preview view first.
@@ -861,7 +862,7 @@ func (a *App) handleBrowserKey(ev *tcell.EventKey) {
 		a.browserOpen()
 	case ev.Rune() == '/':
 		a.openJumpToFile()
-	case ev.Rune() == 'b', ev.Key() == tcell.KeyEscape:
+	case ev.Key() == tcell.KeyEscape:
 		a.overlay = overlayNone
 	}
 }
