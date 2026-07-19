@@ -48,12 +48,10 @@ func TestLegendTier1FitsMinTerminalWidth(t *testing.T) {
 // only once every priority-3 entry already is, but before any
 // priority-2 entry), then priority-2 entries. Priority-1 entries are
 // never dropped. Survivors always keep their original left-to-right
-// order and are never truncated mid-entry. Both left and the legend are
-// always left-aligned — legend starts immediately after left (separated
-// by legendGap) rather than being pushed out to the row's right edge by
-// any unused width, so the legend's own start column never jumps
-// depending on how much slack width happens to be available or on
-// whether left is present at all.
+// order and are never truncated mid-entry. left is always left-aligned;
+// the legend is always right-aligned — flush with the row's right edge
+// whether or not left is present — so the legend's own reading position
+// never jumps between alignments depending on whether left is present.
 func TestLegendFit(t *testing.T) {
 	entries := []legendEntry{
 		{"[return] open", 1},
@@ -65,8 +63,6 @@ func TestLegendFit(t *testing.T) {
 	tier2 := legendString(keepUpToPriority(entries, 2)) // drop tier 3: "[return] open  [tab] next  [esc] close"
 	tier1 := legendString(keepUpToPriority(entries, 1)) // drop tier 2 and 3: "[return] open  [esc] close"
 	left := "~/dirtree"
-	withLabelFull := left + legendGap + full
-	withLabelTier2 := left + legendGap + tier2
 
 	tests := []struct {
 		name       string
@@ -74,12 +70,13 @@ func TestLegendFit(t *testing.T) {
 		wantText   string
 		wantLeftIn bool
 	}{
-		{"fits with label and full legend, exact width", len([]rune(withLabelFull)), withLabelFull, true},
-		{"fits with label and full legend, slack width doesn't push legend right", len([]rune(withLabelFull)) + 10, withLabelFull, true},
-		{"tier 3 dropped, label kept (priority 2.5 beats priority 3)", len([]rune(withLabelTier2)), withLabelTier2, true},
-		{"label dropped once tier 3 is already gone and still doesn't fit", len([]rune(tier2)), tier2, false},
-		{"tier 2 also dropped, label stays out", len([]rune(tier1)), tier1, false},
-		{"tier 1 only, still narrower than tier1 text", len([]rune(tier1)) - 1, tier1, false},
+		{"fits with label and full legend, exact width", len(left) + 1 + len(full), left + " " + full, true},
+		{"fits with label and full legend, slack width pushes legend to the right edge", len(left) + 1 + len(full) + 10, left + strings.Repeat(" ", 11) + full, true},
+		{"tier 3 dropped, label kept (priority 2.5 beats priority 3)", len(left) + 1 + len(tier2), left + " " + tier2, true},
+		{"label dropped once tier 3 is already gone and still doesn't fit", len(tier2), tier2, false},
+		{"legend stays right-aligned once left is dropped, slack width included", len(tier2) + len(left), strings.Repeat(" ", len(left)) + tier2, false},
+		{"tier 2 also dropped, label stays out", len(tier1), tier1, false},
+		{"tier 1 only, still narrower than tier1 text", len(tier1) - 1, tier1, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
