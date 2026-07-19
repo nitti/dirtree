@@ -12,7 +12,6 @@
 package ui
 
 import (
-	"context"
 	"os"
 	"strings"
 	"time"
@@ -24,36 +23,12 @@ import (
 	"github.com/nitti/dirtree/internal/index"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
-	"github.com/nitti/dirtree/internal/search"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/tree"
 	"github.com/nitti/dirtree/internal/ui/canvas"
 	"github.com/nitti/dirtree/internal/ui/views"
 	"github.com/nitti/dirtree/internal/watch"
 )
-
-// searchOutcome is what a background content-search scan (SPEC.md §9.1)
-// sends back once it finishes (or is canceled), tagged with the
-// generation it was started for so a stale result from a superseded
-// query can be discarded rather than clobbering a newer one.
-type searchOutcome struct {
-	gen     int
-	results []search.FileResult
-	err     error // non-nil only for a ModeRegex compile failure (defensive: recomputeSearch already validates synchronously before dispatching)
-}
-
-// searchRow is one flattened, displayable row of the content search
-// overlay's results (SPEC.md §9.2): either a file row (one per
-// FileResult, always present) or a hit row (one per matching line
-// within that file, present only while the file is expanded). Hit rows
-// are addressed by (file, hit) rather than a flat index into a
-// concatenated slice so toggling one file's disclosure state doesn't
-// require renumbering anything.
-type searchRow struct {
-	file  int // index into App.searchResults
-	hit   int // index into searchResults[file].Hits; only meaningful when isHit
-	isHit bool
-}
 
 const (
 	resizePollInterval        = 100 * time.Millisecond
@@ -146,30 +121,8 @@ type App struct {
 	jumpPrevScroll   int
 	jumpScope        *tree.Node // matching root for jumpMatches: a.root normally, or a directory drilled into via slash-to-expand (SPEC.md §4.3)
 
-	// content search overlay state (SPEC.md §9)
-	searchQuery     string
-	searchRegex     bool                // ModeRegex vs. ModeSubstring toggle (ctrl+r)
-	searchResults   []search.FileResult // nil while not yet searched (empty query, waiting on index, or a scan in flight), distinct from "searched, zero matches"
-	searchError     string              // non-empty only for an invalid regex query (ModeRegex); takes precedence over searchResults' nil/empty distinction
-	searchCollapsed map[string]bool     // AbsPath -> collapsed; absent (or false) means expanded, so results start expanded by default
-	searchSelected  int                 // index into a.searchRows(), not directly into searchResults
-	searchScroll    int
-	// searchErrorPath/searchErrorMessage/searchErrorFlashStart mirror
-	// finderErrorPath et al. above for content search's open-into-list
-	// action (§2.2, §9.2, §5.3): AbsPath of the file row whose open
-	// attempt most recently failed (a hit row's failure attributes to
-	// its parent file row, the same way the on-open flash already does),
-	// the failure message, and when to stop flashing it red. Cleared
-	// whenever the query changes.
-	searchErrorPath       string
-	searchErrorMessage    string
-	searchErrorFlashStart time.Time
-	searchGen             int
-	searchCancel          context.CancelFunc
-	searchScanStart       time.Time // when the in-flight scan (searchCancel != nil) started, for the spinner shown once it runs long enough to be noticeable
-	searchFlashPath       string    // AbsPath of the file row most recently opened via performSearchOpen, for a brief post-open flash
-	searchFlashStart      time.Time // when the flash started; the flash is drawn only while time.Since(searchFlashStart) < flashDuration
-	searchDone            chan searchOutcome
+	// Search is the content search overlay's own state (SPEC.md §9).
+	Search views.SearchView
 
 	// files is the open-files list (SPEC.md §2.2, §2.3) the primary
 	// preview view and both overlays' open actions operate on.
@@ -220,7 +173,6 @@ func New(rootPath string) *App {
 		overlay:             views.OverlayNone, // SPEC.md §1: startup lands on the (empty) primary preview view
 		browserSelected:     root,
 		files:               openfiles.New(),
-		searchDone:          make(chan searchOutcome, 8),
 		browserErrorFlashes: map[string]time.Time{},
 	}
 
@@ -234,6 +186,8 @@ func New(rootPath string) *App {
 		Overlay:   &a.overlay,
 	}
 	a.QuickOpen.Shared = a.shared
+	a.Search.Shared = a.shared
+	a.Search.Done = make(chan views.SearchOutcome, 8)
 
 	a.syncWatches()
 	return a
@@ -407,19 +361,8 @@ func (a *App) Run() error {
 				a.QuickOpen.RefreshMatches()
 			}
 			a.draw()
-		case out := <-a.searchDone:
-			if out.gen == a.searchGen {
-				a.searchCancel = nil
-				if out.err != nil {
-					a.searchError = out.err.Error()
-					a.searchResults = nil
-				} else {
-					a.searchResults = out.results
-				}
-				if rows := a.searchRows(); a.searchSelected >= len(rows) {
-					a.searchSelected = max(len(rows)-1, 0)
-				}
-			}
+		case out := <-a.Search.Done:
+			a.Search.ApplyOutcome(out)
 			a.draw()
 		case <-ticker.C:
 			// Also catches the background index (re)build finishing
@@ -429,12 +372,12 @@ func (a *App) Run() error {
 				a.QuickOpen.RefreshMatches()
 			}
 			// Same idea for content search (SPEC.md §9.1): a query typed
-			// before the index finished is held pending (searchResults
-			// stays nil) until it's done, then run once here rather than
-			// on every tick.
-			if a.overlay == views.OverlaySearch && a.searchQuery != "" && a.searchResults == nil && a.searchCancel == nil {
+			// before the index finished is held pending (Results stays
+			// nil) until it's done, then run once here rather than on
+			// every tick.
+			if a.overlay == views.OverlaySearch && a.Search.Query != "" && a.Search.Results == nil && a.Search.Cancel == nil {
 				if _, done := a.idx.Snapshot(); done {
-					a.recomputeSearch()
+					a.Search.RecomputeSearch()
 				}
 			}
 			a.draw()
@@ -461,7 +404,16 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	case views.OverlayOpenFiles:
 		a.handleOpenFilesKey(ev)
 	case views.OverlaySearch:
-		a.handleSearchKey(ev)
+		a.Search.HandleKey(ev)
+		// LastOpenedPath/Entry/Line are search's outbox for two
+		// coordinator-level concerns it has no business performing
+		// itself — see SearchView.LastOpenedPath's doc comment.
+		if p := a.Search.LastOpenedPath; p != "" {
+			a.revealInBrowser(p)
+			a.scrollToLine(a.Search.LastOpenedEntry, a.Search.LastOpenedLine)
+			a.Search.LastOpenedPath = ""
+			a.Search.LastOpenedEntry = nil
+		}
 	case views.OverlayNone:
 		a.handlePreviewKey(ev)
 	}
@@ -1101,245 +1053,7 @@ func (a *App) revealInBrowser(absPath string) {
 // themselves (backspacing it to empty, or typing a new one).
 func (a *App) openSearch() {
 	a.overlay = views.OverlaySearch
-	a.searchErrorPath = ""
-}
-
-// searchRows flattens the current search results into displayable rows
-// (SPEC.md §9.2): one file row per result, followed by that file's hit
-// rows in source order when it's expanded (i.e. not present in
-// searchCollapsed, so results are expanded by default). This is
-// recomputed on demand rather than cached, since it's cheap and only
-// ever needed while rendering or handling a keypress.
-func (a *App) searchRows() []searchRow {
-	var rows []searchRow
-	for fi, r := range a.searchResults {
-		rows = append(rows, searchRow{file: fi})
-		if a.searchCollapsed[r.AbsPath] {
-			continue
-		}
-		for hi := range r.Hits {
-			rows = append(rows, searchRow{file: fi, hit: hi, isHit: true})
-		}
-	}
-	return rows
-}
-
-// toggleSearchDisclosure flips the expanded/collapsed state of the file
-// the row at index i belongs to (SPEC.md §9.2), keeping the selection on
-// that same file's row so collapsing a file you're inside of doesn't
-// strand the selection.
-func (a *App) toggleSearchDisclosure(i int) {
-	rows := a.searchRows()
-	if i < 0 || i >= len(rows) {
-		return
-	}
-	fi := rows[i].file
-	path := a.searchResults[fi].AbsPath
-	if a.searchCollapsed == nil {
-		a.searchCollapsed = make(map[string]bool)
-	}
-	a.searchCollapsed[path] = !a.searchCollapsed[path]
-	a.searchSelected = a.searchFileRowIndex(fi)
-}
-
-// searchFileRowIndex returns the row index of the file row for
-// searchResults[fi] in the current flattened row list.
-func (a *App) searchFileRowIndex(fi int) int {
-	rows := a.searchRows()
-	for i, row := range rows {
-		if !row.isHit && row.file == fi {
-			return i
-		}
-	}
-	return 0
-}
-
-// recomputeSearch (re)starts the background content scan for the
-// current query (SPEC.md §9.1): any scan still running for the previous
-// query is canceled first, so only the most recently typed query's
-// result is ever applied. An empty query performs no scan at all. If
-// the background index hasn't finished building yet, the scan is
-// deferred — Run's ticker case retries once it has — rather than
-// scanning a partial candidate set. In regex mode, the query is
-// compiled synchronously first — cheap, and lets an invalid pattern be
-// reported immediately as searchError without spawning a scan at all
-// (search.Run would otherwise reject it the same way, just one
-// goroutine-hop later). The scan itself always runs in a background
-// goroutine regardless of mode — even a slow regex over a large tree
-// never blocks the UI thread, since results only arrive back via
-// searchDone in the main select loop (Run.go).
-func (a *App) recomputeSearch() {
-	a.cancelSearch()
-	a.searchSelected = 0
-	a.searchScroll = 0
-	a.searchErrorPath = ""
-	a.searchError = ""
-	a.searchCollapsed = nil
-
-	if a.searchQuery == "" {
-		a.searchResults = nil
-		return
-	}
-
-	mode := search.ModeSubstring
-	if a.searchRegex {
-		mode = search.ModeRegex
-		if _, err := search.CompileRegex(a.searchQuery); err != nil {
-			a.searchError = err.Error()
-			a.searchResults = nil
-			return
-		}
-	}
-
-	entries, done := a.idx.Snapshot()
-	if !done {
-		a.searchResults = nil
-		return
-	}
-
-	a.searchResults = nil
-	candidates := make([]search.Candidate, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir {
-			candidates = append(candidates, search.Candidate{AbsPath: e.AbsPath, RelPath: e.RelPath})
-		}
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	a.searchCancel = cancel
-	a.searchGen++
-	a.searchScanStart = time.Now()
-	gen, query := a.searchGen, a.searchQuery
-	go func() {
-		results, err := search.Run(ctx, query, mode, candidates, previewByteCap)
-		a.searchDone <- searchOutcome{gen: gen, results: results, err: err}
-	}()
-}
-
-// clearSearch resets the query and results back to empty (SPEC.md
-// §9.2's Ctrl+U), the explicit "clear it yourself" action — since
-// Escape deliberately no longer discards search state (openSearch),
-// this is the only way to reset a query short of backspacing it out
-// one character at a time. The regex-mode toggle is left as-is; it's a
-// standing preference, not part of the query being cleared.
-func (a *App) clearSearch() {
-	a.searchQuery = ""
-	a.recomputeSearch()
-}
-
-// cancelSearch stops any in-flight background scan without applying its
-// (now-stale) result, so leaving the overlay or superseding the query
-// doesn't leave wasted work running against a tree that could be large.
-func (a *App) cancelSearch() {
-	if a.searchCancel != nil {
-		a.searchCancel()
-		a.searchCancel = nil
-	}
-}
-
-// handleSearchKey implements the content search overlay's input
-// handling (SPEC.md §9.2). Unlike quick open/jump to file, space is
-// never an action key — it always types a literal space into the query,
-// since content search queries are plain text rather than path
-// fragments.
-func (a *App) handleSearchKey(ev *tcell.EventKey) {
-	switch {
-	case ev.Key() == tcell.KeyEscape:
-		// The query, results, and any still-running scan are deliberately
-		// left alone: content search persists across close/reopen (see
-		// openSearch), so Escape only leaves the overlay rather than
-		// discarding its state.
-		a.overlay = views.OverlayNone
-	case ev.Key() == tcell.KeyEnter:
-		// Opening always leaves the overlay open (SPEC.md §9.2) — Escape
-		// is what closes it (and preserves state when it does) — so
-		// several hits can be opened in a row without re-entering the
-		// search each time.
-		a.performSearchOpen()
-	case ev.Key() == tcell.KeyCtrlR:
-		a.searchRegex = !a.searchRegex
-		a.recomputeSearch()
-	case ev.Key() == tcell.KeyCtrlU:
-		a.clearSearch()
-	case ev.Key() == tcell.KeyDown:
-		if rows := a.searchRows(); len(rows) > 0 {
-			a.searchSelected = tree.MoveSelection(a.searchSelected, 1, len(rows))
-		}
-	case ev.Key() == tcell.KeyUp:
-		if rows := a.searchRows(); len(rows) > 0 {
-			a.searchSelected = tree.MoveSelection(a.searchSelected, -1, len(rows))
-		}
-	case ev.Key() == tcell.KeyLeft:
-		rows := a.searchRows()
-		if a.searchSelected >= 0 && a.searchSelected < len(rows) {
-			row := rows[a.searchSelected]
-			if row.isHit || !a.searchCollapsed[a.searchResults[row.file].AbsPath] {
-				a.toggleSearchDisclosure(a.searchFileRowIndex(row.file))
-			}
-		}
-	case ev.Key() == tcell.KeyRight:
-		rows := a.searchRows()
-		if a.searchSelected >= 0 && a.searchSelected < len(rows) {
-			row := rows[a.searchSelected]
-			if !row.isHit && a.searchCollapsed[a.searchResults[row.file].AbsPath] {
-				a.toggleSearchDisclosure(a.searchSelected)
-			}
-		}
-	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
-		if len(a.searchQuery) > 0 {
-			r := []rune(a.searchQuery)
-			a.searchQuery = string(r[:len(r)-1])
-		}
-		a.recomputeSearch()
-	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
-		a.searchQuery += string(ev.Rune())
-		a.recomputeSearch()
-	}
-}
-
-// performSearchOpen implements Return (SPEC.md §9.2): open the selected
-// row's file into the open-files list per §2.2's open semantics and
-// jump to its line, leaving the overlay open so several hits can be
-// opened in a row without re-entering the search — Escape is what
-// closes the overlay (and, per openSearch/handleSearchKey, preserves
-// its state when it does). A "failed" result (e.g. the file changed or
-// was removed between scanning and opening) leaves the overlay open
-// with the failure recorded against that file's path
-// (searchErrorPath/searchErrorMessage) and rendered inline on its file
-// row by searchRowLabel, plus a brief red flash (§2.2, §5.3) — attributed
-// to the parent file row even when opened from one of its hit rows, the
-// same as the on-open flash below. On success, the opened file's row
-// also gets a brief flash (searchFlashPath/searchFlashStart, drawn in
-// drawSearch) as an on-open confirmation distinct from the lasting
-// "already open" indicator every open file's row shows regardless of
-// whether it was just opened this way.
-func (a *App) performSearchOpen() {
-	rows := a.searchRows()
-	if a.searchSelected < 0 || a.searchSelected >= len(rows) {
-		return
-	}
-	row := rows[a.searchSelected]
-	result := a.searchResults[row.file]
-
-	res := a.files.Open(result.AbsPath, previewByteCap)
-	if res.Outcome != openfiles.Opened {
-		a.searchErrorPath = result.AbsPath
-		a.searchErrorMessage = res.Message
-		a.searchErrorFlashStart = time.Now()
-		return
-	}
-	a.searchErrorPath = ""
-	a.searchFlashPath = result.AbsPath
-	a.searchFlashStart = time.Now()
-	a.revealInBrowser(result.AbsPath)
-
-	// A file row jumps to its first hit (the file's earliest match); a
-	// hit row jumps to that specific line (SPEC.md §9.2).
-	line := result.Hits[0].LineNum
-	if row.isHit {
-		line = result.Hits[row.hit].LineNum
-	}
-	a.scrollToLine(res.Entry, line)
+	a.Search.Open()
 }
 
 func indexOf(list []*tree.Node, n *tree.Node) int {

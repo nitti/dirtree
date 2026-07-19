@@ -10,7 +10,6 @@ import (
 
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
-	"github.com/nitti/dirtree/internal/search"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/toast"
 	"github.com/nitti/dirtree/internal/tree"
@@ -61,21 +60,6 @@ var (
 		{Text: "[/] expand", Priority: 2},
 		{Text: "[ctrl+u] clear", Priority: 2},
 		{Text: "[esc] cancel", Priority: 1},
-	}
-	// searchLegend documents the content search overlay's actions (SPEC.md
-	// §9.2): Return opens the selected row (jumping to its line if it's a
-	// hit row) and leaves the overlay open, for opening several hits in a
-	// row without re-triggering the search each time — Escape is what
-	// closes the overlay; up/down move the flattened row list (arrow keys
-	// already cover this, so it's not spelled out as its own legend entry
-	// alongside left/right); left/right collapse/expand a file's hit
-	// rows; ctrl+r toggles regex mode; ctrl+u clears the query.
-	searchLegend = []canvas.LegendEntry{
-		{Text: "[return] open", Priority: 1},
-		{Text: "[left/right] expand/collapse", Priority: 2},
-		{Text: "[ctrl+r] regex", Priority: 2},
-		{Text: "[ctrl+u] clear", Priority: 3},
-		{Text: "[esc] close", Priority: 1},
 	}
 	// fileLegend lists actions specific to the currently-displayed file
 	// (as opposed to app-wide navigation), shown in the file title bar
@@ -146,7 +130,7 @@ func (a *App) draw() {
 	case views.OverlayOpenFiles:
 		a.drawOpenFiles(w, h)
 	case views.OverlaySearch:
-		a.drawSearch(w, h)
+		a.Search.Draw(w, h)
 		a.drawBadge(w, h)
 	default:
 		a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
@@ -387,122 +371,6 @@ func openFilesLegend(multiPage bool) []canvas.LegendEntry {
 		entries = append(entries, canvas.LegendEntry{Text: "[pgup/pgdn] page", Priority: 2})
 	}
 	return append(entries, canvas.LegendEntry{Text: "[esc] close", Priority: 1})
-}
-
-// drawSearch renders the content search overlay (SPEC.md §9.2): a
-// header row (title plus keybinding legend), the query input on its own
-// row directly below, and a two-level list — one row per matching file,
-// disclosing (unless collapsed) its own matching-line rows below it —
-// or a placeholder while there's nothing to show yet.
-func (a *App) drawSearch(w, h int) {
-	a.shared.Canvas.DrawHeaderMode(w, "SEARCH", searchLegend)
-	prompt := "> "
-	if a.searchRegex {
-		prompt = "[regex] > "
-	}
-	a.shared.Canvas.DrawText(0, 1, w, prompt+a.searchQuery, canvas.StyleSearchInput)
-
-	const listTop = 2
-	listHeight := h - listTop
-
-	switch {
-	case a.searchQuery == "":
-		a.shared.Canvas.DrawText(0, listTop, w, canvas.CenterPad("type to search file contents", w), canvas.StyleNormal)
-	case a.searchError != "":
-		a.shared.Canvas.DrawText(0, listTop, w, canvas.CenterPad("invalid regex: "+a.searchError, w), canvas.StyleError)
-	case a.searchResults == nil:
-		// SPEC.md §9.1: covers both "index not done yet" and "a scan for
-		// this query is still running" — either way, nothing has been
-		// found yet, which is a different state from genuinely zero
-		// matches, so this must not render as "no matches." Scanning
-		// itself always runs in a background goroutine (never on this
-		// draw/input thread), so a slow scan over a large tree never
-		// blocks keystrokes; this spinner is purely feedback that it's
-		// still working, mirroring the background-index badge (§5.2).
-		_, indexDone := a.idx.Snapshot()
-		var msg string
-		switch {
-		case !indexDone:
-			msg = "indexing…"
-		case a.searchCancel == nil:
-			// A scan hasn't been (re)started yet this draw (e.g. the very
-			// first frame after a keystroke); avoid flashing a spinner
-			// frame for a scan that isn't actually running.
-			msg = "searching…"
-		case time.Since(a.searchScanStart) < spinnerThreshold:
-			msg = "searching…"
-		default:
-			frame := spinner.Frame(time.Since(a.searchScanStart), spinnerFPS, spinner.DefaultFrames)
-			msg = string(frame) + " searching…"
-		}
-		a.shared.Canvas.DrawText(0, listTop, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
-	case len(a.searchResults) == 0:
-		a.shared.Canvas.DrawText(0, listTop, w, canvas.CenterPad("no matches", w), canvas.StyleNormal)
-	default:
-		rows := a.searchRows()
-		if listHeight > 0 {
-			if a.searchSelected < a.searchScroll {
-				a.searchScroll = a.searchSelected
-			}
-			if a.searchSelected >= a.searchScroll+listHeight {
-				a.searchScroll = a.searchSelected - listHeight + 1
-			}
-		}
-		for line := range listHeight {
-			i := a.searchScroll + line
-			if i >= len(rows) {
-				break
-			}
-			row := rows[i]
-			label := searchRowLabel(a.searchResults, a.searchCollapsed, a.files, row)
-			fileErrored := !row.isHit && a.searchErrorPath != "" && a.searchResults[row.file].AbsPath == a.searchErrorPath
-			if fileErrored {
-				label += " [" + a.searchErrorMessage + "]"
-			}
-			style := canvas.StyleNormal
-			switch {
-			case fileErrored && time.Since(a.searchErrorFlashStart) < flashDuration:
-				style = canvas.StyleFlashError
-			case i == a.searchSelected:
-				style = canvas.StyleSelected
-			case !row.isHit && a.searchResults[row.file].AbsPath == a.searchFlashPath && time.Since(a.searchFlashStart) < flashDuration:
-				style = canvas.StyleFlash
-			}
-			a.shared.Canvas.DrawText(0, listTop+line, w, label, style)
-		}
-	}
-}
-
-// searchRowLabel renders one flattened search-result row (SPEC.md
-// §9.2): a file row shows a disclosure indicator, an "already open"
-// indicator (●) when the open-files list already has that file open,
-// then its root-relative path and hit count; a hit row is indented
-// under its file and shows its 1-based line number and (trimmed) text.
-// The open indicator is deliberately file-row-only, not repeated on
-// each hit row underneath, since "open" is a per-file fact.
-func searchRowLabel(results []search.FileResult, collapsed map[string]bool, files *openfiles.List, row searchRow) string {
-	r := results[row.file]
-	if row.isHit {
-		h := r.Hits[row.hit]
-		// Indented past where the owning file row's own path text starts
-		// (marker + open-indicator + two spaces = 4 columns), so a hit
-		// row reads as visually nested under its file rather than lining
-		// up with it.
-		return fmt.Sprintf("      %d: %s", h.LineNum, strings.TrimSpace(h.LineText))
-	}
-	marker := "▾"
-	if collapsed[r.AbsPath] {
-		marker = "▸"
-	}
-	open := " "
-	if files.IsOpen(r.AbsPath) {
-		open = "●"
-	}
-	plural := "es"
-	if len(r.Hits) == 1 {
-		plural = ""
-	}
-	return fmt.Sprintf("%s %s %s (%d match%s)", marker, open, r.RelPath, len(r.Hits), plural)
 }
 
 // rootLabel renders the tree root path for display, abbreviated with
