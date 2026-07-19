@@ -249,7 +249,8 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 
 ## Legend fit/drop order (§5.2)
 
-- A legend fits alongside its left-hand content (root path, mode label, file path) at a width wide enough for both, with at least one space of separation.
+- A legend fits alongside its left-hand content (root path, mode label, file path) at a width wide enough for both, the legend starting immediately after the left-hand content with a fixed gap between them.
+- The legend's own starting column is unchanged by extra unused width — it does not get pushed toward the row's right edge — and is also unchanged by whether the left-hand content is present or has been dropped for width: the legend is left-aligned in every case, not right-aligned when paired with left-hand content and left-aligned only once that content is dropped (regression coverage for a bug where the legend visibly jumped alignment the moment the left-hand content was dropped).
 - At a width too narrow for the left-hand content plus the full legend, but wide enough for the left-hand content plus the legend with priority-3 entries dropped, the priority-3 entries are dropped and the left-hand content is kept — the left-hand content is not dropped merely because the full legend doesn't fit if dropping only priority-3 entries is enough on its own (left-hand content's effective priority is "2.5": weaker than priority 2, stronger than priority 3).
 - At a width too narrow for that, the left-hand content is dropped and the legend (with priority-3 entries already dropped) is shown alone.
 - At a width still too narrow for that, priority-2 entries are additionally dropped, leaving only priority-1 entries, still with no left-hand content.

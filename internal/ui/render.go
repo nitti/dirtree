@@ -714,11 +714,11 @@ func shellAbbreviate(path string) string {
 }
 
 // menuBarText composes the top menu bar's content (SPEC.md §5.2): the
-// tree root path left-aligned and a short keybinding legend
-// right-aligned, with at least one space of separation between them.
-// The root path is dropped once even priority-3 legend entries can't
-// buy back enough room (legendFit's drop order), re-evaluated every
-// frame so a live resize can bring it back.
+// tree root path left-aligned, immediately followed by a short
+// keybinding legend, both left-aligned within the row (legendGap
+// separates them). The root path is dropped once even priority-3
+// legend entries can't buy back enough room (legendFit's drop order),
+// re-evaluated every frame so a live resize can bring it back.
 func (a *App) menuBarText(w int, entries []legendEntry) string {
 	return legendText(w, a.rootLabel(), entries)
 }
@@ -747,13 +747,31 @@ func keepUpToPriority(entries []legendEntry, maxPriority int) []legendEntry {
 	return out
 }
 
-// fitPair left-aligns left and right-aligns legend within w columns,
-// with at least one space of separation between them, reporting whether
-// they both fit at all.
+// legendGap is the fixed separator between left-hand content and the
+// legend that follows it, the same two-space width legendString uses
+// between legend entries themselves — chosen so the legend always
+// starts immediately after left's own text, rather than being pushed
+// out to the row's right edge by however much slack width happens to
+// be available. That right-justified behavior used to make the legend
+// visibly jump from right-aligned to left-aligned the moment left got
+// dropped for width (SPEC.md §5.2's fit/drop order) — a fixed gap
+// keeps the legend's own left edge (and therefore its own reading
+// position) unchanged whether or not left is present.
+const legendGap = "  "
+
+// fitPair left-aligns left, then legend immediately after it separated
+// by legendGap — both always left-aligned within w columns, any unused
+// width past legend simply left as trailing blank space (drawText's own
+// padding) rather than distributed as a right-justifying gap — reporting
+// whether they both fit at all.
 func fitPair(w int, left, legend string) (text string, ok bool) {
 	leftLen, legendLen := len([]rune(left)), len([]rune(legend))
-	if gap := w - leftLen - legendLen; gap >= 1 {
-		return left + strings.Repeat(" ", gap) + legend, true
+	gap := ""
+	if left != "" {
+		gap = legendGap
+	}
+	if leftLen+len([]rune(gap))+legendLen <= w {
+		return left + gap + legend, true
 	}
 	return "", false
 }
@@ -1035,11 +1053,11 @@ func (a *App) drawHeader(w int, text string) {
 
 // drawHeaderMode renders the header/title bar with label (a bold,
 // all-caps mode name, e.g. "BROWSE" or "SEARCH") standing in for the
-// tree root path on the left, and legend right-aligned, using the same
-// fit/drop rule legendText uses elsewhere — label is dropped first (in
-// favor of legend alone) if the terminal is too narrow, exactly like
-// the root path is. Only label itself is bold; legend keeps the normal
-// header weight.
+// tree root path on the left, immediately followed by legend, both
+// left-aligned, using the same fit/drop rule legendText uses elsewhere
+// — label is dropped once legend can't buy back enough room some other
+// way, exactly like the root path is. Only label itself is bold; legend
+// keeps the normal header weight.
 func (a *App) drawHeaderMode(w int, label string, entries []legendEntry) {
 	text, included := legendFit(w, label, entries)
 	a.drawText(0, 0, w, text, styleHeader)
