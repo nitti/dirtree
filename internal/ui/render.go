@@ -103,11 +103,13 @@ var (
 		{"[q] quit", 1},
 	}
 	// browserLegend documents the browser overlay's own actions (SPEC.md
-	// §3.4): Return opens the selected file, `/` enters jump to file
-	// (§4.3), Escape closes the overlay (the sole close key — `b` is not
-	// a toggle here).
+	// §3.4): Return opens the selected file, left/right collapse/expand
+	// a directory (or move to its parent/first child), `/` enters jump
+	// to file (§4.3), Escape closes the overlay (the sole close key —
+	// `b` is not a toggle here).
 	browserLegend = []legendEntry{
 		{"[return] open", 1},
+		{"[left/right] expand/collapse", 2},
 		{"[/] jump to file", 2},
 		{"[esc] close", 1},
 	}
@@ -133,13 +135,12 @@ var (
 	// §9.2): Return opens the selected row (jumping to its line if it's a
 	// hit row) and leaves the overlay open, for opening several hits in a
 	// row without re-triggering the search each time — Escape is what
-	// closes the overlay; Tab/Shift-Tab cycle the flattened row list;
-	// left/right collapse/expand a file's hit rows; ctrl+r toggles regex
-	// mode; ctrl+u clears the query. Tab/Shift-Tab is priority 2 for the
-	// same minTerminalWidth (§6.4) reason jumpLegend's own entry is.
+	// closes the overlay; up/down move the flattened row list (arrow keys
+	// already cover this, so it's not spelled out as its own legend entry
+	// alongside left/right); left/right collapse/expand a file's hit
+	// rows; ctrl+r toggles regex mode; ctrl+u clears the query.
 	searchLegend = []legendEntry{
 		{"[return] open", 1},
-		{"[tab/shift-tab] next/prev", 2},
 		{"[left/right] expand/collapse", 2},
 		{"[ctrl+r] regex", 2},
 		{"[ctrl+u] clear", 3},
@@ -194,12 +195,12 @@ var (
 	}
 	// quickOpenLegend documents the quick open overlay's actions
 	// (SPEC.md §4.2): Return opens the selected match into the
-	// open-files list, Tab/Shift-Tab and Page Up/Down move the
-	// selection, Ctrl+U clears the query, Escape cancels back to the
-	// primary preview view.
+	// open-files list, Page Up/Down move the selection by a page
+	// (up/down move it by one row, already covered by arrow keys and so
+	// not spelled out here), Ctrl+U clears the query, Escape cancels
+	// back to the primary preview view.
 	quickOpenLegend = []legendEntry{
 		{"[return] open", 1},
-		{"[tab/shift-tab] next/prev", 2},
 		{"[pgup/pgdn] page", 3},
 		{"[ctrl+u] clear", 3},
 		{"[esc] cancel", 1},
@@ -346,13 +347,17 @@ func (a *App) drawBrowserOverlay(w, h int) {
 	browserTop := 1
 	if a.jumpActive {
 		// SPEC.md §5.2: while jump-to-file (§4.3) is active, the header's
-		// left side shows the "JUMP" mode label rather than the literal
-		// query — user-entered text has no business appearing in the
-		// title bar — and the query itself moves to its own input row
-		// directly below the header, the same convention quick open and
-		// content search already use for their own queries.
-		a.drawHeaderMode(w, "JUMP", jumpLegend)
-		a.drawText(0, 1, w, "/"+a.jumpQuery, styleSearchInput)
+		// left side keeps showing the "BROWSE" mode label — jump to file
+		// is a typing mode layered on the browser, not a distinct mode of
+		// its own, per §4.3 — and the query itself moves to its own input
+		// row directly below the header, the same convention quick open
+		// and content search already use for their own queries, prefixed
+		// `> ` the same way theirs are. Any path segments already
+		// disclosed via slash-to-expand (jumpDisclosed) render ahead of
+		// the live query so committing a segment doesn't read as losing
+		// what was typed.
+		a.drawHeaderMode(w, "BROWSE", jumpLegend)
+		a.drawText(0, 1, w, "> "+a.jumpDisclosed+a.jumpQuery, styleSearchInput)
 		browserTop = 2
 	} else {
 		a.drawHeaderMode(w, "BROWSE", browserLegend)
@@ -674,7 +679,11 @@ func searchRowLabel(results []search.FileResult, collapsed map[string]bool, file
 	r := results[row.file]
 	if row.isHit {
 		h := r.Hits[row.hit]
-		return fmt.Sprintf("    %d: %s", h.LineNum, strings.TrimSpace(h.LineText))
+		// Indented past where the owning file row's own path text starts
+		// (marker + open-indicator + two spaces = 4 columns), so a hit
+		// row reads as visually nested under its file rather than lining
+		// up with it.
+		return fmt.Sprintf("      %d: %s", h.LineNum, strings.TrimSpace(h.LineText))
 	}
 	marker := "▾"
 	if collapsed[r.AbsPath] {
