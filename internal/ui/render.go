@@ -73,34 +73,130 @@ const (
 	// layout assumes it can rely on.
 	minTerminalWidth  = 40
 	minTerminalHeight = 10
+)
 
-	previewLegend = "[b] browse  [tab] open files  [o] quick open  [s] search  [q] quit"
-	browserLegend = "[return] open  [/] jump to file  [b/esc] close"
-	jumpLegend    = "[tab] next match  [ctrl+u] clear  [return] done  [esc] cancel"
+// legendEntry is one "[key] action" segment of a keybinding legend,
+// tagged with a drop priority for narrow terminals (SPEC.md §5.2):
+// priority 1 entries are never dropped, priority 2 entries are dropped
+// before priority 1, and priority 3 entries are dropped before priority
+// 2 — see legendFit below. Entries always render left-to-right in the
+// order they're declared; dropping only ever omits an entry, it never
+// reorders the survivors.
+type legendEntry struct {
+	text     string
+	priority int
+}
+
+var (
+	// previewLegend is the primary preview view's app-wide legend
+	// (SPEC.md §5.2): the four ways to leave the preview for another
+	// view/overlay, plus quit. Browse and open-files are the two most
+	// direct routes to opening something and are kept at priority 1
+	// alongside quit (the only way out of the app); quick open and
+	// search are alternate entry points to the same goal and drop first
+	// on a narrow terminal.
+	previewLegend = []legendEntry{
+		{"[b] browse", 1},
+		{"[tab] open files", 1},
+		{"[o] quick open", 2},
+		{"[s] search", 2},
+		{"[q] quit", 1},
+	}
+	// browserLegend documents the browser overlay's own actions (SPEC.md
+	// §3.4): Return opens the selected file, `/` enters jump to file
+	// (§4.3), `b`/Escape close the overlay.
+	browserLegend = []legendEntry{
+		{"[return] open", 1},
+		{"[/] jump to file", 2},
+		{"[b/esc] close", 1},
+	}
+	// jumpLegend documents jump-to-file mode's own actions (SPEC.md
+	// §4.3): Return leaves jump mode keeping the current selection,
+	// Tab/Shift-Tab cycle the match set, `/` slash-to-expand narrows the
+	// jump scope into a single-matching directory, Ctrl+U clears the
+	// query, Escape cancels back to the selection/scroll jump mode was
+	// entered with.
+	jumpLegend = []legendEntry{
+		{"[return] done", 1},
+		{"[tab/⇧tab] next/prev match", 1},
+		{"[/] expand", 2},
+		{"[ctrl+u] clear", 2},
+		{"[esc] cancel", 1},
+	}
 	// searchLegend documents the content search overlay's actions (SPEC.md
 	// §9.2): Return opens the selected row (jumping to its line if it's a
 	// hit row) and leaves the overlay open, for opening several hits in a
 	// row without re-triggering the search each time — Escape is what
-	// closes the overlay; left/right collapse/expand a file's hit rows;
-	// ctrl+r toggles regex mode; ctrl+u clears the query.
-	searchLegend = "[return] open  [left/right] expand/collapse  [ctrl+r] regex  [ctrl+u] clear  [esc] close"
+	// closes the overlay; Tab/Shift-Tab cycle the flattened row list;
+	// left/right collapse/expand a file's hit rows; ctrl+r toggles regex
+	// mode; ctrl+u clears the query.
+	searchLegend = []legendEntry{
+		{"[return] open", 1},
+		{"[tab/⇧tab] next/prev", 1},
+		{"[left/right] expand/collapse", 2},
+		{"[ctrl+r] regex", 2},
+		{"[ctrl+u] clear", 3},
+		{"[esc] close", 1},
+	}
 	// fileLegend lists actions specific to the currently-displayed file
 	// (as opposed to app-wide navigation), shown in the file title bar
 	// rather than the global menu bar (§5.2) — new file-specific actions
 	// belong here going forward.
-	fileLegend = "[g] goto line  [/] find  [c] copy mode"
+	fileLegend = []legendEntry{
+		{"[/] find", 1},
+		{"[g] goto line", 2},
+		{"[c] copy mode", 2},
+	}
 	// fileLegendCopyModeOn replaces fileLegend once copy mode is active
 	// (§2.1): goto-line and find are omitted since the point of copy
 	// mode is a screen with nothing on it but the file's own text, and
 	// scrolling/goto/find remain reachable via their own keys regardless
 	// of whether they're listed here, the same way arrow-key scrolling
 	// already is.
-	fileLegendCopyModeOn = "[c] normal view"
-	findLegend           = "[n] next  [N] prev  [esc] clear"
+	fileLegendCopyModeOn = []legendEntry{
+		{"[c] normal view", 1},
+	}
+	// gotoLegend documents the goto-line prompt's own actions (SPEC.md
+	// §5.2): Return jumps to the entered line and closes the prompt,
+	// Ctrl+U clears the entered digits, Escape cancels without changing
+	// scroll.
+	gotoLegend = []legendEntry{
+		{"[return] jump", 1},
+		{"[ctrl+u] clear", 2},
+		{"[esc] cancel", 1},
+	}
+	// findPromptLegend documents the in-file find prompt's own actions
+	// (SPEC.md §2.4): Return executes the search and closes the prompt,
+	// Ctrl+U clears the query, Escape cancels leaving any existing find
+	// state unchanged.
+	findPromptLegend = []legendEntry{
+		{"[return] search", 1},
+		{"[ctrl+u] clear", 2},
+		{"[esc] cancel", 1},
+	}
+	findLegend = []legendEntry{
+		{"[n] next", 1},
+		{"[N] prev", 1},
+		{"[esc] clear", 1},
+	}
 	// findLegendNoMatches is shown instead of findLegend when a find's
 	// query matched nothing — there's no next/previous to step between,
 	// but esc still clears it back to the idle file title bar.
-	findLegendNoMatches = "[esc] clear"
+	findLegendNoMatches = []legendEntry{
+		{"[esc] clear", 1},
+	}
+	// quickOpenLegend documents the quick open overlay's actions
+	// (SPEC.md §4.2): Return opens the selected match into the
+	// open-files list, Tab/Shift-Tab and Page Up/Down move the
+	// selection, Ctrl+U clears the query, Escape cancels back to the
+	// primary preview view.
+	quickOpenLegend = []legendEntry{
+		{"[return] open", 1},
+		{"[tab/⇧tab] next/prev", 2},
+		{"[pgup/pgdn] page", 3},
+		{"[ctrl+u] clear", 3},
+		{"[esc] cancel", 1},
+	}
 )
 
 var categoryStyles = map[preview.Category]tcell.Style{
@@ -301,7 +397,7 @@ func (a *App) fillRect(x0, y0, w, h int, style tcell.Style) {
 // query on its own row directly below (the same input-row convention
 // content search uses, §9.2), and the flat match list.
 func (a *App) drawQuickOpen(w, h int) {
-	a.drawHeaderMode(w, "QUICK OPEN", "[return] open  [ctrl+u] clear  [esc] cancel")
+	a.drawHeaderMode(w, "QUICK OPEN", quickOpenLegend)
 	a.drawText(0, 1, w, "> "+a.finderQuery, styleSearchInput)
 	a.drawFinderList(w, h)
 }
@@ -390,13 +486,15 @@ func (a *App) drawOpenFiles(w, h int) {
 	start, end := openfiles.PageBounds(page, pageSize, len(entries))
 	pageCount := openfiles.PageCount(len(entries), pageSize)
 	counter := fmt.Sprintf("%d–%d/%d", start+1, end, len(entries))
-	legend := openFilesLegend(pageCount > 1)
+	legendEntries := openFilesLegend(pageCount > 1)
 
 	// Content-driven width: the header row (counter + a 1-column gap +
-	// legend) needs only the border columns around it, since headerText
+	// legend) needs only the border columns around it, since legendText
 	// already accounts for its own internal spacing; row labels get 2
-	// extra columns of breathing room around them.
-	longest := len([]rune(counter)) + 1 + len([]rune(legend)) + 2
+	// extra columns of breathing room around them. Sized off the full,
+	// untiered legend text so the box is wide enough that its own
+	// narrow-terminal tiering (legendText below) rarely has to kick in.
+	longest := len([]rune(counter)) + 1 + len([]rune(legendString(legendEntries))) + 2
 	for i := start; i < end; i++ {
 		label := openFilesRowLabel(i-start, i == a.files.Displayed, tree.RelativeDisplayPath(a.rootPath, entries[i].Path))
 		if n := len([]rune(label)) + 4; n > longest {
@@ -413,7 +511,7 @@ func (a *App) drawOpenFiles(w, h int) {
 	innerW := boxW - 2
 
 	a.drawOpenFilesBox(x0, y0, boxW, boxH, "open files", page > 0, page < pageCount-1)
-	a.drawText(x0+1, y0+1, innerW, headerText(innerW, counter, legend), styleNormal)
+	a.drawText(x0+1, y0+1, innerW, legendText(innerW, counter, legendEntries), styleNormal)
 
 	for row := 0; row < itemRows && y0+2+row < y0+boxH-1; row++ {
 		i := start + row
@@ -462,12 +560,16 @@ func openFilesRowLabel(digit int, displayed bool, path string) string {
 // accelerator) is intentionally left off even on a multi-page list —
 // it's a bulk variant of the already-listed shift+↑↓, the same way
 // arrow-key scrolling is never listed at the primary view either.
-func openFilesLegend(multiPage bool) string {
-	legend := "[0-9] open  [x] remove  [shift+↑↓] move"
-	if multiPage {
-		legend += "  [pgup/pgdn] page"
+func openFilesLegend(multiPage bool) []legendEntry {
+	entries := []legendEntry{
+		{"[return/0-9] open", 1},
+		{"[x] remove", 2},
+		{"[shift+↑↓] move", 3},
 	}
-	return legend + "  [esc] close"
+	if multiPage {
+		entries = append(entries, legendEntry{"[pgup/pgdn] page", 2})
+	}
+	return append(entries, legendEntry{"[esc] close", 1})
 }
 
 // drawSearch renders the content search overlay (SPEC.md §9.2): a
@@ -612,32 +714,83 @@ func shellAbbreviate(path string) string {
 // alongside each other, re-evaluated every frame so a live resize can
 // bring it back; the legend always takes priority since it's what
 // makes the app usable.
-func (a *App) menuBarText(w int, legend string) string {
-	return headerText(w, a.rootLabel(), legend)
+func (a *App) menuBarText(w int, entries []legendEntry) string {
+	return legendText(w, a.rootLabel(), entries)
 }
 
-// headerText left-aligns left and right-aligns legend within w columns,
-// with at least one space of separation between them (SPEC.md §5.2's
-// header/title bar convention, applied everywhere a header combines
-// some left-hand content with a keybinding legend). If they don't both
-// fit with that minimum separation, left is dropped entirely, since the
-// legend is what makes the overlay usable and always takes priority.
-func headerText(w int, left, legend string) string {
-	text, _ := headerFit(w, left, legend)
-	return text
+// legendString joins entries' text left-to-right, in declaration order,
+// with the app's standard two-space separator between legend segments.
+func legendString(entries []legendEntry) string {
+	parts := make([]string, len(entries))
+	for i, e := range entries {
+		parts[i] = e.text
+	}
+	return strings.Join(parts, "  ")
 }
 
-// headerFit is headerText's underlying fit computation, additionally
-// reporting whether left was included (as opposed to dropped for width
-// reasons), so a caller that needs to style left differently from
-// legend (drawHeaderMode, below) knows whether left actually appears in
-// the returned text.
-func headerFit(w int, left, legend string) (text string, leftIncluded bool) {
+// keepUpToPriority returns the subset of entries whose priority is
+// maxPriority or lower, preserving their original order — the building
+// block legendFit uses to progressively drop the lowest-priority tier
+// first (SPEC.md §5.2's narrow-terminal drop order).
+func keepUpToPriority(entries []legendEntry, maxPriority int) []legendEntry {
+	out := make([]legendEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.priority <= maxPriority {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// fitPair left-aligns left and right-aligns legend within w columns,
+// with at least one space of separation between them, reporting whether
+// they both fit at all.
+func fitPair(w int, left, legend string) (text string, ok bool) {
 	leftLen, legendLen := len([]rune(left)), len([]rune(legend))
 	if gap := w - leftLen - legendLen; gap >= 1 {
 		return left + strings.Repeat(" ", gap) + legend, true
 	}
-	return legend, false
+	return "", false
+}
+
+// legendText composes left and entries the same way legendFit does,
+// discarding the leftIncluded flag for callers that don't need it (most
+// don't — it exists only for drawHeaderMode's bold-label styling).
+func legendText(w int, left string, entries []legendEntry) string {
+	text, _ := legendFit(w, left, entries)
+	return text
+}
+
+// legendFit is legendText's underlying fit computation (SPEC.md §5.2's
+// header/title bar convention, applied everywhere a header combines
+// some left-hand content with a keybinding legend), additionally
+// reporting whether left was included (as opposed to dropped for width
+// reasons), so a caller that needs to style left differently from the
+// legend (drawHeaderMode, below) knows whether left actually appears in
+// the returned text.
+//
+// The legend always takes priority over left: first the full legend is
+// tried alongside left, then with left dropped entirely (the existing
+// drop-left rule). If the legend still doesn't fit on its own, whole
+// priority-3 entries are dropped, then priority-2 entries as well —
+// entries are only ever omitted wholesale, never truncated mid-entry,
+// and survivors keep their original left-to-right order. Priority-1
+// entries are never dropped; by construction every legend's priority-1
+// subset is short enough to fit any terminal wide enough to run the app
+// at all, but as a last-resort fallback if it somehow still doesn't,
+// that priority-1 text is returned anyway and left to drawText's own
+// column clip.
+func legendFit(w int, left string, entries []legendEntry) (text string, leftIncluded bool) {
+	if fit, ok := fitPair(w, left, legendString(entries)); ok {
+		return fit, true
+	}
+	for maxPriority := 3; maxPriority >= 1; maxPriority-- {
+		legend := legendString(keepUpToPriority(entries, maxPriority))
+		if len([]rune(legend)) <= w || maxPriority == 1 {
+			return legend, false
+		}
+	}
+	return "", false
 }
 
 // drawFileTitleBar renders the currently-displayed file's own title bar
@@ -669,17 +822,17 @@ func (a *App) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	var text string
 	switch {
 	case interactive && a.findPromptOpen:
-		text = headerText(w, "/"+a.findInput, "[return] search  [ctrl+u] clear  [esc] cancel")
+		text = legendText(w, "/"+a.findInput, findPromptLegend)
 	case !interactive:
 		text = left
 	case e.FindQuery != "" && len(e.FindMatches) > 0:
-		text = headerText(w, left, findStatusText(e)+"  "+findLegend)
+		text = legendText(w, left, withStatus(findStatusText(e), findLegend))
 	case e.FindQuery != "":
-		text = headerText(w, left, findStatusText(e)+"  "+findLegendNoMatches)
+		text = legendText(w, left, withStatus(findStatusText(e), findLegendNoMatches))
 	case e.CopyMode:
-		text = headerText(w, left, fileLegendCopyModeOn)
+		text = legendText(w, left, fileLegendCopyModeOn)
 	default:
-		text = headerText(w, rel, fileLegend)
+		text = legendText(w, rel, fileLegend)
 	}
 
 	style := styleFileTitle
@@ -688,6 +841,18 @@ func (a *App) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	}
 	a.drawText(x0, y0, w, text, style)
 	return 1
+}
+
+// withStatus prepends a synthetic, always-shown (priority 1) legend
+// entry carrying the in-file find's live status text (query, match
+// position/count, wrap note — findStatusText below) ahead of legend's
+// own entries, so status and legend tier together through legendFit the
+// same way the path and the legend used to be concatenated directly:
+// status is never dropped for width, exactly like a priority-1 legend
+// key, while legend's own lower-priority entries (e.g. findLegend's, all
+// priority 1 today) still drop first if it ever came to that.
+func withStatus(status string, legend []legendEntry) []legendEntry {
+	return append([]legendEntry{{status, 1}}, legend...)
 }
 
 // findStatusText renders in-file find's live status (SPEC.md §2.4): the
@@ -749,7 +914,7 @@ func (a *App) drawPreview(x0, y0, w, h int) {
 	}
 
 	if a.gotoPromptOpen {
-		a.drawText(x0, y0+h-1, w, "goto line: "+a.gotoInput, styleNormal)
+		a.drawText(x0, y0+h-1, w, legendText(w, "goto line: "+a.gotoInput, gotoLegend), styleNormal)
 	}
 }
 
@@ -857,12 +1022,12 @@ func (a *App) drawHeader(w int, text string) {
 // drawHeaderMode renders the header/title bar with label (a bold,
 // all-caps mode name, e.g. "BROWSE" or "SEARCH") standing in for the
 // tree root path on the left, and legend right-aligned, using the same
-// fit/drop rule headerText uses elsewhere — label is dropped first (in
+// fit/drop rule legendText uses elsewhere — label is dropped first (in
 // favor of legend alone) if the terminal is too narrow, exactly like
 // the root path is. Only label itself is bold; legend keeps the normal
 // header weight.
-func (a *App) drawHeaderMode(w int, label, legend string) {
-	text, included := headerFit(w, label, legend)
+func (a *App) drawHeaderMode(w int, label string, entries []legendEntry) {
+	text, included := legendFit(w, label, entries)
 	a.drawText(0, 0, w, text, styleHeader)
 	if included {
 		a.drawText(0, 0, len([]rune(label)), label, styleHeaderMode)
