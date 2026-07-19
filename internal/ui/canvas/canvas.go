@@ -67,6 +67,16 @@ var (
 // one.
 const FlashDuration = 400 * time.Millisecond
 
+// SpinnerThreshold/SpinnerFPS drive the "still working" spinner shown
+// once a background operation (content search's scan, the indexing
+// badge) runs long enough to be noticeable, both by the badge and by
+// any view showing its own in-place spinner (e.g. content search's
+// "searching…" text).
+const (
+	SpinnerThreshold = 250 * time.Millisecond
+	SpinnerFPS       = 10.0
+)
+
 // MinTerminalWidth/MinTerminalHeight (SPEC.md §6.4) gate every screen:
 // below either threshold, no layout (header + legend, popups, split
 // content) can render without truncating or overlapping in ways that
