@@ -11,6 +11,37 @@ import (
 	"github.com/nitti/dirtree/internal/openfiles"
 )
 
+// TestLegendTier1FitsMinTerminalWidth guards SPEC.md §6.4's minimum
+// terminal size against §5.2's legend tiering: every legend's
+// priority-1 (never-dropped) text must fit within minTerminalWidth on
+// its own, with no left-hand label — otherwise a terminal at exactly
+// the enforced minimum would still see a clipped legend, the same class
+// of bug a too-long jumpLegend/searchLegend priority-1 entry caused
+// before those entries were demoted to priority 2.
+func TestLegendTier1FitsMinTerminalWidth(t *testing.T) {
+	named := map[string][]legendEntry{
+		"previewLegend":          previewLegend,
+		"browserLegend":          browserLegend,
+		"jumpLegend":             jumpLegend,
+		"searchLegend":           searchLegend,
+		"fileLegend":             fileLegend,
+		"fileLegendCopyModeOn":   fileLegendCopyModeOn,
+		"gotoLegend":             gotoLegend,
+		"findPromptLegend":       findPromptLegend,
+		"findLegend":             findLegend,
+		"findLegendNoMatches":    findLegendNoMatches,
+		"quickOpenLegend":        quickOpenLegend,
+		"openFilesLegend(false)": openFilesLegend(false),
+		"openFilesLegend(true)":  openFilesLegend(true),
+	}
+	for name, entries := range named {
+		tier1 := legendString(keepUpToPriority(entries, 1))
+		if n := len([]rune(tier1)); n > minTerminalWidth {
+			t.Errorf("%s's priority-1 text is %d runes, exceeding minTerminalWidth (%d): %q", name, n, minTerminalWidth, tier1)
+		}
+	}
+}
+
 // TestLegendFit covers legendFit's narrow-terminal drop order (SPEC.md
 // §5.2): the full label+legend, then legend-only (label dropped), then
 // whole priority-3 entries dropped, then priority-2 entries additionally
@@ -23,16 +54,16 @@ func TestLegendFit(t *testing.T) {
 		{"[ctrl+u] clear", 3},
 		{"[esc] close", 1},
 	}
-	full := legendString(entries)   // "[return] open  [tab] next  [ctrl+u] clear  [esc] close"
+	full := legendString(entries)                        // "[return] open  [tab] next  [ctrl+u] clear  [esc] close"
 	tier12 := legendString(keepUpToPriority(entries, 2)) // drop tier 3
 	tier1 := legendString(keepUpToPriority(entries, 1))  // drop tier 2 and 3
 	left := "~/dirtree"
 
 	tests := []struct {
-		name         string
-		w            int
-		wantText     string
-		wantLeftIn   bool
+		name       string
+		w          int
+		wantText   string
+		wantLeftIn bool
 	}{
 		{"fits with label", len(left) + 1 + len(full), left + " " + full, true},
 		{"label dropped, full legend fits", len(full), full, false},

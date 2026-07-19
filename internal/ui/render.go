@@ -115,10 +115,15 @@ var (
 	// Tab/Shift-Tab cycle the match set, `/` slash-to-expand narrows the
 	// jump scope into a single-matching directory, Ctrl+U clears the
 	// query, Escape cancels back to the selection/scroll jump mode was
-	// entered with.
+	// entered with. Tab/Shift-Tab is priority 2, not 1, like quick
+	// open's and content search's own match-cycling entries below —
+	// keeping every legend's priority-1-only text under minTerminalWidth
+	// (§6.4) means the "done"/"cancel" pair stays legible even at the
+	// enforced minimum, where this entry's own long text (it names both
+	// directions) would otherwise still overflow and clip.
 	jumpLegend = []legendEntry{
 		{"[return] done", 1},
-		{"[tab/shift-tab] next/prev match", 1},
+		{"[tab/shift-tab] next/prev match", 2},
 		{"[/] expand", 2},
 		{"[ctrl+u] clear", 2},
 		{"[esc] cancel", 1},
@@ -129,10 +134,11 @@ var (
 	// row without re-triggering the search each time — Escape is what
 	// closes the overlay; Tab/Shift-Tab cycle the flattened row list;
 	// left/right collapse/expand a file's hit rows; ctrl+r toggles regex
-	// mode; ctrl+u clears the query.
+	// mode; ctrl+u clears the query. Tab/Shift-Tab is priority 2 for the
+	// same minTerminalWidth (§6.4) reason jumpLegend's own entry is.
 	searchLegend = []legendEntry{
 		{"[return] open", 1},
-		{"[tab/shift-tab] next/prev", 1},
+		{"[tab/shift-tab] next/prev", 2},
 		{"[left/right] expand/collapse", 2},
 		{"[ctrl+r] regex", 2},
 		{"[ctrl+u] clear", 3},

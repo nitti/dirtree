@@ -256,6 +256,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Surviving entries, at every width above, keep their original left-to-right declaration order — dropping never reorders them.
 - No returned legend text is ever truncated mid-entry (e.g. a partial `"[ret"` fragment) — an entry is either present in full or entirely absent.
 - The goto-line prompt (§2.1) renders a keybinding legend (Return jump, Ctrl+U clear, Escape cancel) alongside its input, where previously it had none.
+- Every legend's priority-1-only text (no left-hand content) fits within the minimum terminal width (§6.4) — regression coverage for a bug where jump-to-file's and content search's Tab/Shift-Tab entries were marked priority 1 despite being long enough to overflow at exactly that width.
 
 ## Manual / rendering-layer verification (not unit-testable)
 
