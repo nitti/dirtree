@@ -55,7 +55,7 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 	sim.SetSize(w, h)
 
 	files := openfiles.New()
-	v := &PreviewView{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
 	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %s", res.Message)
 	}

@@ -66,16 +66,16 @@ var findLegendNoMatches = []canvas.LegendEntry{
 	{Text: "[esc] clear", Priority: 1},
 }
 
-// Action is a one-shot signal PreviewView.HandleKey returns for the
+// Action is a one-shot signal Preview.HandleKey returns for the
 // handful of keys that need something only App's dispatcher can do —
-// transitioning to a view PreviewView holds no reference to (browser,
+// transitioning to a view Preview holds no reference to (browser,
 // open-files), running QuickOpen/Search's own Open() setup, or quitting
 // (App.quit isn't part of Shared, since nothing else needs to touch it).
 // Every other view's HandleKey can perform its own transitions directly
 // through the shared *Overlay pointer; this return-value form is
 // specific to the primary view because it's the one place five
 // different exits converge, and a return value scales to that better
-// than five more shared pointer fields on PreviewView would.
+// than five more shared pointer fields on Preview would.
 type Action int
 
 // The Action values: ActionNone means HandleKey handled the key itself
@@ -89,12 +89,12 @@ const (
 	ActionQuit
 )
 
-// PreviewView holds the primary preview view's own state (SPEC.md §2.1,
+// Preview holds the primary preview view's own state (SPEC.md §2.1,
 // §2.4): the goto-line prompt and in-file find prompt. The displayed
 // entry's scroll position and wrapped-row cache live per-entry on
 // openfiles.Entry instead, since they're tracked per open file rather
 // than per view.
-type PreviewView struct {
+type Preview struct {
 	*Shared
 
 	GotoPromptOpen bool
@@ -118,7 +118,7 @@ type PreviewView struct {
 // quitting (`q`) are reported via the returned Action so App's
 // dispatcher, which owns Overlay transitions and QuickOpen/Search's own
 // Open() setup, can perform them.
-func (v *PreviewView) HandleKey(ev *tcell.EventKey) Action {
+func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 	if v.GotoPromptOpen {
 		v.handleGotoPromptKey(ev)
 		return ActionNone
@@ -181,7 +181,7 @@ func (v *PreviewView) HandleKey(ev *tcell.EventKey) Action {
 // otherwise it would persist until superseded by a new search on the
 // same entry. A no-op if there's no displayed entry or no active find,
 // so Escape stays inert exactly when there was nothing to clear.
-func (v *PreviewView) clearFind() {
+func (v *Preview) clearFind() {
 	e := v.Files.DisplayedEntry()
 	if e == nil || e.FindQuery == "" {
 		return
@@ -196,7 +196,7 @@ func (v *PreviewView) clearFind() {
 // (SPEC.md §2.1): only digits, backspace, and Ctrl+U (clear) are
 // accepted, Enter jumps to the entered line, Escape cancels without
 // changing scroll.
-func (v *PreviewView) handleGotoPromptKey(ev *tcell.EventKey) {
+func (v *Preview) handleGotoPromptKey(ev *tcell.EventKey) {
 	switch {
 	case ev.Key() == tcell.KeyEscape:
 		v.GotoPromptOpen = false
@@ -218,7 +218,7 @@ func (v *PreviewView) handleGotoPromptKey(ev *tcell.EventKey) {
 // (SPEC.md §2.1), clamped so it never goes negative or past the point
 // where the last display row would leave the viewport. A no-op at the
 // empty state (no displayed entry).
-func (v *PreviewView) scroll(delta int) {
+func (v *Preview) scroll(delta int) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
 		return
@@ -230,7 +230,7 @@ func (v *PreviewView) scroll(delta int) {
 // gotoLine jumps the currently-displayed entry's scroll to the source
 // line's first display row (SPEC.md §2.1), clamped to [1, total source
 // lines]. A no-op if input is empty or there's no displayed entry.
-func (v *PreviewView) gotoLine(input string) {
+func (v *Preview) gotoLine(input string) {
 	e := v.Files.DisplayedEntry()
 	if input == "" || e == nil {
 		return
@@ -248,7 +248,7 @@ func (v *PreviewView) gotoLine(input string) {
 // jump-to-hit (§9.2) — search has no access to this view's wrap-cache
 // state, so App calls this directly rather than search calling it
 // itself.
-func (v *PreviewView) ScrollToLine(e *openfiles.Entry, n int) {
+func (v *Preview) ScrollToLine(e *openfiles.Entry, n int) {
 	v.ensureWrapped(e, v.computedWidth())
 	n = clamp(n, 1, len(e.Lines))
 	if row, ok := e.FirstRow[n-1]; ok {
@@ -256,7 +256,7 @@ func (v *PreviewView) ScrollToLine(e *openfiles.Entry, n int) {
 	}
 }
 
-func (v *PreviewView) maxScroll(e *openfiles.Entry, viewportHeight int) int {
+func (v *Preview) maxScroll(e *openfiles.Entry, viewportHeight int) int {
 	return max(len(e.Rows)-viewportHeight, 0)
 }
 
@@ -265,7 +265,7 @@ func (v *PreviewView) maxScroll(e *openfiles.Entry, viewportHeight int) int {
 // goto-line's digits-only prompt, since a search query is free text),
 // Enter executes the search, Escape cancels the prompt without
 // changing the entry's existing find state (if any).
-func (v *PreviewView) handleFindPromptKey(ev *tcell.EventKey) {
+func (v *Preview) handleFindPromptKey(ev *tcell.EventKey) {
 	switch {
 	case ev.Key() == tcell.KeyEscape:
 		v.FindPromptOpen = false
@@ -292,7 +292,7 @@ func (v *PreviewView) handleFindPromptKey(ev *tcell.EventKey) {
 // none exists at or after that point. A no-op if there's no displayed
 // entry; an empty query clears any existing find state instead of
 // searching (mirroring a bare "/" + Enter in `less`).
-func (v *PreviewView) performFind(query string) {
+func (v *Preview) performFind(query string) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
 		return
@@ -330,7 +330,7 @@ func (v *PreviewView) performFind(query string) {
 // (SPEC.md §2.4) — the same wraparound stepper the browser and finder
 // overlays already use (internal/tree.MoveSelection). A no-op if
 // there's no displayed entry or it has no matches.
-func (v *PreviewView) findStep(delta int) {
+func (v *Preview) findStep(delta int) {
 	e := v.Files.DisplayedEntry()
 	if e == nil || len(e.FindMatches) == 0 {
 		return
@@ -352,7 +352,7 @@ func (v *PreviewView) findStep(delta int) {
 // match into view (the same "only scroll if it's not already visible"
 // rule the browser uses for its own selection, SPEC.md §5.2), a no-op
 // if there is no current match.
-func (v *PreviewView) scrollToFindMatch(e *openfiles.Entry) {
+func (v *Preview) scrollToFindMatch(e *openfiles.Entry) {
 	if e.FindCurrent < 0 || e.FindCurrent >= len(e.FindMatches) {
 		return
 	}
@@ -395,7 +395,7 @@ func findMatchRow(e *openfiles.Entry, m find.Match) int {
 	return start
 }
 
-func (v *PreviewView) viewportHeight() int {
+func (v *Preview) viewportHeight() int {
 	_, h := v.Canvas.Size()
 	height := h - 1 // header row
 	if v.Files.DisplayedEntry() != nil {
@@ -412,7 +412,7 @@ func (v *PreviewView) viewportHeight() int {
 // overlay is active (full terminal width). This is only used by the
 // scroll/goto-line key handlers, which are only reachable in that
 // context.
-func (v *PreviewView) computedWidth() int {
+func (v *Preview) computedWidth() int {
 	w, _ := v.Canvas.Size()
 	e := v.Files.DisplayedEntry()
 	if e == nil {
@@ -447,7 +447,7 @@ func gutterWidth(e *openfiles.Entry) int {
 // avoiding the extra line break a multi-row selection can pick up at a
 // wrap point — an inherent limitation of any fixed-width terminal grid,
 // not something copy mode can fully solve either way.
-func (v *PreviewView) ensureWrapped(e *openfiles.Entry, width int) {
+func (v *Preview) ensureWrapped(e *openfiles.Entry, width int) {
 	if e.RowsWidth == width && e.Rows != nil {
 		return
 	}
@@ -479,7 +479,7 @@ func clamp(v, lo, hi int) int {
 // bottom row — reachable only when this is the primary (non-overlaid)
 // view, since no overlay leaves the goto-line key handled while this is
 // showing.
-func (v *PreviewView) Draw(x0, y0, w, h int, interactive bool) {
+func (v *Preview) Draw(x0, y0, w, h int, interactive bool) {
 	titleRows := v.drawFileTitleBar(x0, y0, w, interactive)
 	v.drawContent(x0, y0+titleRows, w, h-titleRows)
 }
@@ -488,7 +488,7 @@ func (v *PreviewView) Draw(x0, y0, w, h int, interactive bool) {
 // (its root-relative path) in the row above the preview content, when a
 // file is displayed. Returns the number of rows it occupied (0 or 1) so
 // Draw can shrink the content rectangle accordingly.
-func (v *PreviewView) drawFileTitleBar(x0, y0, w int, interactive bool) int {
+func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
 		return 0
@@ -561,7 +561,7 @@ func findStatusText(e *openfiles.Entry) string {
 // plus wrapped, highlighted rows for the currently-displayed entry, or
 // an explanatory empty-state message if none is displayed. The
 // goto-line prompt, when open, occupies the bottom row.
-func (v *PreviewView) drawContent(x0, y0, w, h int) {
+func (v *Preview) drawContent(x0, y0, w, h int) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
 		msg := "no files open — press b to browse, o to quick-open, s to search contents"
@@ -649,7 +649,7 @@ func findHighlightsForRow(e *openfiles.Entry, row preview.DisplayRow) []findHigh
 // mode or not — it's not literal selectable text either way, so it
 // doesn't undermine copy mode's purpose, and staying visible there is
 // more useful than not.
-func (v *PreviewView) drawSegments(x, y, w int, segs []preview.Segment, highlights []findHighlight, plain bool) {
+func (v *Preview) drawSegments(x, y, w int, segs []preview.Segment, highlights []findHighlight, plain bool) {
 	col := 0
 	for _, seg := range segs {
 		style := canvas.StyleNormal

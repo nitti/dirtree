@@ -67,7 +67,7 @@ type App struct {
 
 	// Browser is the browser overlay's own state, including jump-to-file
 	// typing mode (SPEC.md §3.4, §4.3).
-	Browser views.BrowserView
+	Browser views.Browser
 
 	// toastMessage/toastStart drive the generic bottom-right transient
 	// notification (internal/toast, SPEC.md §5.3) — currently only used
@@ -82,10 +82,10 @@ type App struct {
 	toastBoldRanges [][2]int
 
 	// QuickOpen is the quick open overlay's own state (SPEC.md §4.2).
-	QuickOpen views.QuickOpenView
+	QuickOpen views.QuickOpen
 
 	// Search is the content search overlay's own state (SPEC.md §9).
-	Search views.SearchView
+	Search views.Search
 
 	// files is the open-files list (SPEC.md §2.2, §2.3) the primary
 	// preview view and both overlays' open actions operate on.
@@ -93,13 +93,13 @@ type App struct {
 
 	// OpenFiles is the open-files-list overlay's own state (SPEC.md
 	// §2.3).
-	OpenFiles views.OpenFilesView
+	OpenFiles views.OpenFiles
 
 	// Preview is the primary preview view's own state: the goto-line
 	// prompt (SPEC.md §2.1) and in-file find prompt (§2.4). The
 	// displayed entry's scroll and wrapped-row cache live per-entry on
 	// openfiles.Entry instead, since they're tracked per open file.
-	Preview views.PreviewView
+	Preview views.Preview
 
 	badgeSkip spinner.MinDurationSkip
 
@@ -344,7 +344,7 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.Search.HandleKey(ev)
 		// LastOpenedPath/Entry/Line are search's outbox for two
 		// coordinator-level concerns it has no business performing
-		// itself — see SearchView.LastOpenedPath's doc comment.
+		// itself — see Search.LastOpenedPath's doc comment.
 		if p := a.Search.LastOpenedPath; p != "" {
 			a.Browser.Reveal(p)
 			a.Preview.ScrollToLine(a.Search.LastOpenedEntry, a.Search.LastOpenedLine)
