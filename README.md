@@ -144,4 +144,4 @@ Three refinements followed: (1) a directory failing to load when the user direct
 
 ## License
 
-TBD.
+MIT — see [`LICENSE`](LICENSE).
