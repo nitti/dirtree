@@ -43,20 +43,18 @@ func (a *App) draw() {
 	switch a.overlay {
 	case views.OverlayBrowser:
 		a.Browser.Draw(w, h)
-		a.drawBadge(w, h)
 	case views.OverlayQuickOpen:
 		a.QuickOpen.Draw(w, h)
-		a.drawBadge(w, h)
 	case views.OverlayOpenFiles:
 		a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
 		a.OpenFiles.Draw(0, 1, w, h-1, &a.Preview)
 	case views.OverlaySearch:
 		a.Search.Draw(w, h)
-		a.drawBadge(w, h)
 	default:
 		a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
 		a.Preview.Draw(0, 1, w, h-1, true)
 	}
+	a.drawBadge(w, h)
 	a.drawToast(w, h)
 
 	a.shared.Canvas.Show()
