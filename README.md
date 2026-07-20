@@ -31,6 +31,7 @@ This installs from the [`nitti/homebrew-tap`](https://github.com/nitti/homebrew-
 - [`docs/GO_STYLE.md`](docs/GO_STYLE.md) — Go-specific style and architecture rules (layering, error conventions, concurrency, tooling), enforced via `.golangci.yml` and `make lint`.
 - [`docs/ANIMATION_IDEAS.md`](docs/ANIMATION_IDEAS.md) — brainstormed, not-yet-decided animation ideas, checked against the animation principles in `specs/SPEC.md` §5.3.
 - [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — chronological development history: each stage, fix, and rework, and what was manually verified at the time.
+- [`examples/`](examples/README.md) — `make` targets that fetch real-world source trees (Linux, LLVM, CPython) and generate synthetic large files as ZIP-downloaded, fully `.gitignore`'d test fixtures, for manually exercising dirtree and content search at scale.
 
 The `cmd/` and `internal/` package layout maps directly onto `specs/SPEC.md`'s sections — browse the source (with `dirtree` itself, if you like) rather than relying on a manually-kept-in-sync file list here.
 
