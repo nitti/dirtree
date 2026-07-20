@@ -42,6 +42,7 @@ make build          # builds ./dirtree
 make run             # builds and runs against .
 make run ARGS=/path  # builds and runs against a specific path
 make test            # runs the unit test suite
+make bench           # benchmarks content search's concurrency knob (needs DIRTREE_BENCH_DIR; see examples/README.md)
 make lint            # runs golangci-lint (see docs/GO_STYLE.md)
 ```
 

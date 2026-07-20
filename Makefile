@@ -1,4 +1,4 @@
-.PHONY: build run run-worktree test vet fmt lint clean
+.PHONY: build run run-worktree test bench vet fmt lint clean
 
 build:
 	go build $(if $(TAGS),-tags $(TAGS)) -o dirtree ./cmd/dirtree
@@ -27,6 +27,14 @@ run-worktree:
 
 test:
 	go test ./...
+
+# Benchmarks content search's maxConcurrentScans knob against a real
+# directory tree (see examples/, e.g. `make -C examples bench-linux`).
+# DIRTREE_BENCH_DIR must be set; DIRTREE_BENCH_QUERY optionally overrides
+# the search term. -benchtime=1x since each subtest scans the whole tree
+# once per iteration.
+bench:
+	go test ./internal/search/... -run=^$$ -bench=. -benchtime=1x
 
 vet:
 	go vet ./...

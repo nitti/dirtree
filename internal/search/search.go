@@ -14,7 +14,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -49,6 +51,35 @@ const binarySniffLen = 8192
 type Candidate struct {
 	AbsPath string
 	RelPath string
+}
+
+// WalkCandidates builds a Candidate for every non-directory file under
+// root by walking the filesystem directly, root-relative slash-delimited
+// RelPath included. This is the same "every file under a root" logic
+// callers otherwise get from a live background index snapshot (see
+// internal/ui/views/search.go's RecomputeSearch), for tooling — benchmarks,
+// the standalone searchbench CLI — that scans a directory once and has no
+// need for a running index. No .gitignore filtering is applied.
+func WalkCandidates(root string) ([]Candidate, error) {
+	var candidates []Candidate
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		candidates = append(candidates, Candidate{AbsPath: path, RelPath: filepath.ToSlash(rel)})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return candidates, nil
 }
 
 // Hit is one matching line within a file.

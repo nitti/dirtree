@@ -10,19 +10,23 @@ DATA_DIR := data
 	linux clean-linux \
 	llvm clean-llvm \
 	cpython clean-cpython \
-	bigfiles clean-bigfiles
+	bigfiles clean-bigfiles \
+	bench-linux bench-bigfiles compare
 
 all: linux llvm cpython bigfiles
 
 list:
 	@echo "Targets:"
-	@echo "  make linux     - Linux kernel source (torvalds/linux, ~80k files, deep nesting)"
-	@echo "  make llvm      - LLVM monorepo (llvm/llvm-project, larger and deeper than linux)"
-	@echo "  make cpython   - CPython source (python/cpython, smaller, quick to fetch)"
-	@echo "  make bigfiles  - synthetic large files with known search markers (see README.md)"
-	@echo "  make all       - all of the above"
-	@echo "  make clean     - remove everything under data/"
-	@echo "  make clean-<name> - remove just that one target's data"
+	@echo "  make linux         - Linux kernel source (torvalds/linux, ~80k files, deep nesting)"
+	@echo "  make llvm          - LLVM monorepo (llvm/llvm-project, larger and deeper than linux)"
+	@echo "  make cpython       - CPython source (python/cpython, smaller, quick to fetch)"
+	@echo "  make bigfiles      - synthetic large files with known search markers (see README.md)"
+	@echo "  make all           - all of the above"
+	@echo "  make bench-linux   - fetch linux (if needed) and benchmark content search's concurrency knob against it"
+	@echo "  make bench-bigfiles - generate bigfiles (if needed) and benchmark against it"
+	@echo "  make compare DIR=<path> QUERY=<term> - time dirtree vs ripgrep/grep/ag over the same directory/query"
+	@echo "  make clean         - remove everything under data/"
+	@echo "  make clean-<name>  - remove just that one target's data"
 
 # --- linux ---
 
@@ -86,3 +90,18 @@ clean-bigfiles:
 
 clean:
 	rm -rf $(DATA_DIR)
+
+# --- bench / compare ---
+
+bench-linux: linux
+	DIRTREE_BENCH_DIR=$(CURDIR)/$(DATA_DIR)/linux $(MAKE) -C .. bench
+
+bench-bigfiles: bigfiles
+	DIRTREE_BENCH_DIR=$(CURDIR)/$(DATA_DIR)/bigfiles $(MAKE) -C .. bench
+
+compare:
+	@if [ -z "$(DIR)" ] || [ -z "$(QUERY)" ]; then \
+		echo "usage: make compare DIR=<path> QUERY=<term>" >&2; \
+		exit 1; \
+	fi
+	./compare_search.sh "$(DIR)" "$(QUERY)"
