@@ -2,10 +2,12 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, dir, name, content string) string {
@@ -22,7 +24,7 @@ func TestRunEmptyQueryMatchesNothing(t *testing.T) {
 	path := writeFile(t, dir, "a.txt", "hello world\n")
 	candidates := []Candidate{{AbsPath: path, RelPath: "a.txt"}}
 
-	matches, err := Run(context.Background(), "", ModeSubstring, candidates, 1_000_000)
+	matches, err := Run(context.Background(), "", ModeSubstring, candidates)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,7 +41,7 @@ func TestRunPlainSubstringMatchIsCaseInsensitive(t *testing.T) {
 	path := writeFile(t, dir, "a.txt", "line one\nline TWO has Needle\nline three\n")
 	candidates := []Candidate{{AbsPath: path, RelPath: "a.txt"}}
 
-	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates, 1_000_000)
+	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,6 +51,9 @@ func TestRunPlainSubstringMatchIsCaseInsensitive(t *testing.T) {
 	m := matches[0]
 	if m.AbsPath != path || m.RelPath != "a.txt" {
 		t.Fatalf("unexpected match identity: %+v", m)
+	}
+	if m.Issue != "" {
+		t.Fatalf("expected no issue for a clean scan, got %q", m.Issue)
 	}
 	if len(m.Hits) != 1 || m.Hits[0].LineNum != 2 {
 		t.Fatalf("expected match on line 2, got hits %+v", m.Hits)
@@ -63,7 +68,7 @@ func TestRunReportsEveryMatchingLineInFile(t *testing.T) {
 	path := writeFile(t, dir, "a.txt", "no match here\nfirst needle\nsecond needle\n")
 	candidates := []Candidate{{AbsPath: path, RelPath: "a.txt"}}
 
-	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates, 1_000_000)
+	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,7 +92,7 @@ func TestRunSkipsBinaryFiles(t *testing.T) {
 	}
 	candidates := []Candidate{{AbsPath: path, RelPath: "bin.dat"}}
 
-	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates, 1_000_000)
+	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -96,7 +101,7 @@ func TestRunSkipsBinaryFiles(t *testing.T) {
 	}
 }
 
-func TestRunSkipsUnreadablePathsWithoutFailing(t *testing.T) {
+func TestRunReportsUnreadablePathsAsAnIssueInstead(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "does-not-exist.txt")
 	present := writeFile(t, dir, "present.txt", "needle here\n")
@@ -105,27 +110,137 @@ func TestRunSkipsUnreadablePathsWithoutFailing(t *testing.T) {
 		{AbsPath: present, RelPath: "present.txt"},
 	}
 
-	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates, 1_000_000)
+	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(matches) != 1 || matches[0].RelPath != "present.txt" {
-		t.Fatalf("expected only the readable file to match, got %v", matches)
+	if len(matches) != 2 {
+		t.Fatalf("expected the readable file to match and the unreadable one to be reported as an issue, got %v", matches)
+	}
+	byPath := map[string]FileResult{}
+	for _, m := range matches {
+		byPath[m.RelPath] = m
+	}
+	present1, ok := byPath["present.txt"]
+	if !ok || len(present1.Hits) != 1 || present1.Issue != "" {
+		t.Fatalf("expected present.txt to match cleanly, got %+v", present1)
+	}
+	missing1, ok := byPath["does-not-exist.txt"]
+	if !ok || len(missing1.Hits) != 0 || missing1.Issue == "" {
+		t.Fatalf("expected does-not-exist.txt to be reported with a non-empty Issue and no hits, got %+v", missing1)
 	}
 }
 
-func TestRunDoesNotMatchBeyondByteCap(t *testing.T) {
+func TestRunScansPastTheOldByteCap(t *testing.T) {
 	dir := t.TempDir()
-	content := strings.Repeat("x", 100) + "\nneedle after the cap\n"
+	content := strings.Repeat("x", 2_000_000) + "\nneedle past the old cap\n"
 	path := writeFile(t, dir, "a.txt", content)
 	candidates := []Candidate{{AbsPath: path, RelPath: "a.txt"}}
 
-	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates, 50)
+	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(matches) != 0 {
-		t.Fatalf("expected no match when the match falls beyond the byte cap, got %v", matches)
+	if len(matches) != 1 {
+		t.Fatalf("expected the match past the old 1MB cap to now be found, got %v", matches)
+	}
+	if matches[0].Issue != "" {
+		t.Fatalf("expected a clean scan with no issue, got %q", matches[0].Issue)
+	}
+}
+
+func TestRunPerFileTimeoutReportsIssueWithPartialHits(t *testing.T) {
+	orig := perFileTimeout
+	perFileTimeout = time.Nanosecond
+	t.Cleanup(func() { perFileTimeout = orig })
+
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", "needle\nmore needle text\n")
+	candidates := []Candidate{{AbsPath: path, RelPath: "a.txt"}}
+
+	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected the file to still produce a result despite the timeout, got %v", matches)
+	}
+	if matches[0].Issue == "" {
+		t.Fatalf("expected an near-instant timeout to be reported as an issue, got %+v", matches[0])
+	}
+}
+
+// TestRunManyPerFileTimeoutsDoNotHangTheScan is a regression test for a
+// deadlock found while developing this: dispatching more candidates than
+// maxConcurrentScans while nothing yet drains resultCh wedges the
+// semaphore forever (Run.<dispatch> blocks trying to acquire a slot,
+// Run's own collector loop — the only reader of resultCh — never starts
+// because it's sequenced after the full dispatch loop). Many candidates
+// all hitting a tiny per-file timeout, well over maxConcurrentScans in
+// count, exercises exactly that path; the test's own -timeout catches a
+// regression.
+func TestRunManyPerFileTimeoutsDoNotHangTheScan(t *testing.T) {
+	origTimeout := perFileTimeout
+	perFileTimeout = time.Nanosecond
+	t.Cleanup(func() { perFileTimeout = origTimeout })
+
+	dir := t.TempDir()
+	candidates := make([]Candidate, 0, maxConcurrentScans*3)
+	for i := range cap(candidates) {
+		name := fmt.Sprintf("f%03d.txt", i)
+		path := writeFile(t, dir, name, "needle\n")
+		candidates = append(candidates, Candidate{AbsPath: path, RelPath: name})
+	}
+
+	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(matches) != len(candidates) {
+		t.Fatalf("expected every candidate to produce a result, got %d of %d", len(matches), len(candidates))
+	}
+	for _, m := range matches {
+		if m.Issue == "" {
+			t.Fatalf("expected every candidate to report the near-instant timeout, got %+v", m)
+		}
+	}
+}
+
+func TestRunBoundedConcurrencyProducesSameResultsAsUnbounded(t *testing.T) {
+	dir := t.TempDir()
+	candidates := make([]Candidate, 0, 20)
+	for i := range 20 {
+		name := fmt.Sprintf("f%02d.txt", i)
+		content := "no match\n"
+		if i%3 == 0 {
+			content = "has needle\n"
+		}
+		path := writeFile(t, dir, name, content)
+		candidates = append(candidates, Candidate{AbsPath: path, RelPath: name})
+	}
+
+	origLimit := maxConcurrentScans
+	t.Cleanup(func() { maxConcurrentScans = origLimit })
+
+	maxConcurrentScans = 1
+	serial, err := Run(context.Background(), "needle", ModeSubstring, candidates)
+	if err != nil {
+		t.Fatalf("unexpected error (serial): %v", err)
+	}
+
+	maxConcurrentScans = origLimit
+	concurrent, err := Run(context.Background(), "needle", ModeSubstring, candidates)
+	if err != nil {
+		t.Fatalf("unexpected error (concurrent): %v", err)
+	}
+
+	if len(serial) != len(concurrent) {
+		t.Fatalf("expected the same result count regardless of concurrency, got serial=%d concurrent=%d", len(serial), len(concurrent))
+	}
+	for i := range serial {
+		if serial[i].RelPath != concurrent[i].RelPath {
+			t.Fatalf("expected identical ordering, got serial[%d]=%s concurrent[%d]=%s", i, serial[i].RelPath, i, concurrent[i].RelPath)
+		}
 	}
 }
 
@@ -138,7 +253,7 @@ func TestRunSortsResultsByRelPathCaseInsensitively(t *testing.T) {
 		{AbsPath: pathA, RelPath: "A.txt"},
 	}
 
-	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates, 1_000_000)
+	matches, err := Run(context.Background(), "needle", ModeSubstring, candidates)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -158,7 +273,7 @@ func TestRunStopsEarlyWhenContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	matches, err := Run(ctx, "needle", ModeSubstring, candidates, 1_000_000)
+	matches, err := Run(ctx, "needle", ModeSubstring, candidates)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -172,7 +287,7 @@ func TestRunRegexModeMatchesPattern(t *testing.T) {
 	path := writeFile(t, dir, "a.txt", "foo1\nbar\nfoo22\nbaz\n")
 	candidates := []Candidate{{AbsPath: path, RelPath: "a.txt"}}
 
-	matches, err := Run(context.Background(), `foo\d+`, ModeRegex, candidates, 1_000_000)
+	matches, err := Run(context.Background(), `foo\d+`, ModeRegex, candidates)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -190,7 +305,7 @@ func TestRunRegexModeIsCaseInsensitive(t *testing.T) {
 	path := writeFile(t, dir, "a.txt", "Hello World\n")
 	candidates := []Candidate{{AbsPath: path, RelPath: "a.txt"}}
 
-	matches, err := Run(context.Background(), `hello`, ModeRegex, candidates, 1_000_000)
+	matches, err := Run(context.Background(), `hello`, ModeRegex, candidates)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -204,7 +319,7 @@ func TestRunRegexModeInvalidPatternReturnsErrorWithoutScanning(t *testing.T) {
 	path := writeFile(t, dir, "a.txt", "needle\n")
 	candidates := []Candidate{{AbsPath: path, RelPath: "a.txt"}}
 
-	matches, err := Run(context.Background(), `foo(`, ModeRegex, candidates, 1_000_000)
+	matches, err := Run(context.Background(), `foo(`, ModeRegex, candidates)
 	if err == nil {
 		t.Fatal("expected an error for an invalid regex pattern")
 	}
@@ -218,7 +333,7 @@ func TestRunSubstringModeTreatsRegexMetacharactersLiterally(t *testing.T) {
 	path := writeFile(t, dir, "a.txt", "foo(bar)\nfoo1bar\n")
 	candidates := []Candidate{{AbsPath: path, RelPath: "a.txt"}}
 
-	matches, err := Run(context.Background(), "foo(bar)", ModeSubstring, candidates, 1_000_000)
+	matches, err := Run(context.Background(), "foo(bar)", ModeSubstring, candidates)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
