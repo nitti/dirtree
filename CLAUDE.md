@@ -3,7 +3,7 @@
 ## Project Context
 
 - This repository is the home for `dirtree`, a terminal directory-tree browser meant to ship as a single dependency-free binary and be consumed by other projects as a released artifact (e.g. pulled into a container image build by version).
-- The project is implemented (Go, under `cmd/` and `internal/`) and matches the open-files-primary-view design described in `specs/SPEC.md`; see `README.md`'s "Status" section for what's shipped and what's been manually verified. It started from a specification (`specs/SPEC.md`, `specs/TESTING.md`) reverse-derived from a working Python/curses prototype built in a different repo (`homeserver`, `tools/dirtree/`) and generalized to be language-independent — that prototype is not present here and should not be assumed to exist or be referenced as "the old code," but the spec-first starting point is now historical context, not the current state.
+- The project is implemented (Go, under `cmd/` and `internal/`) and matches the open-files-primary-view design described in `specs/SPEC.md`; see `README.md`'s "Status" section for a current-state summary of what's shipped and what's been manually verified, and `docs/CHANGELOG.md` for the detailed development history behind it. It started from a specification (`specs/SPEC.md`, `specs/TESTING.md`) reverse-derived from a working Python/curses prototype built in a different repo (`homeserver`, `tools/dirtree/`) and generalized to be language-independent — that prototype is not present here and should not be assumed to exist or be referenced as "the old code," but the spec-first starting point is now historical context, not the current state.
 - `specs/SPEC.md` is the source of truth for required behavior. `specs/TESTING.md` is the source of truth for acceptance criteria. When implementation reveals the spec is ambiguous, underspecified, or wrong, **update the spec in the same change** that resolves the ambiguity — don't let the code and the spec diverge silently.
 
 ## Language and Dependencies
@@ -29,4 +29,4 @@
 
 - Do not wrap prose with hard line breaks. Write each paragraph as a single unbroken line.
 - Always insert a blank line between body text and a list (ordered or unordered).
-- Update `README.md` in the same commit whenever the repository layout, build/run instructions, or status changes.
+- Update `README.md` in the same commit whenever the repository layout, build/run instructions, or status changes. Keep the README's "Status" section a short, current-state summary — append the actual narrative (each stage, fix, and rework, with what was manually verified) to `docs/CHANGELOG.md` instead, so the README doesn't grow unbounded.
