@@ -53,24 +53,44 @@ Or point it at any directory directly:
 DIRTREE_BENCH_DIR=/path/to/dir DIRTREE_BENCH_QUERY=term make bench   # from the repo root
 ```
 
-`DIRTREE_BENCH_QUERY` defaults to `TODO` if unset — match count doesn't affect scan cost, so any non-empty query works. This only measures; picking new defaults for `maxConcurrentScans`/`perFileTimeout` in `internal/search/search.go` based on the results is still a manual follow-up step.
+`DIRTREE_BENCH_QUERY` defaults to `TODO` if unset — match count doesn't affect scan cost, so any non-empty query works. This only measures; picking (or, as below, validating) `maxConcurrentScans`/`perFileTimeout` in `internal/search/search.go` from the results is still a manual step, done once here and re-checked whenever the scan path changes meaningfully.
 
-### Sample results
+### Sample results: concurrency
 
-One run of `DIRTREE_BENCH_DIR=examples/data/cpython make bench` against a fresh CPython checkout (5,896 files), Apple M4 Pro / macOS, single run per concurrency level (`-benchtime=1x`) — illustrative, not a guarantee for other machines or trees:
+5 runs of `DIRTREE_BENCH_DIR=examples/data/linux go test ./internal/search/... -run=^$ -bench=. -benchtime=1x -count=5`, averaged, against a full Linux kernel checkout (94,732 files), Apple M4 Pro / macOS — illustrative, not a guarantee for other machines or trees, but a large enough tree and enough repetitions that the trend is meaningful, not single-run noise:
 
-| `maxConcurrentScans` | time | files/sec |
+| `maxConcurrentScans` | avg files/sec | gain over half |
 |---|---|---|
-| 1 | 544ms | 10,846 |
-| 2 | 293ms | 20,104 |
-| 4 | 206ms | 28,679 |
-| 8 | 196ms | 30,091 |
-| 16 (current default) | 190ms | 31,020 |
-| 32 | 212ms | 27,842 |
-| 64 | 174ms | 33,813 |
-| 128 | 159ms | 37,115 |
+| 1 | 8,045 | — |
+| 2 | 15,422 | +92% |
+| 4 | 26,301 | +71% |
+| 8 | 37,548 | +43% |
+| 16 (current default) | 40,520 | +8% |
+| 32 | 43,647 | +8% |
+| 64 | 44,717 | +2% |
+| 128 | 44,263 | -1% (noise) |
 
-The big jump is 1→4 (concurrency pays off immediately on an I/O-bound scan); past 8–16 the gains flatten and get noisy (32 dipping below 16 here is almost certainly run-to-run variance, not a real regression — see the single-run caveat above). Nothing here suggests the current default of 16 is meaningfully wrong, but it also doesn't rule out that something higher (64–128) is measurably better on a bigger tree or a slower disk; that's the kind of question this harness exists to let someone answer with real numbers instead of guessing.
+The knee is at 8→16: every doubling up to 8 buys 40%+ more throughput, but 8→16 only buys ~8%, and everything past 16 is under ~8% (64→128 is flat-to-negative, within run-to-run noise). **16 sits right at that knee** — validated as the default rather than picked by guesswork.
+
+### Sample results: per-file latency (informs `perFileTimeout`)
+
+`perFileTimeout` isn't a throughput question — it's "how long can one file's scan run before it's almost certainly a pathological case, not a normal one." `cmd/searchbench -per-file-stats` times each candidate individually instead of one aggregate scan:
+
+```
+go run ./cmd/searchbench -dir examples/data/linux -query TODO -per-file-stats
+```
+
+Against the same Linux checkout (94,831 files, one file scanned per call):
+
+| Percentile | Latency |
+|---|---|
+| p50 | 63µs |
+| p90 | 226µs |
+| p99 | 537µs |
+| p999 | 2.25ms |
+| max (single slowest real file) | 38.7ms — a large generated GPU register-definition header, not an outlier bug |
+
+Cross-checked against a synthetic ~300MB file (`make -C examples bigfiles`, `large.txt`): **~600ms** to fully scan. The current `perFileTimeout` default of **5s** is validated by this data too: it's ~100x the real-world p99, and still gives roughly an 8x margin over "a user deliberately searches one legitimately huge (~300MB) file" — generous enough to never fire on anything normal, while still bounding a genuinely stalled/pathological scan (a hung network mount, a multi-GB file) to a few seconds instead of indefinitely.
 
 ## Comparing against other tools
 
@@ -82,12 +102,11 @@ make -C examples compare DIR=data/linux QUERY=EXPORT_SYMBOL
 
 ### Sample results
 
-Same CPython checkout as above (5,896 files), three queries, `ripgrep`/`ag` not installed on this machine so only `grep -riI` is shown (single run each, wall-clock via `compare_search.sh`):
+Same Linux checkout, two queries, all three external tools installed (`brew install ripgrep the_silver_searcher`), single run each, wall-clock via `compare_search.sh`:
 
-| Query | dirtree | `grep -riI` |
-|---|---|---|
-| `import` | 0.43s | 1.82s |
-| `TODO` | 0.27s | 1.81s |
-| `PyObject_GC_New` | 0.29s | 1.93s |
+| Query | dirtree | `ripgrep` | `ag` | `grep -riI` |
+|---|---|---|---|---|
+| `EXPORT_SYMBOL` | 2.95s | 1.76s | 2.45s | 32.67s |
+| `TODO` | 2.93s | 2.38s | 2.22s | 26.99s |
 
-dirtree comes out ~4-7x faster than `grep -r` here despite also doing more work per match (collecting line numbers/text for every hit across every file, not just a count). Take this as one data point on one machine, not a broad claim against `grep`'s implementation in general — the comparison exists so this kind of number is easy to regenerate and check again after any change to the scan path, not as a one-time bragging point.
+dirtree lands in the same tier as `ag` (a purpose-built, C-based search tool) and is ~1.2-1.7x behind `ripgrep` — very respectable for a Go implementation that isn't specifically optimized as a grep replacement and also collects full line text/numbers for every hit, not just counts. All three beat plain `grep -r` by roughly an order of magnitude, which is really a statement about `grep`'s lack of parallelism/optimized I/O rather than anything specific to dirtree. Take this as one data point on one machine, not a general benchmark claim — the comparison exists so it's easy to regenerate and check again after any change to the scan path.
