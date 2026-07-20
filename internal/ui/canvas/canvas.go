@@ -85,8 +85,8 @@ const (
 // MinTerminalWidth on its own — each view's own tests enforce this
 // against its own legend tables.
 const (
-	MinTerminalWidth  = 40
-	MinTerminalHeight = 10
+	MinTerminalWidth  = 58
+	MinTerminalHeight = 15
 )
 
 var categoryStyles = map[preview.Category]tcell.Style{
