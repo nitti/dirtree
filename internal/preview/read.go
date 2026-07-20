@@ -17,12 +17,14 @@ import (
 // prototype's 1,000,000-byte cap (SPEC.md §8).
 const DefaultByteCap = 1_000_000
 
-// errText extracts the underlying message from a failed-open error,
+// ErrText extracts the underlying message from a failed-open error,
 // dropping the "open <path>: " prefix Go's os package adds to a
 // *fs.PathError — the path is already visible via whichever row this
 // message ends up displayed inline on (SPEC.md §2.2, §5.2), so repeating
-// it there would be redundant.
-func errText(err error) string {
+// it there would be redundant. Exported so other packages with the same
+// "show an OS error inline on a row" need (e.g. content search, §9.1) can
+// reuse it instead of reimplementing the same prefix-stripping.
+func ErrText(err error) string {
 	if pe, ok := errors.AsType[*fs.PathError](err); ok {
 		return pe.Err.Error()
 	}
@@ -160,7 +162,7 @@ type LoadResult struct {
 func Load(path string, cap int64) LoadResult {
 	data, truncated, err := readCapped(path, cap)
 	if err != nil {
-		return LoadResult{Failed: true, Message: errText(err)}
+		return LoadResult{Failed: true, Message: ErrText(err)}
 	}
 	if bytes.IndexByte(data, 0) != -1 {
 		return LoadResult{Failed: true, Message: "binary file, preview not available"}
