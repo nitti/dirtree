@@ -36,7 +36,7 @@ $(DATA_DIR)/linux/.fetched:
 	@mkdir -p $(DATA_DIR)
 	curl -fL "https://codeload.github.com/torvalds/linux/zip/refs/heads/master" -o $(DATA_DIR)/linux.zip
 	rm -rf $(DATA_DIR)/linux
-	unzip -q $(DATA_DIR)/linux.zip -d $(DATA_DIR)
+	unzip -qo $(DATA_DIR)/linux.zip -d $(DATA_DIR)
 	mv $(DATA_DIR)/linux-master $(DATA_DIR)/linux
 	rm $(DATA_DIR)/linux.zip
 	touch $@
@@ -52,7 +52,7 @@ $(DATA_DIR)/llvm/.fetched:
 	@mkdir -p $(DATA_DIR)
 	curl -fL "https://codeload.github.com/llvm/llvm-project/zip/refs/heads/main" -o $(DATA_DIR)/llvm.zip
 	rm -rf $(DATA_DIR)/llvm
-	unzip -q $(DATA_DIR)/llvm.zip -d $(DATA_DIR)
+	unzip -qo $(DATA_DIR)/llvm.zip -d $(DATA_DIR)
 	mv $(DATA_DIR)/llvm-project-main $(DATA_DIR)/llvm
 	rm $(DATA_DIR)/llvm.zip
 	touch $@
@@ -68,7 +68,7 @@ $(DATA_DIR)/cpython/.fetched:
 	@mkdir -p $(DATA_DIR)
 	curl -fL "https://codeload.github.com/python/cpython/zip/refs/heads/main" -o $(DATA_DIR)/cpython.zip
 	rm -rf $(DATA_DIR)/cpython
-	unzip -q $(DATA_DIR)/cpython.zip -d $(DATA_DIR)
+	unzip -qo $(DATA_DIR)/cpython.zip -d $(DATA_DIR)
 	mv $(DATA_DIR)/cpython-main $(DATA_DIR)/cpython
 	rm $(DATA_DIR)/cpython.zip
 	touch $@

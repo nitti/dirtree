@@ -30,13 +30,28 @@ import (
 // run before it's cut short and reported as an Issue (SPEC.md §9.1): once
 // there's no byte cap, scan time scales with file size, so this is the
 // safety valve that keeps one huge/slow file from stalling a whole scan.
-// A var, not a const, so tests can shrink it.
+// Measured against a full Linux kernel checkout (~95k files, see
+// `go run ./cmd/searchbench -dir <dir> -query <term> -per-file-stats` and
+// examples/README.md), p99 per-file latency was ~540µs and even the
+// single slowest real file (a large generated register-definition
+// header) took ~39ms — nowhere close to this value. A synthetic ~300MB
+// file (examples/, `make -C examples bigfiles`) took ~600ms, so 5s
+// leaves roughly an 8x margin over "a user deliberately searches one
+// legitimately huge file" while still bounding truly pathological cases
+// (a stalled network mount, a multi-GB file) to a few seconds rather than
+// indefinitely. A var, not a const, so tests can shrink it.
 var perFileTimeout = 5 * time.Second
 
 // maxConcurrentScans bounds how many candidates are scanned at once
 // (SPEC.md §9.1). The candidate set is fully known up front (a snapshot
 // of the background index), so this is a simple semaphore-gated fan-out
-// rather than a persistent worker pool pulling from a queue. A var, not a
+// rather than a persistent worker pool pulling from a queue. 16 is where
+// a concurrency sweep (`DIRTREE_BENCH_DIR=<dir> make bench`, averaged
+// over 5 runs, see examples/README.md) against a full Linux kernel
+// checkout flattens out: each doubling from 1->2->4->8 bought 40-90% more
+// throughput, but 8->16 only bought ~8%, and every doubling past 16 was
+// under ~8% (64->128 was flat/negative, within noise) — so 16 is close to
+// the knee of the curve rather than an arbitrary guess. A var, not a
 // const, so tests can shrink or widen it.
 var maxConcurrentScans = 16
 
