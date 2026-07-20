@@ -6,10 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
-
 	"github.com/nitti/dirtree/internal/openfiles"
-	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/toast"
 	"github.com/nitti/dirtree/internal/tree"
@@ -31,53 +28,6 @@ var (
 		{Text: "[o] quick open", Priority: 2},
 		{Text: "[s] search", Priority: 2},
 		{Text: "[q] quit", Priority: 1},
-	}
-	// fileLegend lists actions specific to the currently-displayed file
-	// (as opposed to app-wide navigation), shown in the file title bar
-	// rather than the global menu bar (§5.2) — new file-specific actions
-	// belong here going forward.
-	fileLegend = []canvas.LegendEntry{
-		{Text: "[/] find", Priority: 1},
-		{Text: "[g] goto line", Priority: 2},
-		{Text: "[c] copy mode", Priority: 2},
-	}
-	// fileLegendCopyModeOn replaces fileLegend once copy mode is active
-	// (§2.1): goto-line and find are omitted since the point of copy
-	// mode is a screen with nothing on it but the file's own text, and
-	// scrolling/goto/find remain reachable via their own keys regardless
-	// of whether they're listed here, the same way arrow-key scrolling
-	// already is.
-	fileLegendCopyModeOn = []canvas.LegendEntry{
-		{Text: "[c] normal view", Priority: 1},
-	}
-	// gotoLegend documents the goto-line prompt's own actions (SPEC.md
-	// §5.2): Return jumps to the entered line and closes the prompt,
-	// Ctrl+U clears the entered digits, Escape cancels without changing
-	// scroll.
-	gotoLegend = []canvas.LegendEntry{
-		{Text: "[return] jump", Priority: 1},
-		{Text: "[ctrl+u] clear", Priority: 2},
-		{Text: "[esc] cancel", Priority: 1},
-	}
-	// findPromptLegend documents the in-file find prompt's own actions
-	// (SPEC.md §2.4): Return executes the search and closes the prompt,
-	// Ctrl+U clears the query, Escape cancels leaving any existing find
-	// state unchanged.
-	findPromptLegend = []canvas.LegendEntry{
-		{Text: "[return] search", Priority: 1},
-		{Text: "[ctrl+u] clear", Priority: 2},
-		{Text: "[esc] cancel", Priority: 1},
-	}
-	findLegend = []canvas.LegendEntry{
-		{Text: "[n] next", Priority: 1},
-		{Text: "[N] prev", Priority: 1},
-		{Text: "[esc] clear", Priority: 1},
-	}
-	// findLegendNoMatches is shown instead of findLegend when a find's
-	// query matched nothing — there's no next/previous to step between,
-	// but esc still clears it back to the idle file title bar.
-	findLegendNoMatches = []canvas.LegendEntry{
-		{Text: "[esc] clear", Priority: 1},
 	}
 )
 
@@ -106,8 +56,7 @@ func (a *App) draw() {
 		a.drawBadge(w, h)
 	default:
 		a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
-		titleRows := a.drawFileTitleBar(0, 1, w, true)
-		a.drawPreview(0, 1+titleRows, w, h-1-titleRows)
+		a.Preview.Draw(0, 1, w, h-1, true)
 	}
 	a.drawToast(w, h)
 
@@ -204,8 +153,7 @@ func (a *App) drawTooSmallVertical(w, h, need int) {
 // message if the list is empty.
 func (a *App) drawOpenFiles(w, h int) {
 	a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
-	titleRows := a.drawFileTitleBar(0, 1, w, false)
-	a.drawPreview(0, 1+titleRows, w, h-1-titleRows)
+	a.Preview.Draw(0, 1, w, h-1, false)
 
 	entries := a.files.Entries
 	y0 := 1
@@ -346,212 +294,6 @@ func shellAbbreviate(path string) string {
 // every frame so a live resize can bring it back.
 func (a *App) menuBarText(w int, entries []canvas.LegendEntry) string {
 	return canvas.LegendText(w, a.rootLabel(), entries)
-}
-
-// drawFileTitleBar renders the currently-displayed file's own title bar
-// (its root-relative path) in the row above the preview content, when a
-// file is displayed. Returns the number of rows it occupied (0 or 1) so
-// callers can shrink the preview's rectangle accordingly.
-// interactive is false while another overlay (e.g. open-files-list,
-// SPEC.md §2.3) owns input and the preview pane underneath it is
-// read-only, accepting neither scrolling nor goto-line — in which case
-// file-specific action keys like goto-line don't apply and their legend
-// is omitted rather than advertising a key that won't do anything right
-// now.
-func (a *App) drawFileTitleBar(x0, y0, w int, interactive bool) int {
-	e := a.files.DisplayedEntry()
-	if e == nil {
-		return 0
-	}
-	rel := tree.RelativeDisplayPath(a.rootPath, e.Path)
-
-	// copyModeTag prefixes rel whenever e is in copy mode, so that state
-	// is always legible in this row regardless of which case below fires
-	// (find status/prompt text otherwise has no room to also mention
-	// it) — the row's own distinct style (below) reinforces this further.
-	left := rel
-	if e.CopyMode {
-		left = "[copy mode] " + rel
-	}
-
-	var text string
-	switch {
-	case interactive && a.findPromptOpen:
-		text = canvas.LegendText(w, "/"+a.findInput, findPromptLegend)
-	case !interactive:
-		text = left
-	case e.FindQuery != "" && len(e.FindMatches) > 0:
-		text = canvas.LegendText(w, left, withStatus(findStatusText(e), findLegend))
-	case e.FindQuery != "":
-		text = canvas.LegendText(w, left, withStatus(findStatusText(e), findLegendNoMatches))
-	case e.CopyMode:
-		text = canvas.LegendText(w, left, fileLegendCopyModeOn)
-	default:
-		text = canvas.LegendText(w, rel, fileLegend)
-	}
-
-	style := canvas.StyleFileTitle
-	if e.CopyMode {
-		style = canvas.StyleCopyModeTitle
-	}
-	a.shared.Canvas.DrawText(x0, y0, w, text, style)
-	return 1
-}
-
-// withStatus prepends a synthetic, always-shown (priority 1) legend
-// entry carrying the in-file find's live status text (query, match
-// position/count, wrap note — findStatusText below) ahead of legend's
-// own entries, so status and legend tier together through canvas.LegendFit
-// the same way the path and the legend used to be concatenated directly:
-// status is never dropped for width, exactly like a priority-1 legend
-// key, while legend's own lower-priority entries (e.g. findLegend's, all
-// priority 1 today) still drop first if it ever came to that.
-func withStatus(status string, legend []canvas.LegendEntry) []canvas.LegendEntry {
-	return append([]canvas.LegendEntry{{Text: status, Priority: 1}}, legend...)
-}
-
-// findStatusText renders in-file find's live status (SPEC.md §2.4): the
-// query, how many matches it found and which one is current, and a
-// transient note when the most recent next/previous step wrapped
-// around either end of the match list.
-func findStatusText(e *openfiles.Entry) string {
-	if len(e.FindMatches) == 0 {
-		return "/" + e.FindQuery + "  no matches"
-	}
-	status := fmt.Sprintf("/%s  %d/%d", e.FindQuery, e.FindCurrent+1, len(e.FindMatches))
-	if e.FindWrapNote != "" {
-		status += " (" + e.FindWrapNote + ")"
-	}
-	return status
-}
-
-// drawPreview renders the primary preview view's content (SPEC.md
-// §2.1) into the (x0, y0)-(x0+w, y0+h) rectangle: a line-number gutter
-// plus wrapped, highlighted rows for the currently-displayed entry, or
-// an explanatory empty-state message if none is displayed. The
-// goto-line prompt, when open, occupies the bottom row — reachable only
-// when this is the primary (non-overlaid) view, since no overlay leaves
-// the goto-line key handled while this is showing.
-func (a *App) drawPreview(x0, y0, w, h int) {
-	e := a.files.DisplayedEntry()
-	if e == nil {
-		msg := "no files open — press b to browse, o to quick-open, s to search contents"
-		row := y0 + max(h/2, 1)
-		a.shared.Canvas.DrawText(x0, row, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
-		return
-	}
-
-	gw := previewGutterWidth(e)
-	contentWidth := max(w-gw, 1)
-	a.ensurePreviewWrapped(e, contentWidth)
-
-	viewportHeight := h
-	if a.gotoPromptOpen {
-		viewportHeight--
-	}
-	digits := gw - 2
-
-	for row := range viewportHeight {
-		y := y0 + row
-		i := e.Scroll + row
-		if i >= len(e.Rows) {
-			break
-		}
-		dr := e.Rows[i]
-		if gw > 0 {
-			numField := strings.Repeat(" ", digits)
-			if dr.HasNumber {
-				numField = fmt.Sprintf("%*d", digits, dr.SourceLine+1)
-			}
-			a.shared.Canvas.DrawText(x0, y, gw, numField+"  ", canvas.StyleNormal)
-		}
-		a.drawSegments(x0+gw, y, contentWidth, dr.Segments, findHighlightsForRow(e, dr), e.CopyMode)
-	}
-
-	if a.gotoPromptOpen {
-		a.shared.Canvas.DrawText(x0, y0+h-1, w, canvas.LegendText(w, "goto line: "+a.gotoInput, gotoLegend), canvas.StyleNormal)
-	}
-}
-
-// findHighlight is one in-file find match's column range within a
-// single wrapped display row, in row-relative rune columns (SPEC.md
-// §2.4) — Current picks canvas.StyleFindCurrent over canvas.StyleFindMatch
-// so the active match stands out from the rest.
-type findHighlight struct {
-	Start, End int
-	Current    bool
-}
-
-// findHighlightsForRow returns row's portion of every in-file find
-// match that overlaps it, converting each match's source-line-relative
-// column range (found against e.Lines, independent of wrapping) into
-// row-relative columns via the row's ColStart — a match split across
-// two wrapped rows by a mid-token wrap naturally yields one highlight
-// per row it touches.
-func findHighlightsForRow(e *openfiles.Entry, row preview.DisplayRow) []findHighlight {
-	if len(e.FindMatches) == 0 {
-		return nil
-	}
-	rowLen := preview.SegmentsRuneLen(row.Segments)
-	var out []findHighlight
-	for i, m := range e.FindMatches {
-		if m.Line != row.SourceLine {
-			continue
-		}
-		start := m.Col - row.ColStart
-		end := start + m.Len
-		if end <= 0 || start >= rowLen {
-			continue
-		}
-		start = max(start, 0)
-		end = min(end, rowLen)
-		out = append(out, findHighlight{Start: start, End: end, Current: i == e.FindCurrent})
-	}
-	return out
-}
-
-// drawSegments draws seg fragments left to right starting at (x, y),
-// each in its category's style (SPEC.md §2.1), clipped and padded with
-// spaces to exactly w columns — unless copy mode is active, in which
-// case every fragment uses the plain style instead, since copy mode's
-// whole point is a screen with nothing on it but the file's own
-// characters. Any column covered by a highlights entry (SPEC.md §2.4's
-// in-file find) still overrides that with the find-match style, copy
-// mode or not — it's not literal selectable text either way, so it
-// doesn't undermine copy mode's purpose, and staying visible there is
-// more useful than not.
-func (a *App) drawSegments(x, y, w int, segs []preview.Segment, highlights []findHighlight, plain bool) {
-	col := 0
-	for _, seg := range segs {
-		style := canvas.StyleNormal
-		if !plain {
-			style = canvas.StyleFor(seg.Category)
-		}
-		for _, r := range seg.Text {
-			if col >= w {
-				return
-			}
-			a.shared.Canvas.SetContent(x+col, y, r, highlightStyleAt(col, highlights, style))
-			col++
-		}
-	}
-	for ; col < w; col++ {
-		a.shared.Canvas.SetContent(x+col, y, ' ', canvas.StyleNormal)
-	}
-}
-
-// highlightStyleAt returns the find-match style covering col, if any,
-// else base.
-func highlightStyleAt(col int, highlights []findHighlight, base tcell.Style) tcell.Style {
-	for _, h := range highlights {
-		if col >= h.Start && col < h.End {
-			if h.Current {
-				return canvas.StyleFindCurrent
-			}
-			return canvas.StyleFindMatch
-		}
-	}
-	return base
 }
 
 // drawBadge renders the bottom-right delayed-loading indicator badge

@@ -18,7 +18,6 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/nitti/dirtree/internal/find"
 	"github.com/nitti/dirtree/internal/ignore"
 	"github.com/nitti/dirtree/internal/index"
 	"github.com/nitti/dirtree/internal/openfiles"
@@ -105,19 +104,11 @@ type App struct {
 	// (openfiles.Page), not stored, per that package's doc comment.
 	openFilesSelected int
 
-	// primary preview view's goto-line prompt state (SPEC.md §2.1);
-	// scroll and the wrapped-row cache live per-entry on
+	// Preview is the primary preview view's own state: the goto-line
+	// prompt (SPEC.md §2.1) and in-file find prompt (§2.4). The
+	// displayed entry's scroll and wrapped-row cache live per-entry on
 	// openfiles.Entry instead, since they're tracked per open file.
-	gotoPromptOpen bool
-	gotoInput      string
-
-	// primary preview view's in-file find prompt state (SPEC.md §2.4);
-	// the query, matches, current index, and wrap note live per-entry on
-	// openfiles.Entry instead (same reasoning as goto-line above), since
-	// only this transient "still typing the query" state needs to be
-	// app-level.
-	findPromptOpen bool
-	findInput      string
+	Preview views.PreviewView
 
 	badgeSkip spinner.MinDurationSkip
 
@@ -161,6 +152,7 @@ func New(rootPath string) *App {
 	a.Browser.Shared = a.shared
 	a.Browser.Selected = root
 	a.Browser.ErrorFlashes = map[string]time.Time{}
+	a.Preview.Shared = a.shared
 
 	a.syncWatches()
 	return a
@@ -363,368 +355,25 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		// itself — see SearchView.LastOpenedPath's doc comment.
 		if p := a.Search.LastOpenedPath; p != "" {
 			a.Browser.Reveal(p)
-			a.scrollToLine(a.Search.LastOpenedEntry, a.Search.LastOpenedLine)
+			a.Preview.ScrollToLine(a.Search.LastOpenedEntry, a.Search.LastOpenedLine)
 			a.Search.LastOpenedPath = ""
 			a.Search.LastOpenedEntry = nil
 		}
 	case views.OverlayNone:
-		a.handlePreviewKey(ev)
-	}
-}
-
-// handlePreviewKey handles input at the primary preview view when no
-// overlay is active: reaching the browser, quick open, and open-files
-// overlays, preview scrolling/goto-line/in-file-find, and quitting
-// (SPEC.md §7). `b` only opens the browser overlay (SPEC.md §5.1);
-// closing it back to this view is Escape's job alone, handled in
-// handleBrowserKey (quick open, opened by `o`, is likewise not a
-// toggle — see handleQuickOpenKey). Escape does not quit and
-// there is no overlay to back out of here (`q` is the only way to
-// quit, so an accidental Escape press can't lose the session's
-// open-files state) — its only effect at this view is clearFind,
-// clearing an active in-file find if there is one, and otherwise
-// remaining a no-op.
-func (a *App) handlePreviewKey(ev *tcell.EventKey) {
-	if a.gotoPromptOpen {
-		a.handleGotoPromptKey(ev)
-		return
-	}
-	if a.findPromptOpen {
-		a.handleFindPromptKey(ev)
-		return
-	}
-
-	switch {
-	case ev.Rune() == 'b':
-		a.overlay = views.OverlayBrowser
-	case ev.Key() == tcell.KeyTab:
-		a.overlay = views.OverlayOpenFiles
-		a.openFilesSelected = max(a.files.Displayed, 0)
-	case ev.Rune() == 'o':
-		a.openQuickOpen()
-	case ev.Rune() == 's':
-		a.openSearch()
-	case ev.Rune() == 'q':
-		a.quit = true
-	case ev.Key() == tcell.KeyUp:
-		a.scrollPreview(-1)
-	case ev.Key() == tcell.KeyDown:
-		a.scrollPreview(1)
-	case ev.Key() == tcell.KeyPgUp:
-		a.scrollPreview(-a.previewViewportHeight())
-	case ev.Key() == tcell.KeyPgDn:
-		a.scrollPreview(a.previewViewportHeight())
-	case ev.Rune() == 'g':
-		if a.files.DisplayedEntry() != nil {
-			a.gotoPromptOpen = true
-			a.gotoInput = ""
-		}
-	case ev.Rune() == '/':
-		if a.files.DisplayedEntry() != nil {
-			a.findPromptOpen = true
-			a.findInput = ""
-		}
-	case ev.Rune() == 'c':
-		if e := a.files.DisplayedEntry(); e != nil {
-			e.CopyMode = !e.CopyMode
-		}
-	case ev.Rune() == 'n':
-		a.findStep(1)
-	case ev.Rune() == 'N':
-		a.findStep(-1)
-	case ev.Key() == tcell.KeyEscape:
-		a.clearFind()
-	}
-}
-
-// clearFind clears the displayed entry's in-file find state (SPEC.md
-// §2.4), if any — its query, matches, current index, and wrap note —
-// so its highlighting and file-title-bar status disappear, leaving the
-// idle file title bar in their place. Bound to Escape at the primary
-// preview view: this does not conflict with Escape's deliberate
-// no-op-when-nothing-to-back-out-of behavior there (it still never
-// quits — only `q` does), it just gives find an explicit way out,
-// since otherwise it would persist until superseded by a new search on
-// the same entry. A no-op if there's no displayed entry or no active
-// find, so Escape stays inert exactly when there was nothing to clear.
-func (a *App) clearFind() {
-	e := a.files.DisplayedEntry()
-	if e == nil || e.FindQuery == "" {
-		return
-	}
-	e.FindQuery = ""
-	e.FindMatches = nil
-	e.FindCurrent = -1
-	e.FindWrapNote = ""
-}
-
-// handleGotoPromptKey handles input while the goto-line prompt is open
-// (SPEC.md §2.1): only digits, backspace, and Ctrl+U (clear) are accepted, Enter jumps
-// to the entered line, Escape cancels without changing scroll.
-func (a *App) handleGotoPromptKey(ev *tcell.EventKey) {
-	switch {
-	case ev.Key() == tcell.KeyEscape:
-		a.gotoPromptOpen = false
-	case ev.Key() == tcell.KeyEnter:
-		a.gotoLine(a.gotoInput)
-		a.gotoPromptOpen = false
-	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
-		if len(a.gotoInput) > 0 {
-			a.gotoInput = a.gotoInput[:len(a.gotoInput)-1]
-		}
-	case ev.Key() == tcell.KeyCtrlU:
-		a.gotoInput = ""
-	case ev.Rune() >= '0' && ev.Rune() <= '9':
-		a.gotoInput += string(ev.Rune())
-	}
-}
-
-// scrollPreview scrolls the currently-displayed entry by delta display
-// rows (SPEC.md §2.1), clamped so it never goes negative or past the
-// point where the last display row would leave the viewport. A no-op
-// at the empty state (no displayed entry).
-func (a *App) scrollPreview(delta int) {
-	e := a.files.DisplayedEntry()
-	if e == nil {
-		return
-	}
-	a.ensurePreviewWrapped(e, a.computedPreviewWidth())
-	e.Scroll = clamp(e.Scroll+delta, 0, a.maxPreviewScroll(e, a.previewViewportHeight()))
-}
-
-// gotoLine jumps the currently-displayed entry's scroll to the source
-// line's first display row (SPEC.md §2.1), clamped to [1, total source
-// lines]. A no-op if input is empty or there's no displayed entry.
-func (a *App) gotoLine(input string) {
-	e := a.files.DisplayedEntry()
-	if input == "" || e == nil {
-		return
-	}
-	n := 0
-	for _, r := range input {
-		n = n*10 + int(r-'0')
-	}
-	a.scrollToLine(e, n)
-}
-
-// scrollToLine jumps e's scroll to source line n's first display row
-// (SPEC.md §2.1), clamped to [1, total source lines]. Used by both the
-// goto-line prompt and content search's jump-to-hit (§9.2).
-func (a *App) scrollToLine(e *openfiles.Entry, n int) {
-	a.ensurePreviewWrapped(e, a.computedPreviewWidth())
-	n = clamp(n, 1, len(e.Lines))
-	if row, ok := e.FirstRow[n-1]; ok {
-		e.Scroll = clamp(row, 0, a.maxPreviewScroll(e, a.previewViewportHeight()))
-	}
-}
-
-func (a *App) maxPreviewScroll(e *openfiles.Entry, viewportHeight int) int {
-	return max(len(e.Rows)-viewportHeight, 0)
-}
-
-// handleFindPromptKey handles input while the in-file find prompt is
-// open (SPEC.md §2.4): any printable character is accepted (unlike
-// goto-line's digits-only prompt, since a search query is free text),
-// Enter executes the search, Escape cancels the prompt without
-// changing the entry's existing find state (if any).
-func (a *App) handleFindPromptKey(ev *tcell.EventKey) {
-	switch {
-	case ev.Key() == tcell.KeyEscape:
-		a.findPromptOpen = false
-	case ev.Key() == tcell.KeyEnter:
-		a.performFind(a.findInput)
-		a.findPromptOpen = false
-	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
-		if len(a.findInput) > 0 {
-			r := []rune(a.findInput)
-			a.findInput = string(r[:len(r)-1])
-		}
-	case ev.Key() == tcell.KeyCtrlU:
-		a.findInput = ""
-	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
-		a.findInput += string(ev.Rune())
-	}
-}
-
-// performFind executes an in-file find (SPEC.md §2.4): locates every
-// case-insensitive match of query in the displayed entry's lines, then
-// jumps to the first one at or after the source line currently at the
-// top of the viewport — the same "search forward from here" behavior
-// as `less` — wrapping to the very first match (and noting the wrap)
-// if none exists at or after that point. A no-op if there's no
-// displayed entry; an empty query clears any existing find state
-// instead of searching (mirroring a bare "/" + Enter in `less`).
-func (a *App) performFind(query string) {
-	e := a.files.DisplayedEntry()
-	if e == nil {
-		return
-	}
-	a.ensurePreviewWrapped(e, a.computedPreviewWidth())
-
-	e.FindQuery = query
-	e.FindMatches = find.InLines(e.Lines, query)
-	e.FindWrapNote = ""
-	if len(e.FindMatches) == 0 {
-		e.FindCurrent = -1
-		return
-	}
-
-	startLine := 0
-	if e.Scroll >= 0 && e.Scroll < len(e.Rows) {
-		startLine = e.Rows[e.Scroll].SourceLine
-	}
-	idx := 0
-	for i, m := range e.FindMatches {
-		if m.Line >= startLine {
-			idx = i
-			break
+		switch a.Preview.HandleKey(ev) {
+		case views.ActionOpenBrowser:
+			a.overlay = views.OverlayBrowser
+		case views.ActionOpenFiles:
+			a.overlay = views.OverlayOpenFiles
+			a.openFilesSelected = max(a.files.Displayed, 0)
+		case views.ActionOpenQuickOpen:
+			a.openQuickOpen()
+		case views.ActionOpenSearch:
+			a.openSearch()
+		case views.ActionQuit:
+			a.quit = true
 		}
 	}
-	if e.FindMatches[idx].Line < startLine {
-		e.FindWrapNote = "wrapped to top"
-	}
-	e.FindCurrent = idx
-	a.scrollToFindMatch(e)
-}
-
-// findStep moves the current match by delta (+1 for `n`/next, -1 for
-// `N`/previous), wrapping around at either end and noting the wrap
-// (SPEC.md §2.4) — the same wraparound stepper the finder overlays and
-// browser navigation already use (internal/tree.MoveSelection). A
-// no-op if there's no displayed entry or it has no matches.
-func (a *App) findStep(delta int) {
-	e := a.files.DisplayedEntry()
-	if e == nil || len(e.FindMatches) == 0 {
-		return
-	}
-	next := tree.MoveSelection(e.FindCurrent, delta, len(e.FindMatches))
-	switch {
-	case delta > 0 && next < e.FindCurrent:
-		e.FindWrapNote = "wrapped to top"
-	case delta < 0 && next > e.FindCurrent:
-		e.FindWrapNote = "wrapped to bottom"
-	default:
-		e.FindWrapNote = ""
-	}
-	e.FindCurrent = next
-	a.scrollToFindMatch(e)
-}
-
-// scrollToFindMatch scrolls e just enough to bring its current find
-// match into view (the same "only scroll if it's not already visible"
-// rule the browser uses for its own selection, SPEC.md §5.2), a no-op
-// if there is no current match.
-func (a *App) scrollToFindMatch(e *openfiles.Entry) {
-	if e.FindCurrent < 0 || e.FindCurrent >= len(e.FindMatches) {
-		return
-	}
-	row := findMatchRow(e, e.FindMatches[e.FindCurrent])
-	if row < 0 {
-		return
-	}
-	h := a.previewViewportHeight()
-	if row < e.Scroll {
-		e.Scroll = row
-	}
-	if row >= e.Scroll+h {
-		e.Scroll = row - h + 1
-	}
-	e.Scroll = clamp(e.Scroll, 0, a.maxPreviewScroll(e, h))
-}
-
-// findMatchRow returns the index into e.Rows of the specific wrapped
-// row m falls in (not just its source line's first row, since a long
-// line's match may land in a continuation row) — a.ensurePreviewWrapped
-// must already have been called. Falls back to the source line's first
-// row if m's column can't be located in any of its rows (shouldn't
-// happen for a match found in e.Lines, but degrades safely rather than
-// losing the jump entirely).
-func findMatchRow(e *openfiles.Entry, m find.Match) int {
-	start, ok := e.FirstRow[m.Line]
-	if !ok {
-		return -1
-	}
-	for i := start; i < len(e.Rows); i++ {
-		r := e.Rows[i]
-		if r.SourceLine != m.Line {
-			break
-		}
-		rowLen := preview.SegmentsRuneLen(r.Segments)
-		if m.Col >= r.ColStart && m.Col < r.ColStart+max(rowLen, 1) {
-			return i
-		}
-	}
-	return start
-}
-
-func (a *App) previewViewportHeight() int {
-	_, h := a.shared.Canvas.Size()
-	height := h - 1 // header row
-	if a.files.DisplayedEntry() != nil {
-		height-- // file title bar row, shown whenever a file is displayed
-	}
-	if a.gotoPromptOpen {
-		height--
-	}
-	return height
-}
-
-// computedPreviewWidth returns the content width (in columns) available
-// to the preview's wrapped text at the primary preview view when no
-// overlay is active (full terminal width). This is only used by the
-// scroll/goto-line key handlers, which are only reachable in that
-// context.
-func (a *App) computedPreviewWidth() int {
-	w, _ := a.shared.Canvas.Size()
-	e := a.files.DisplayedEntry()
-	if e == nil {
-		return w
-	}
-	return max(w-previewGutterWidth(e), 1)
-}
-
-// previewGutterWidth returns the line-number gutter's width for e:
-// gutterWidth's normal computation, or 0 while e is in copy mode
-// (SPEC.md §2.1) and stripping the gutter out of its preview entirely.
-// Shared by computedPreviewWidth and drawPreview so both agree on the
-// same content width — otherwise they'd race to invalidate each
-// other's wrap cache every frame.
-func previewGutterWidth(e *openfiles.Entry) int {
-	if e.CopyMode {
-		return 0
-	}
-	return canvas.GutterWidth(len(e.Lines))
-}
-
-// ensurePreviewWrapped recomputes e's wrapped display rows if width has
-// changed since they were last computed (SPEC.md §2.1: "wrapping must
-// be recomputed whenever the available width changes"), caching the
-// result on the entry so it's not redone every frame. Copy mode wraps
-// the same way normal display does — an earlier version of copy mode
-// disabled wrapping entirely and clipped long lines instead, but that
-// meant anything past the pane's right edge was never drawn at all,
-// making it impossible to select the rest of the line by any means;
-// word-wrapping (SPEC.md §2.1) keeps every character of the line
-// visible and selectable somewhere on screen, which matters more than
-// avoiding the extra line break a multi-row selection can pick up at a
-// wrap point — an inherent limitation of any fixed-width terminal grid,
-// not something copy mode can fully solve either way.
-func (a *App) ensurePreviewWrapped(e *openfiles.Entry, width int) {
-	if e.RowsWidth == width && e.Rows != nil {
-		return
-	}
-	e.Rows, e.FirstRow = preview.BuildDisplayRows(e.Segs, width)
-	e.RowsWidth = width
-}
-
-func clamp(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }
 
 func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
