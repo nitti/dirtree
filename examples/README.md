@@ -55,6 +55,23 @@ DIRTREE_BENCH_DIR=/path/to/dir DIRTREE_BENCH_QUERY=term make bench   # from the 
 
 `DIRTREE_BENCH_QUERY` defaults to `TODO` if unset — match count doesn't affect scan cost, so any non-empty query works. This only measures; picking new defaults for `maxConcurrentScans`/`perFileTimeout` in `internal/search/search.go` based on the results is still a manual follow-up step.
 
+### Sample results
+
+One run of `DIRTREE_BENCH_DIR=examples/data/cpython make bench` against a fresh CPython checkout (5,896 files), Apple M4 Pro / macOS, single run per concurrency level (`-benchtime=1x`) — illustrative, not a guarantee for other machines or trees:
+
+| `maxConcurrentScans` | time | files/sec |
+|---|---|---|
+| 1 | 544ms | 10,846 |
+| 2 | 293ms | 20,104 |
+| 4 | 206ms | 28,679 |
+| 8 | 196ms | 30,091 |
+| 16 (current default) | 190ms | 31,020 |
+| 32 | 212ms | 27,842 |
+| 64 | 174ms | 33,813 |
+| 128 | 159ms | 37,115 |
+
+The big jump is 1→4 (concurrency pays off immediately on an I/O-bound scan); past 8–16 the gains flatten and get noisy (32 dipping below 16 here is almost certainly run-to-run variance, not a real regression — see the single-run caveat above). Nothing here suggests the current default of 16 is meaningfully wrong, but it also doesn't rule out that something higher (64–128) is measurably better on a bigger tree or a slower disk; that's the kind of question this harness exists to let someone answer with real numbers instead of guessing.
+
 ## Comparing against other tools
 
 `compare_search.sh` times dirtree's search against `ripgrep`, `grep`, and `ag` (whichever are installed) over the same directory/query, appending one CSV row per tool per run to `data/bench-results.csv` (gitignored, local-only) so results accumulate across repeated runs instead of being lost:
@@ -62,3 +79,15 @@ DIRTREE_BENCH_DIR=/path/to/dir DIRTREE_BENCH_QUERY=term make bench   # from the 
 ```
 make -C examples compare DIR=data/linux QUERY=EXPORT_SYMBOL
 ```
+
+### Sample results
+
+Same CPython checkout as above (5,896 files), three queries, `ripgrep`/`ag` not installed on this machine so only `grep -riI` is shown (single run each, wall-clock via `compare_search.sh`):
+
+| Query | dirtree | `grep -riI` |
+|---|---|---|
+| `import` | 0.43s | 1.82s |
+| `TODO` | 0.27s | 1.81s |
+| `PyObject_GC_New` | 0.29s | 1.93s |
+
+dirtree comes out ~4-7x faster than `grep -r` here despite also doing more work per match (collecting line numbers/text for every hit across every file, not just a count). Take this as one data point on one machine, not a broad claim against `grep`'s implementation in general — the comparison exists so this kind of number is easy to regenerate and check again after any change to the scan path, not as a one-time bragging point.
