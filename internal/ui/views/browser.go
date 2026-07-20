@@ -13,13 +13,15 @@ import (
 )
 
 // browserLegend documents the browser overlay's own actions (SPEC.md
-// §3.4): Return opens the selected file, left/right collapse/expand a
-// directory (or move to its parent/first child), `/` enters jump to
-// file (§4.3), Escape closes the overlay (the sole close key — `b` is
-// not a toggle here).
+// §3.4): Return opens the selected file or discloses (expands/
+// collapses) a selected directory, left/right collapse/expand a
+// directory (or move to its parent/first child), pgup/pgdn page the row
+// list, `/` enters jump to file (§4.3), Escape closes the overlay (the
+// sole close key — `b` is not a toggle here).
 var browserLegend = []canvas.LegendEntry{
-	{Text: "[return] open", Priority: 1},
+	{Text: "[return] open/expand", Priority: 1},
 	{Text: "[left/right] expand/collapse", Priority: 2},
+	{Text: "[pgup/pgdn] page", Priority: 3},
 	{Text: "[/] jump to file", Priority: 2},
 	{Text: "[esc] close", Priority: 1},
 }
@@ -150,6 +152,10 @@ func (v *Browser) HandleKey(ev *tcell.EventKey) {
 		}
 	case ev.Key() == tcell.KeyLeft:
 		v.Selected = v.Selected.MoveLeft()
+	case ev.Key() == tcell.KeyPgDn:
+		v.Selected = flat[tree.MoveSelectionClamped(idx, v.listHeight(), len(flat))]
+	case ev.Key() == tcell.KeyPgUp:
+		v.Selected = flat[tree.MoveSelectionClamped(idx, -v.listHeight(), len(flat))]
 	case ev.Key() == tcell.KeyEnter:
 		v.performOpen()
 	case ev.Rune() == '/':
@@ -257,22 +263,28 @@ func (v *Browser) handleJumpKey(ev *tcell.EventKey) {
 }
 
 // performOpen implements Enter from the browser, per SPEC.md §3.4 and
-// §2.2's open-failure signaling: a no-op on a directory; on a file, an
-// "opened" result displays it in the primary preview view without
-// closing the browser, so several files can be queued up in a row
-// before returning to the preview; a "failed" result leaves the browser
-// open with the failure recorded on the node itself (tree.Node.Err,
-// label's existing inline `[error]` rendering) and a brief red flash
-// (ErrorFlashes/canvas.StyleFlashError, §5.3) — the same treatment a
-// directory that newly fails to list gets from a live-refresh (§6.1),
-// unified since both are "the last operation on this node failed." On
-// success, the opened row also gets a brief flash (FlashPath/
-// FlashStart, drawn in Draw) as an on-open confirmation, the same
-// treatment content search gives its own rows — distinct from the
-// lasting "●" open indicator every open file's row shows regardless of
-// when it was opened.
+// §2.2's open-failure signaling: on a directory, it discloses (toggles
+// expand/collapse) it, the same as pressing `/` then Enter would scope
+// into it — a still-failing directory records its error the same way
+// Right-arrow's MoveRight does; on a file, an "opened" result displays
+// it in the primary preview view without closing the browser, so
+// several files can be queued up in a row before returning to the
+// preview; a "failed" result leaves the browser open with the failure
+// recorded on the node itself (tree.Node.Err, label's existing inline
+// `[error]` rendering) and a brief red flash (ErrorFlashes/
+// canvas.StyleFlashError, §5.3) — the same treatment a directory that
+// newly fails to list gets from a live-refresh (§6.1), unified since
+// both are "the last operation on this node failed." On success, the
+// opened row also gets a brief flash (FlashPath/FlashStart, drawn in
+// Draw) as an on-open confirmation, the same treatment content search
+// gives its own rows — distinct from the lasting "●" open indicator
+// every open file's row shows regardless of when it was opened.
 func (v *Browser) performOpen() {
 	if v.Selected.IsDir {
+		v.Selected.ToggleExpand(v.RootPath, v.Ignorer)
+		if v.Selected.Err != "" {
+			v.FlagErrorFlashes([]string{v.Selected.Path})
+		}
 		return
 	}
 	res := v.Files.Open(v.Selected.Path, preview.DefaultByteCap)
@@ -284,6 +296,15 @@ func (v *Browser) performOpen() {
 	v.Selected.Err = ""
 	v.FlashPath = v.Selected.Path
 	v.FlashStart = time.Now()
+}
+
+// listHeight returns the browser's row-list viewport height in
+// non-jump-mode (SPEC.md §3.4's Page-Up/Page-Down), mirroring Draw's own
+// layout math (a single header row) so paging moves by the same number
+// of rows the list actually shows.
+func (v *Browser) listHeight() int {
+	_, h := v.Canvas.Size()
+	return h - 1 // header row
 }
 
 // Draw renders the browser full-screen (SPEC.md §5.1): a header with its
@@ -379,18 +400,19 @@ func isErrorFlashing(flashes map[string]time.Time, path string) bool {
 	return ok && time.Since(start) < canvas.FlashDuration
 }
 
-// label renders one browser row's indentation, expand/collapse marker,
-// lasting "●" open indicator (files already in the open-files list,
-// SPEC.md §2.2/§5.2 — the same indicator content search's own file rows
-// use, §9.2), name, and any per-node error indicator.
+// label renders one browser row's indentation, expand/collapse marker
+// ("▾"/"▸", the same glyphs content search's own file rows use for the
+// same concept, §9.2), lasting "●" open indicator (files already in the
+// open-files list, SPEC.md §2.2/§5.2 — also shared with content search's
+// file rows), name, and any per-node error indicator.
 func (v *Browser) label(n *tree.Node) string {
 	indent := strings.Repeat("  ", n.Depth)
 	marker := "  "
 	if n.IsDir {
 		if n.Expanded {
-			marker = "v "
+			marker = "▾ "
 		} else {
-			marker = "> "
+			marker = "▸ "
 		}
 	}
 	openMarker := " "

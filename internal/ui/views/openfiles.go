@@ -202,13 +202,15 @@ func openFilesRowLabel(digit int, displayed bool, path string) string {
 // a key that does nothing right now" discipline the file title bar's
 // legend already follows. Shift-Page-Up/Down (the bulk-reorder
 // accelerator) is intentionally left off even on a multi-page list —
-// it's a bulk variant of the already-listed shift+↑↓, the same way
-// arrow-key scrolling is never listed at the primary view either.
+// it's a bulk variant of the already-listed shift+up/down, the same way
+// arrow-key scrolling is never listed at the primary view either. Keys
+// are spelled out in words here, matching every other legend in the
+// app, rather than embedding arrow glyphs in the label text itself.
 func openFilesLegend(multiPage bool) []canvas.LegendEntry {
 	entries := []canvas.LegendEntry{
 		{Text: "[return/0-9] open", Priority: 1},
 		{Text: "[x] remove", Priority: 2},
-		{Text: "[shift+↑↓] move", Priority: 3},
+		{Text: "[shift+up/down] move", Priority: 3},
 	}
 	if multiPage {
 		entries = append(entries, canvas.LegendEntry{Text: "[pgup/pgdn] page", Priority: 2})

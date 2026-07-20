@@ -23,10 +23,14 @@ import (
 // closes the overlay; up/down move the flattened row list (arrow keys
 // already cover this, so it's not spelled out as its own legend entry
 // alongside left/right); left/right collapse/expand a file's hit rows;
+// tab/shift-tab jump the selection to the next/previous file's row,
+// skipping over that file's own hit rows; pgup/pgdn page the row list;
 // ctrl+r toggles regex mode; ctrl+u clears the query.
 var searchLegend = []canvas.LegendEntry{
 	{Text: "[return] open", Priority: 1},
 	{Text: "[left/right] expand/collapse", Priority: 2},
+	{Text: "[tab/shift-tab] next/prev file", Priority: 3},
+	{Text: "[pgup/pgdn] page", Priority: 3},
 	{Text: "[ctrl+r] regex", Priority: 2},
 	{Text: "[ctrl+u] clear", Priority: 3},
 	{Text: "[esc] close", Priority: 1},
@@ -164,6 +168,15 @@ func (v *Search) fileRowIndex(fi int) int {
 	return 0
 }
 
+// listHeight returns the search overlay's row-list viewport height,
+// mirroring Draw's own listTop math (header row + query input row) so
+// Page-Up/Page-Down move by the same number of rows the list actually
+// shows.
+func (v *Search) listHeight() int {
+	_, h := v.Canvas.Size()
+	return h - 2 // header row + query input row
+}
+
 // RecomputeSearch (re)starts the background content scan for the
 // current query (SPEC.md §9.1): any scan still running for the previous
 // query is canceled first, so only the most recently typed query's
@@ -297,6 +310,24 @@ func (v *Search) HandleKey(ev *tcell.EventKey) {
 	case ev.Key() == tcell.KeyUp:
 		if rows := v.rows(); len(rows) > 0 {
 			v.Selected = tree.MoveSelection(v.Selected, -1, len(rows))
+		}
+	case ev.Key() == tcell.KeyTab:
+		if rows := v.rows(); len(rows) > 0 && len(v.Results) > 0 {
+			fi := tree.MoveSelection(rows[v.Selected].file, 1, len(v.Results))
+			v.Selected = v.fileRowIndex(fi)
+		}
+	case ev.Key() == tcell.KeyBacktab:
+		if rows := v.rows(); len(rows) > 0 && len(v.Results) > 0 {
+			fi := tree.MoveSelection(rows[v.Selected].file, -1, len(v.Results))
+			v.Selected = v.fileRowIndex(fi)
+		}
+	case ev.Key() == tcell.KeyPgDn:
+		if rows := v.rows(); len(rows) > 0 {
+			v.Selected = tree.MoveSelectionClamped(v.Selected, v.listHeight(), len(rows))
+		}
+	case ev.Key() == tcell.KeyPgUp:
+		if rows := v.rows(); len(rows) > 0 {
+			v.Selected = tree.MoveSelectionClamped(v.Selected, -v.listHeight(), len(rows))
 		}
 	case ev.Key() == tcell.KeyLeft:
 		rows := v.rows()
