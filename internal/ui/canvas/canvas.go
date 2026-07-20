@@ -85,7 +85,7 @@ const (
 // MinTerminalWidth on its own — each view's own tests enforce this
 // against its own legend tables.
 const (
-	MinTerminalWidth  = 40
+	MinTerminalWidth  = 58
 	MinTerminalHeight = 10
 )
 
