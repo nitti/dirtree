@@ -24,27 +24,15 @@ This installs from the [`nitti/homebrew-tap`](https://github.com/nitti/homebrew-
 
 **From source:** see "Build and run" below.
 
-## Contents
+## Documentation
 
 - [`specs/SPEC.md`](specs/SPEC.md) — full behavioral specification: CLI, data model, traversal/ignore rules, navigation, background indexing, quick open and jump to file, preview pane, layout, rendering conventions, keybindings, resize handling.
 - [`specs/TESTING.md`](specs/TESTING.md) — acceptance criteria, expressed as test cases the implementation must satisfy.
 - [`docs/GO_STYLE.md`](docs/GO_STYLE.md) — Go-specific style and architecture rules (layering, error conventions, concurrency, tooling), enforced via `.golangci.yml` and `make lint`.
 - [`docs/ANIMATION_IDEAS.md`](docs/ANIMATION_IDEAS.md) — brainstormed, not-yet-decided animation ideas, checked against the animation principles in `specs/SPEC.md` §5.3.
 - [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — chronological development history: each stage, fix, and rework, and what was manually verified at the time.
-- `cmd/dirtree/` — CLI entry point (argument parsing, path resolution, startup error handling, `--version`).
-- `internal/tree/` — the lazily-loaded node model, flattening, navigation semantics, jump-to-file's visible-row matching (`JumpMatches`), and the refresh/merge logic behind live updates (spec §3.1, §3.4, §4.3, §6.1).
-- `internal/ignore/` — the dependency-free `.gitignore`/`.dirtreeignore` pattern subset (spec §3.2).
-- `internal/index/` — the background full-tree index used by quick open and content search, including live rebuilds (spec §4.1, §6.1).
-- `internal/match/` — quick open's substring/glob query-matching rule and jump to file's simpler leaf-name prefix rule (spec §4.1, §4.3).
-- `internal/search/` — the background content-search scan: case-insensitive substring or regex matching, streamed line-by-line against each indexed file's content (no size cap, binary-excluded, bounded per-file timeout and concurrency), cancelable mid-scan when a newer query supersedes it (spec §9).
-- `internal/preview/` — file reading (`Load`, distinguishing a failed open from a successful one per spec §2.2), best-effort syntax highlighting, and line wrapping for the preview pane (spec §2.1).
-- `internal/find/` — in-file find: case-insensitive substring matching over an already-open file's lines, in rune coordinates that compose with `internal/preview`'s wrapped display rows (spec §2.4).
-- `internal/openfiles/` — the open-files list: per-entry scroll/goto/in-file-find state, open/reuse/fail semantics, the list-overlay's remove/reorder operations, and the dropdown overlay's paging/bulk-reorder math (spec §2.2, §2.3, §2.4).
-- `internal/spinner/` — the delayed-loading-indicator timing/frame logic, including the minimum-display-duration skip and the full badge decision sequence (spec §5.2).
-- `internal/toast/` — the "show in full, then fade left-to-right from an anchor point" timing primitive (spec §5.3) `internal/spinner`'s completion message builds on.
-- `internal/watch/` — the `fsnotify`-backed, debounced filesystem-change watcher driving live refresh (spec §6.1); OS-facility-adjacent like `internal/ui`, verified manually.
-- `internal/ui/` — the tcell-backed terminal-rendering layer (draw loop, input handling, resize polling, wiring the watcher to tree/index refresh). Not unit-tested; verified manually in a real terminal (see Status below).
-- `.goreleaser.yaml` / `.github/workflows/release.yml` — cross-compiles and publishes a GitHub Release plus an updated Homebrew cask on every `vX.Y.Z` tag push.
+
+The `cmd/` and `internal/` package layout maps directly onto `specs/SPEC.md`'s sections — browse the source (with `dirtree` itself, if you like) rather than relying on a manually-kept-in-sync file list here.
 
 ## Build and run
 
