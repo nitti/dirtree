@@ -46,14 +46,6 @@ const (
 	flashDuration  = 400 * time.Millisecond
 	watchDebounce  = 300 * time.Millisecond
 	previewByteCap = preview.DefaultByteCap
-
-	// Open-files-list overlay dropdown sizing (SPEC.md §2.3): wide enough
-	// to fit its own header row (page counter + keybinding legend) or
-	// its longest visible path, whichever is larger, clamped to this
-	// range so it still reads as a compact dropdown rather than growing
-	// to fill the terminal.
-	openFilesMinWidth = 40
-	openFilesMaxWidth = 84
 )
 
 // App holds all interactive state for a running session.
@@ -99,10 +91,9 @@ type App struct {
 	// preview view and both overlays' open actions operate on.
 	files *openfiles.List
 
-	// open-files-list overlay state (SPEC.md §2.3): openFilesSelected is
-	// an index into files.Entries. Which page it falls on is derived
-	// (openfiles.Page), not stored, per that package's doc comment.
-	openFilesSelected int
+	// OpenFiles is the open-files-list overlay's own state (SPEC.md
+	// §2.3).
+	OpenFiles views.OpenFilesView
 
 	// Preview is the primary preview view's own state: the goto-line
 	// prompt (SPEC.md §2.1) and in-file find prompt (§2.4). The
@@ -153,6 +144,7 @@ func New(rootPath string) *App {
 	a.Browser.Selected = root
 	a.Browser.ErrorFlashes = map[string]time.Time{}
 	a.Preview.Shared = a.shared
+	a.OpenFiles.Shared = a.shared
 
 	a.syncWatches()
 	return a
@@ -347,7 +339,7 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 			a.QuickOpen.LastOpenedPath = ""
 		}
 	case views.OverlayOpenFiles:
-		a.handleOpenFilesKey(ev)
+		a.OpenFiles.HandleKey(ev)
 	case views.OverlaySearch:
 		a.Search.HandleKey(ev)
 		// LastOpenedPath/Entry/Line are search's outbox for two
@@ -365,73 +357,13 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 			a.overlay = views.OverlayBrowser
 		case views.ActionOpenFiles:
 			a.overlay = views.OverlayOpenFiles
-			a.openFilesSelected = max(a.files.Displayed, 0)
+			a.OpenFiles.Selected = max(a.files.Displayed, 0)
 		case views.ActionOpenQuickOpen:
 			a.openQuickOpen()
 		case views.ActionOpenSearch:
 			a.openSearch()
 		case views.ActionQuit:
 			a.quit = true
-		}
-	}
-}
-
-func (a *App) handleOpenFilesKey(ev *tcell.EventKey) {
-	n := len(a.files.Entries)
-	shift := ev.Modifiers()&tcell.ModShift != 0
-
-	switch {
-	case ev.Key() == tcell.KeyEscape:
-		a.overlay = views.OverlayNone
-	case ev.Key() == tcell.KeyPgUp && shift:
-		if n > 0 {
-			a.openFilesSelected = a.files.MoveUpPage(a.openFilesSelected, openfiles.PageSize)
-		}
-	case ev.Key() == tcell.KeyPgDn && shift:
-		if n > 0 {
-			a.openFilesSelected = a.files.MoveDownPage(a.openFilesSelected, openfiles.PageSize)
-		}
-	case ev.Key() == tcell.KeyUp && shift:
-		if n > 0 {
-			a.openFilesSelected = a.files.MoveUp(a.openFilesSelected)
-		}
-	case ev.Key() == tcell.KeyDown && shift:
-		if n > 0 {
-			a.openFilesSelected = a.files.MoveDown(a.openFilesSelected)
-		}
-	case ev.Key() == tcell.KeyPgUp:
-		a.openFilesSelected = openfiles.SelectPage(a.openFilesSelected, -1, openfiles.PageSize, n)
-	case ev.Key() == tcell.KeyPgDn:
-		a.openFilesSelected = openfiles.SelectPage(a.openFilesSelected, 1, openfiles.PageSize, n)
-	case ev.Key() == tcell.KeyUp:
-		if n > 0 {
-			a.openFilesSelected = tree.MoveSelection(a.openFilesSelected, -1, n)
-		}
-	case ev.Key() == tcell.KeyDown:
-		if n > 0 {
-			a.openFilesSelected = tree.MoveSelection(a.openFilesSelected, 1, n)
-		}
-	case ev.Key() == tcell.KeyEnter:
-		if n > 0 {
-			a.files.Display(a.openFilesSelected)
-			a.overlay = views.OverlayNone
-		}
-	case ev.Rune() >= '0' && ev.Rune() <= '9':
-		if idx, ok := openfiles.SelectDigit(a.openFilesSelected, int(ev.Rune()-'0'), openfiles.PageSize, n); ok {
-			a.openFilesSelected = idx
-			a.files.Display(idx)
-			a.overlay = views.OverlayNone
-		}
-	case ev.Rune() == 'x':
-		if n > 0 {
-			a.openFilesSelected = a.files.Remove(a.openFilesSelected)
-			if len(a.files.Entries) == 0 {
-				// SPEC.md §2.3: emptying the list auto-closes the
-				// overlay to the primary preview view's empty state,
-				// which in turn auto-opens the browser exactly as it
-				// does on startup (§1).
-				a.overlay = views.OverlayBrowser
-			}
 		}
 	}
 }
