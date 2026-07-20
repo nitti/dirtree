@@ -20,11 +20,11 @@ const (
 	openFilesMaxWidth = 84
 )
 
-// OpenFilesView holds the open-files-list overlay's own state (SPEC.md
+// OpenFiles holds the open-files-list overlay's own state (SPEC.md
 // §2.3): Selected is an index into Files.Entries. Which page it falls
 // on is derived (openfiles.Page), not stored, per that package's doc
 // comment.
-type OpenFilesView struct {
+type OpenFiles struct {
 	*Shared
 
 	Selected int
@@ -38,7 +38,7 @@ type OpenFilesView struct {
 // plain Page-Up/Page-Down and Up/Down counterparts (navigate) since
 // tcell reports the shifted and unshifted forms as the same Key with
 // ModShift set, not a distinct key.
-func (v *OpenFilesView) HandleKey(ev *tcell.EventKey) {
+func (v *OpenFiles) HandleKey(ev *tcell.EventKey) {
 	n := len(v.Files.Entries)
 	shift := ev.Modifiers()&tcell.ModShift != 0
 
@@ -106,7 +106,7 @@ func (v *OpenFilesView) HandleKey(ev *tcell.EventKey) {
 // current page, each row labeled with its 0-9 position, the
 // currently-displayed entry marked distinctly, or an explanatory
 // message if the list is empty.
-func (v *OpenFilesView) Draw(x0, y0, w, h int, preview *PreviewView) {
+func (v *OpenFiles) Draw(x0, y0, w, h int, preview *Preview) {
 	preview.Draw(x0, y0, w, h, false)
 
 	entries := v.Files.Entries
@@ -174,7 +174,7 @@ func (v *OpenFilesView) Draw(x0, y0, w, h int, preview *PreviewView) {
 // the bottom border's right end when a next page exists — so "more
 // items available" is visible right at the edge it refers to
 // (above/below) without spending a content row on it.
-func (v *OpenFilesView) drawBox(x0, y0, w, h int, title string, hasPrev, hasNext bool) {
+func (v *OpenFiles) drawBox(x0, y0, w, h int, title string, hasPrev, hasNext bool) {
 	v.Canvas.DrawBox(x0, y0, w, h, title)
 	if hasPrev && w > 2 {
 		v.Canvas.SetContent(x0+w-2, y0, '▲', canvas.StyleNormal)

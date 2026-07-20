@@ -43,11 +43,11 @@ var jumpLegend = []canvas.LegendEntry{
 	{Text: "[esc] cancel", Priority: 1},
 }
 
-// BrowserView holds the browser overlay's state (SPEC.md §3.4),
+// Browser holds the browser overlay's state (SPEC.md §3.4),
 // including jump-to-file typing mode (§4.3) — not a separate overlay,
 // just a mode layered on top of the browser's own row list, so its
 // fields live here rather than on their own type.
-type BrowserView struct {
+type Browser struct {
 	*Shared
 
 	Selected   *tree.Node
@@ -90,7 +90,7 @@ type BrowserView struct {
 // once) and a single failed file-open (performOpen). Also prunes any
 // previously-flashed path whose flash has already finished, so the map
 // doesn't grow unbounded over a long-running session.
-func (v *BrowserView) FlagErrorFlashes(paths []string) {
+func (v *Browser) FlagErrorFlashes(paths []string) {
 	now := time.Now()
 	for p, start := range v.ErrorFlashes {
 		if now.Sub(start) >= canvas.FlashDuration {
@@ -108,7 +108,7 @@ func (v *BrowserView) FlagErrorFlashes(paths []string) {
 // leaves the browser showing where that file lives the next time it's
 // opened (SPEC.md §4.2, §9.2) — not gated on the browser overlay
 // actually being open right now, purely updating its state for later.
-func (v *BrowserView) Reveal(absPath string) {
+func (v *Browser) Reveal(absPath string) {
 	if n := tree.RevealPath(v.Root, v.RootPath, absPath, v.Ignorer); n != nil {
 		v.Selected = n
 	}
@@ -123,7 +123,7 @@ func (v *BrowserView) Reveal(absPath string) {
 // `o` and `s` have no effect here — browse, quick open, and content
 // search are mutually exclusive (SPEC.md §5.1): reaching another one
 // requires closing the browser back to the primary preview view first.
-func (v *BrowserView) HandleKey(ev *tcell.EventKey) {
+func (v *Browser) HandleKey(ev *tcell.EventKey) {
 	if v.JumpActive {
 		v.handleJumpKey(ev)
 		return
@@ -163,7 +163,7 @@ func (v *BrowserView) HandleKey(ev *tcell.EventKey) {
 // the browser: not an overlay change (Overlay stays OverlayBrowser),
 // just a mode layered on top of it that remembers the current
 // selection/scroll so Escape can restore them.
-func (v *BrowserView) openJump() {
+func (v *Browser) openJump() {
 	v.JumpActive = true
 	v.JumpQuery = ""
 	v.JumpDisclosed = ""
@@ -180,7 +180,7 @@ func (v *BrowserView) openJump() {
 // exposes, files and directories alike), matching each row's leaf name
 // by case-insensitive prefix. JumpScope is normally the tree root, but
 // narrows after a slash-to-expand drill-down (see handleJumpKey).
-func (v *BrowserView) recomputeJumpMatches() {
+func (v *Browser) recomputeJumpMatches() {
 	v.JumpSelected = 0
 	v.JumpMatches = tree.JumpMatches(v.JumpScope, v.JumpQuery)
 }
@@ -189,7 +189,7 @@ func (v *BrowserView) recomputeJumpMatches() {
 // (SPEC.md §4.3): every printable rune is query input, Tab/Shift-Tab (or
 // Down/Up) cycle among current matches, and Return/Escape are the only
 // ways out.
-func (v *BrowserView) handleJumpKey(ev *tcell.EventKey) {
+func (v *Browser) handleJumpKey(ev *tcell.EventKey) {
 	switch {
 	case ev.Key() == tcell.KeyEscape:
 		v.Selected = v.JumpPrevSelected
@@ -271,7 +271,7 @@ func (v *BrowserView) handleJumpKey(ev *tcell.EventKey) {
 // treatment content search gives its own rows — distinct from the
 // lasting "●" open indicator every open file's row shows regardless of
 // when it was opened.
-func (v *BrowserView) performOpen() {
+func (v *Browser) performOpen() {
 	if v.Selected.IsDir {
 		return
 	}
@@ -291,7 +291,7 @@ func (v *BrowserView) performOpen() {
 // directly below when active (the same convention quick open and
 // content search use), and the flat row list filling the rest of the
 // screen.
-func (v *BrowserView) Draw(w, h int) {
+func (v *Browser) Draw(w, h int) {
 	browserTop := 1
 	if v.JumpActive {
 		// SPEC.md §5.2: while jump-to-file (§4.3) is active, the header's
@@ -316,7 +316,7 @@ func (v *BrowserView) Draw(w, h int) {
 
 // drawList renders the browser's currently-visible flattened list
 // (SPEC.md §3.1, §5.2), keeping the selected row scrolled into view.
-func (v *BrowserView) drawList(x0, y0, w, h int) {
+func (v *Browser) drawList(x0, y0, w, h int) {
 	if h < 1 {
 		return
 	}
@@ -383,7 +383,7 @@ func isErrorFlashing(flashes map[string]time.Time, path string) bool {
 // lasting "●" open indicator (files already in the open-files list,
 // SPEC.md §2.2/§5.2 — the same indicator content search's own file rows
 // use, §9.2), name, and any per-node error indicator.
-func (v *BrowserView) label(n *tree.Node) string {
+func (v *Browser) label(n *tree.Node) string {
 	indent := strings.Repeat("  ", n.Depth)
 	marker := "  "
 	if n.IsDir {

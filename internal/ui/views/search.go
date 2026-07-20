@@ -50,13 +50,13 @@ type SearchOutcome struct {
 // concatenated slice so toggling one file's disclosure state doesn't
 // require renumbering anything.
 type searchRow struct {
-	file  int // index into SearchView.Results
+	file  int // index into Search.Results
 	hit   int // index into Results[file].Hits; only meaningful when isHit
 	isHit bool
 }
 
-// SearchView holds the content search overlay's state (SPEC.md §9).
-type SearchView struct {
+// Search holds the content search overlay's state (SPEC.md §9).
+type Search struct {
 	*Shared
 
 	Query     string
@@ -90,7 +90,7 @@ type SearchView struct {
 	// LastOpenedPath/LastOpenedEntry/LastOpenedLine are performOpen's
 	// outbox for two coordinator-level concerns — revealing the opened
 	// file in the browser (shared with quick open, see
-	// QuickOpenView.LastOpenedPath's doc comment for why this isn't
+	// QuickOpen.LastOpenedPath's doc comment for why this isn't
 	// search's job to perform itself) and jumping the preview to the
 	// opened hit's line, which needs preview-owned wrap-cache state
 	// content search has no access to until the preview view is
@@ -110,7 +110,7 @@ type SearchView struct {
 // persists across close/reopen (Escape closes the overlay without
 // discarding it) and is only reset by the user explicitly clearing the
 // query themselves (backspacing it to empty, or typing a new one).
-func (v *SearchView) Open() {
+func (v *Search) Open() {
 	v.ErrorPath = ""
 }
 
@@ -120,7 +120,7 @@ func (v *SearchView) Open() {
 // Collapsed, so results are expanded by default). This is recomputed on
 // demand rather than cached, since it's cheap and only ever needed while
 // rendering or handling a keypress.
-func (v *SearchView) rows() []searchRow {
+func (v *Search) rows() []searchRow {
 	var rows []searchRow
 	for fi, r := range v.Results {
 		rows = append(rows, searchRow{file: fi})
@@ -138,7 +138,7 @@ func (v *SearchView) rows() []searchRow {
 // row at index i belongs to (SPEC.md §9.2), keeping the selection on
 // that same file's row so collapsing a file you're inside of doesn't
 // strand the selection.
-func (v *SearchView) toggleDisclosure(i int) {
+func (v *Search) toggleDisclosure(i int) {
 	rows := v.rows()
 	if i < 0 || i >= len(rows) {
 		return
@@ -154,7 +154,7 @@ func (v *SearchView) toggleDisclosure(i int) {
 
 // fileRowIndex returns the row index of the file row for Results[fi] in
 // the current flattened row list.
-func (v *SearchView) fileRowIndex(fi int) int {
+func (v *Search) fileRowIndex(fi int) int {
 	rows := v.rows()
 	for i, row := range rows {
 		if !row.isHit && row.file == fi {
@@ -178,7 +178,7 @@ func (v *SearchView) fileRowIndex(fi int) int {
 // goroutine regardless of mode — even a slow regex over a large tree
 // never blocks the UI thread, since results only arrive back via Done
 // in App.Run's main select loop.
-func (v *SearchView) RecomputeSearch() {
+func (v *Search) RecomputeSearch() {
 	v.cancel()
 	v.Selected = 0
 	v.Scroll = 0
@@ -232,7 +232,7 @@ func (v *SearchView) RecomputeSearch() {
 // way to reset a query short of backspacing it out one character at a
 // time. The regex-mode toggle is left as-is; it's a standing
 // preference, not part of the query being cleared.
-func (v *SearchView) clear() {
+func (v *Search) clear() {
 	v.Query = ""
 	v.RecomputeSearch()
 }
@@ -240,7 +240,7 @@ func (v *SearchView) clear() {
 // cancel stops any in-flight background scan without applying its
 // (now-stale) result, so superseding the query doesn't leave wasted
 // work running against a tree that could be large.
-func (v *SearchView) cancel() {
+func (v *Search) cancel() {
 	if v.Cancel != nil {
 		v.Cancel()
 		v.Cancel = nil
@@ -251,7 +251,7 @@ func (v *SearchView) cancel() {
 // by App.Run when one arrives on Done. Stale outcomes (superseded by a
 // newer query before this one finished) are discarded via the
 // generation check.
-func (v *SearchView) ApplyOutcome(out SearchOutcome) {
+func (v *Search) ApplyOutcome(out SearchOutcome) {
 	if out.gen != v.Gen {
 		return
 	}
@@ -271,7 +271,7 @@ func (v *SearchView) ApplyOutcome(out SearchOutcome) {
 // (SPEC.md §9.2). Unlike quick open/jump to file, space is never an
 // action key — it always types a literal space into the query, since
 // content search queries are plain text rather than path fragments.
-func (v *SearchView) HandleKey(ev *tcell.EventKey) {
+func (v *Search) HandleKey(ev *tcell.EventKey) {
 	switch {
 	case ev.Key() == tcell.KeyEscape:
 		// The query, results, and any still-running scan are deliberately
@@ -343,7 +343,7 @@ func (v *SearchView) HandleKey(ev *tcell.EventKey) {
 // just opened this way; the reveal-in-browser and jump-to-line side
 // effects are left for App's dispatcher via LastOpenedPath/Entry/Line
 // (see their doc comment).
-func (v *SearchView) performOpen() {
+func (v *Search) performOpen() {
 	rows := v.rows()
 	if v.Selected < 0 || v.Selected >= len(rows) {
 		return
@@ -378,7 +378,7 @@ func (v *SearchView) performOpen() {
 // directly below, and a two-level list — one row per matching file,
 // disclosing (unless collapsed) its own matching-line rows below it —
 // or a placeholder while there's nothing to show yet.
-func (v *SearchView) Draw(w, h int) {
+func (v *Search) Draw(w, h int) {
 	v.Canvas.DrawHeaderMode(w, "SEARCH", searchLegend)
 	prompt := "> "
 	if v.Regex {
@@ -464,7 +464,7 @@ func (v *SearchView) Draw(w, h int) {
 // file and shows its 1-based line number and (trimmed) text. The open
 // indicator is deliberately file-row-only, not repeated on each hit row
 // underneath, since "open" is a per-file fact.
-func (v *SearchView) rowLabel(row searchRow) string {
+func (v *Search) rowLabel(row searchRow) string {
 	r := v.Results[row.file]
 	if row.isHit {
 		h := r.Hits[row.hit]

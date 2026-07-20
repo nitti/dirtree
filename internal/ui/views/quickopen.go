@@ -25,11 +25,11 @@ var quickOpenLegend = []canvas.LegendEntry{
 	{Text: "[esc] cancel", Priority: 1},
 }
 
-// QuickOpenView holds the quick open overlay's state (SPEC.md §4.2): a
+// QuickOpen holds the quick open overlay's state (SPEC.md §4.2): a
 // live text filter over the background index (internal/index), reduced
 // to matching file entries only (directories can't be opened, but still
 // narrow the query via their own path text).
-type QuickOpenView struct {
+type QuickOpen struct {
 	*Shared
 
 	Query    string
@@ -61,7 +61,7 @@ type QuickOpenView struct {
 // OverlayQuickOpen. Per SPEC.md §5.2, opening it while indexing is
 // already done means the user has directly seen indexing is ready, so it
 // short-circuits the badge's minimum-display-duration floor.
-func (v *QuickOpenView) Open() {
+func (v *QuickOpen) Open() {
 	v.Query = ""
 	v.Selected = 0
 	v.recomputeMatches()
@@ -74,7 +74,7 @@ func (v *QuickOpenView) Open() {
 // mirroring Draw's own layout math (header row and query input row) so
 // Page-Up/Page-Down move by the same number of rows the list actually
 // shows.
-func (v *QuickOpenView) listHeight() int {
+func (v *QuickOpen) listHeight() int {
 	_, h := v.Canvas.Size()
 	return h - 2 // header row + query input row
 }
@@ -86,7 +86,7 @@ func (v *QuickOpenView) listHeight() int {
 // match-selection and scroll to the top" rule. Also clears any stale
 // open-failure recorded against the previous query's matches (§2.2),
 // since a new query can't say anything about it.
-func (v *QuickOpenView) recomputeMatches() {
+func (v *QuickOpen) recomputeMatches() {
 	v.Selected = 0
 	v.Scroll = 0
 	v.ErrorPath = ""
@@ -108,7 +108,7 @@ func (v *QuickOpenView) recomputeMatches() {
 // directory match still narrows the query via the query's own
 // substring/glob matching against every file's full path, so nothing is
 // lost by never surfacing the directory's own row.
-func (v *QuickOpenView) RefreshMatches() {
+func (v *QuickOpen) RefreshMatches() {
 	entries, done := v.Idx.Snapshot()
 	if !done {
 		v.Matches = nil
@@ -129,7 +129,7 @@ func (v *QuickOpenView) RefreshMatches() {
 // handleTypingKey handles quick open's navigation/query-editing keys
 // (SPEC.md §4.2), reporting whether it consumed the event; the caller
 // handles Escape and Enter itself.
-func (v *QuickOpenView) handleTypingKey(ev *tcell.EventKey) bool {
+func (v *QuickOpen) handleTypingKey(ev *tcell.EventKey) bool {
 	switch {
 	case ev.Key() == tcell.KeyDown:
 		if len(v.Matches) > 0 {
@@ -173,7 +173,7 @@ func (v *QuickOpenView) handleTypingKey(ev *tcell.EventKey) bool {
 // Escape returns to the primary preview view; `o` has no special meaning
 // here — it's a live text filter, and "o" is much too common a letter to
 // double as a close key without breaking ordinary typing.
-func (v *QuickOpenView) HandleKey(ev *tcell.EventKey) {
+func (v *QuickOpen) HandleKey(ev *tcell.EventKey) {
 	switch {
 	case ev.Key() == tcell.KeyEscape:
 		*v.Overlay = OverlayNone
@@ -192,7 +192,7 @@ func (v *QuickOpenView) HandleKey(ev *tcell.EventKey) {
 // that match's path (ErrorPath/ErrorMessage) and rendered inline on its
 // row by drawList, plus a brief red flash (§2.2, §5.3) — the same
 // treatment the browser's own open failures get.
-func (v *QuickOpenView) performOpen() {
+func (v *QuickOpen) performOpen() {
 	if len(v.Matches) == 0 {
 		return
 	}
@@ -212,7 +212,7 @@ func (v *QuickOpenView) performOpen() {
 // with its single action (Return opens the selected match), the query on
 // its own row directly below (the same input-row convention content
 // search uses, §9.2), and the flat match list.
-func (v *QuickOpenView) Draw(w, h int) {
+func (v *QuickOpen) Draw(w, h int) {
 	v.Canvas.DrawHeaderMode(w, "QUICK OPEN", quickOpenLegend)
 	v.Canvas.DrawText(0, 1, w, "> "+v.Query, canvas.StyleSearchInput)
 	v.drawList(w, h)
@@ -223,7 +223,7 @@ func (v *QuickOpenView) Draw(w, h int) {
 // failed-open match (§2.2) showing its failure message inline, appended
 // the same way tree.Node.Err is in the browser, and flashing red the
 // same brief window (§5.3).
-func (v *QuickOpenView) drawList(w, h int) {
+func (v *QuickOpen) drawList(w, h int) {
 	const listTop = 2
 	listHeight := h - listTop
 
