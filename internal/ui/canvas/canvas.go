@@ -86,7 +86,7 @@ const (
 // against its own legend tables.
 const (
 	MinTerminalWidth  = 58
-	MinTerminalHeight = 10
+	MinTerminalHeight = 15
 )
 
 var categoryStyles = map[preview.Category]tcell.Style{
