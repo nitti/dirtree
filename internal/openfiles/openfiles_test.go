@@ -97,6 +97,36 @@ func TestOpenOrdinaryFileSucceeds(t *testing.T) {
 	}
 }
 
+func TestOpenStartsBackgroundStreamForNewEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "ok.txt", []byte("hello\n"))
+
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	if l.Entries[0].Stream == nil {
+		t.Fatal("expected a background stream to be started for a newly-opened entry")
+	}
+}
+
+func TestReloadRestartsBackgroundStream(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", []byte("old\n"))
+
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	streamBefore := l.Entries[0].Stream
+
+	rewriteWithNewerMtime(t, path, []byte("new\n"))
+	l.Reload(preview.DefaultByteCap)
+
+	if l.Entries[0].Stream == nil {
+		t.Fatal("expected a background stream after reload")
+	}
+	if l.Entries[0].Stream == streamBefore {
+		t.Fatal("expected reload to start a fresh stream rather than reuse the stale one")
+	}
+}
+
 func TestOpenReusesExistingEntryWithoutRereading(t *testing.T) {
 	dir := t.TempDir()
 	path := writeFile(t, dir, "ok.txt", []byte("hello\n"))

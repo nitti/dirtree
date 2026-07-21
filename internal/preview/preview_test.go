@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeTemp(t *testing.T, content []byte) string {
@@ -374,6 +375,77 @@ func TestLoadOrdinaryFileSucceeds(t *testing.T) {
 	}
 	if len(res.Segs) != len(res.Lines) {
 		t.Fatalf("expected one segment list per line, got %d segs for %d lines", len(res.Segs), len(res.Lines))
+	}
+}
+
+func waitStreamDone(t *testing.T, s *StreamIndex) []int64 {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if offsets, _, done := s.Snapshot(); done {
+			return offsets
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("stream did not finish building in time")
+	return nil
+}
+
+func TestStreamIndexRecordsLineStartOffsets(t *testing.T) {
+	path := writeTemp(t, []byte("ab\ncde\nf\n"))
+	offsets := waitStreamDone(t, StartStream(path))
+	want := []int64{0, 3, 7}
+	if len(offsets) != len(want) {
+		t.Fatalf("got %v, want %v", offsets, want)
+	}
+	for i := range want {
+		if offsets[i] != want[i] {
+			t.Fatalf("got %v, want %v", offsets, want)
+		}
+	}
+}
+
+func TestStreamIndexNoTrailingNewlineStillRecordsLastLine(t *testing.T) {
+	path := writeTemp(t, []byte("ab\ncde"))
+	offsets := waitStreamDone(t, StartStream(path))
+	want := []int64{0, 3}
+	if len(offsets) != len(want) || offsets[0] != want[0] || offsets[1] != want[1] {
+		t.Fatalf("got %v, want %v", offsets, want)
+	}
+}
+
+func TestStreamIndexEmptyFileRecordsSingleLine(t *testing.T) {
+	path := writeTemp(t, []byte(""))
+	offsets := waitStreamDone(t, StartStream(path))
+	if len(offsets) != 1 || offsets[0] != 0 {
+		t.Fatalf("expected a single offset at 0 for an empty file, got %v", offsets)
+	}
+}
+
+func TestStreamIndexNonexistentFileFinishesDoneWithNoOffsets(t *testing.T) {
+	dir := t.TempDir()
+	offsets := waitStreamDone(t, StartStream(filepath.Join(dir, "nope.txt")))
+	if len(offsets) != 0 {
+		t.Fatalf("expected no offsets for a file that can't be opened, got %v", offsets)
+	}
+}
+
+func TestStreamIndexSinceDoneReportsZeroUntilFinished(t *testing.T) {
+	// Constructed directly (bypassing StartStream) rather than checking
+	// SinceDone immediately after a real StartStream call: on a small
+	// file the background goroutine can finish before control returns to
+	// the test, so racing it would make this assertion flaky rather than
+	// meaningful (same rationale as internal/index's own SinceDone test).
+	notYetStarted := &StreamIndex{startTime: time.Now()}
+	if d := notYetStarted.SinceDone(); d != 0 {
+		t.Fatalf("expected SinceDone to report 0 before the pass has finished, got %v", d)
+	}
+
+	path := writeTemp(t, []byte("a\nb\n"))
+	s := StartStream(path)
+	waitStreamDone(t, s)
+	if d := s.SinceDone(); d < 0 {
+		t.Fatalf("expected a non-negative elapsed duration once done, got %v", d)
 	}
 }
 

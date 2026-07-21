@@ -5,12 +5,63 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/ui/canvas"
 )
+
+// TestGotoLineBlockedOnlyWhenStreamPresentAndNotDone verifies the pure
+// decision behind goto-line's block/allow gating (SPEC.md §2.1,
+// docs/STREAMING_PREVIEW_DESIGN.md §4): blocked only while a stream is
+// present and hasn't finished; absent a stream at all, or once it's
+// done, goto-line proceeds normally.
+func TestGotoLineBlockedOnlyWhenStreamPresentAndNotDone(t *testing.T) {
+	cases := []struct {
+		name                      string
+		streamPresent, streamDone bool
+		want                      bool
+	}{
+		{"no stream tracked", false, false, false},
+		{"stream present, not done", true, false, true},
+		{"stream present, done", true, true, false},
+	}
+	for _, c := range cases {
+		if got := gotoLineBlocked(c.streamPresent, c.streamDone); got != c.want {
+			t.Errorf("%s: gotoLineBlocked(%v, %v) = %v, want %v", c.name, c.streamPresent, c.streamDone, got, c.want)
+		}
+	}
+}
+
+// TestStreamBuildingVisible exercises the file-legend spinner's
+// show/hide decision (SPEC.md §5.3's perceptibility-threshold and
+// minimum-display-duration discipline, applied here the same way
+// spinner.BadgeDecision applies it to the corner badge).
+func TestStreamBuildingVisible(t *testing.T) {
+	const threshold = 250 * time.Millisecond
+	const minDisplay = 1 * time.Second
+
+	cases := []struct {
+		name               string
+		elapsed, sinceDone time.Duration
+		done               bool
+		want               bool
+	}{
+		{"running, under threshold", 100 * time.Millisecond, 0, false, false},
+		{"running, at threshold", threshold, 0, false, true},
+		{"running, well past threshold", 5 * time.Second, 0, false, true},
+		{"done before threshold ever crossed", 100 * time.Millisecond, 100 * time.Millisecond, true, false},
+		{"done just after threshold, before min display elapses", 300 * time.Millisecond, 50 * time.Millisecond, true, true},
+		{"done, min display duration fully elapsed", 2 * time.Second, 1500 * time.Millisecond, true, false},
+	}
+	for _, c := range cases {
+		if got := streamBuildingVisible(c.elapsed, c.sinceDone, c.done, threshold, minDisplay); got != c.want {
+			t.Errorf("%s: streamBuildingVisible(elapsed=%v, sinceDone=%v, done=%v) = %v, want %v", c.name, c.elapsed, c.sinceDone, c.done, got, c.want)
+		}
+	}
+}
 
 // TestPreviewLegendsTier1FitMinTerminalWidth guards SPEC.md §6.4's
 // minimum terminal size against §5.2's legend tiering: each of the
