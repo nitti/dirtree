@@ -18,16 +18,33 @@ import (
 // content, and its own independent scroll/goto-line/in-file-find state
 // (SPEC.md §2.1, §2.2, §2.4).
 type Entry struct {
-	Path  string
-	Lines []string
-	Segs  [][]preview.Segment
+	Path string
 
-	// Stream is the background line-offset index kicked off when this
-	// entry was opened (docs/STREAMING_PREVIEW_DESIGN.md §3, §4). Reading
-	// and highlighting above are unaffected by it for now — Stream exists
-	// so goto-line can gate itself on a completed pass (SPEC.md §2.1) and
-	// the file title bar can show a "building…" indicator (SPEC.md §5.2)
-	// while it's running.
+	// Tier is decided once, at open time, from the file's size (SPEC.md
+	// §2.1's ceiling) and never changes for this entry's lifetime,
+	// including across a reload (docs/STREAMING_PREVIEW_DESIGN.md §2).
+	Tier preview.Tier
+
+	// Lines/Segs hold this entry's resident content. For a
+	// preview.TierHighlighted entry, this is the whole file, populated
+	// from Stream once its background pass finishes (nil until then).
+	// For a preview.TierPlainText entry, this is only the current
+	// on-screen window — refetched as scrolling moves outside it — and
+	// WindowStartLine is the 0-based count of source lines before
+	// Lines[0] (always 0 for TierHighlighted, whose Lines always starts
+	// at the file's first line).
+	Lines           []string
+	Segs            [][]preview.Segment
+	WindowStartLine int
+
+	// Stream is the background pass kicked off when this entry was
+	// opened (docs/STREAMING_PREVIEW_DESIGN.md §3, §4): it builds the
+	// line-offset index unconditionally, and — for a TierHighlighted
+	// entry — the full decoded/highlighted content consumed into
+	// Lines/Segs above once done. It's what goto-line gates itself on
+	// (SPEC.md §2.1), what the file title bar's "building…" indicator
+	// reflects (SPEC.md §5.2), and, for TierPlainText, what windowed
+	// reads seek through (§8).
 	Stream *preview.StreamIndex
 
 	// ModTime is the file's mtime as of the last successful load or
@@ -109,13 +126,37 @@ func (l *List) DisplayedEntry() *Entry {
 	return l.Entries[l.Displayed]
 }
 
+// SyncContent copies a TierHighlighted entry's full decoded/highlighted
+// content out of its background stream into Lines/Segs, once that
+// pass has finished — a no-op if Lines is already populated, if the
+// stream isn't done yet, or if e is TierPlainText, which never builds
+// full content in the stream at all (docs/STREAMING_PREVIEW_DESIGN.md
+// §2, §8). Safe to call every frame; callers (the preview view, and
+// tests that need to observe reloaded content) call it before reading
+// Lines/Segs rather than assuming Open/Reload populated them
+// synchronously, since that work now happens in the background.
+func (e *Entry) SyncContent() {
+	if e.Tier != preview.TierHighlighted || e.Lines != nil || e.Stream == nil {
+		return
+	}
+	lines, segs := e.Stream.Content()
+	if lines == nil {
+		return
+	}
+	e.Lines = lines
+	e.Segs = segs
+}
+
 // Open implements SPEC.md §2.2's open semantics for a resolved absolute
 // path: reuse an existing entry without re-reading or moving it if the
-// path is already open; otherwise read/highlight the file (capBytes is
-// the byte cap, SPEC.md §2.1) and, on success, append a new entry at
-// the end with scroll reset to the top and mark it displayed. A read
-// error or binary content is a failed result: no entry is created and
-// the currently-displayed entry (if any) is left unchanged.
+// path is already open; otherwise check the file (capBytes bounds this
+// check, SPEC.md §2.1) for a read error or binary content — a failed
+// result, with no entry created and the currently-displayed entry (if
+// any) left unchanged — and, if it passes, decide the new entry's tier
+// from its size (docs/STREAMING_PREVIEW_DESIGN.md §5) and start its
+// background content/index pass (§3, §4) rather than reading/
+// highlighting synchronously here: the entry appears immediately and
+// lights up once that pass reports progress (SPEC.md §2.1, §5.2).
 func (l *List) Open(path string, capBytes int64) OpenResult {
 	for i, e := range l.Entries {
 		if e.Path == path {
@@ -124,16 +165,22 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 		}
 	}
 
-	res := preview.Load(path, capBytes)
-	if res.Failed {
-		return OpenResult{Outcome: Failed, Message: res.Message}
+	_, binary, err := preview.ReadCapped(path, capBytes)
+	if err != nil {
+		return OpenResult{Outcome: Failed, Message: preview.ErrText(err)}
+	}
+	if binary {
+		return OpenResult{Outcome: Failed, Message: "binary file, preview not available"}
 	}
 
-	e := &Entry{Path: path, Lines: res.Lines, Segs: res.Segs, FindCurrent: -1}
+	e := &Entry{Path: path, FindCurrent: -1}
+	var size int64
 	if info, err := os.Stat(path); err == nil {
 		e.ModTime = info.ModTime()
+		size = info.Size()
 	}
-	e.Stream = preview.StartStream(path)
+	e.Tier = preview.TierFor(size)
+	e.Stream = preview.StartStream(path, e.Tier)
 	l.Entries = append(l.Entries, e)
 	l.Displayed = len(l.Entries) - 1
 	return OpenResult{Outcome: Opened, Entry: e}
@@ -163,14 +210,18 @@ func (l *List) Reload(capBytes int64) []string {
 		if err != nil || info.ModTime().Equal(e.ModTime) {
 			continue
 		}
-		res := preview.Load(e.Path, capBytes)
-		if res.Failed {
+		if _, binary, err := preview.ReadCapped(e.Path, capBytes); err != nil || binary {
 			continue
 		}
-		e.Lines = res.Lines
-		e.Segs = res.Segs
+		e.Lines = nil
+		e.Segs = nil
+		e.WindowStartLine = 0
 		e.ModTime = info.ModTime()
-		e.Stream = preview.StartStream(e.Path)
+		// Tier is not re-decided on reload (docs/STREAMING_PREVIEW_DESIGN.md
+		// §2's "no promotion" rule extended across reloads too): a file
+		// that grows or shrinks past the ceiling between reloads keeps
+		// whatever tier it was opened with for the rest of the session.
+		e.Stream = preview.StartStream(e.Path, e.Tier)
 		e.Rows = nil
 		e.FirstRow = nil
 		e.RowsWidth = 0

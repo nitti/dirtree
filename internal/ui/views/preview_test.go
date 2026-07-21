@@ -1,6 +1,7 @@
 package views
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/nitti/dirtree/internal/openfiles"
+	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/ui/canvas"
 )
 
@@ -110,6 +112,7 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %s", res.Message)
 	}
+	waitEntryReady(t, files.DisplayedEntry())
 	v.GotoPromptOpen = true
 	v.GotoInput = "2"
 
@@ -124,6 +127,122 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 		if !strings.Contains(row, want) {
 			t.Errorf("goto-line row = %q, missing legend entry %q", row, want)
 		}
+	}
+}
+
+// waitEntryReady blocks until e's content is ready to render (its
+// background stream pass has finished and, for TierHighlighted, been
+// synced into Lines/Segs) — the real app never opens the goto-line
+// prompt or scrolls before this point either (contentReady/gotoLineBlocked
+// gate on the same signal), so tests exercising rendering/scrolling
+// against a freshly-opened entry wait for it the same way.
+func waitEntryReady(t *testing.T, e *openfiles.Entry) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if contentReady(e) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("entry's background stream did not finish in time")
+}
+
+// openTierPlainText forces path (which is created with numLines lines
+// "line 1".."line N") to open as TierPlainText regardless of its actual
+// (tiny, test-fixture-sized) content, by temporarily zeroing
+// preview.HighlightCeiling — the same technique the openfiles package's
+// own tier tests use, so Tier B's windowed-read/scroll logic can be
+// exercised without a real multi-megabyte fixture. Restores the ceiling
+// via t.Cleanup.
+func openTierPlainText(t *testing.T, numLines int) (*openfiles.List, *openfiles.Entry) {
+	t.Helper()
+	orig := preview.HighlightCeiling
+	preview.HighlightCeiling = 0
+	t.Cleanup(func() { preview.HighlightCeiling = orig })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.txt")
+	var content strings.Builder
+	for i := 1; i <= numLines; i++ {
+		fmt.Fprintf(&content, "line %d\n", i)
+	}
+	if err := os.WriteFile(path, []byte(content.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files := openfiles.New()
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	e := files.DisplayedEntry()
+	if e.Tier != preview.TierPlainText {
+		t.Fatalf("expected TierPlainText, got %v", e.Tier)
+	}
+	waitEntryReady(t, e)
+	return files, e
+}
+
+func newTestPreview(files *openfiles.List, w, h int) *Preview {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		panic(err)
+	}
+	sim.SetSize(w, h)
+	return &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
+}
+
+func TestTierPlainTextWindowStartsAtFirstLine(t *testing.T) {
+	files, e := openTierPlainText(t, 10)
+	v := newTestPreview(files, 60, 10)
+
+	v.drawContent(0, 0, 60, 10)
+	if e.WindowStartLine != 0 {
+		t.Fatalf("expected window to start at line 0, got %d", e.WindowStartLine)
+	}
+	if len(e.Lines) == 0 || e.Lines[0] != "line 1" {
+		t.Fatalf("expected window to start with 'line 1', got %v", e.Lines)
+	}
+}
+
+func TestTierPlainTextScrollMovesBySourceLine(t *testing.T) {
+	files, e := openTierPlainText(t, 50)
+	v := newTestPreview(files, 60, 10)
+	v.drawContent(0, 0, 60, 10)
+
+	v.scroll(3)
+	if got := currentTopLine(e); got != 4 {
+		t.Fatalf("expected top line 4 after scrolling 3, got %d", got)
+	}
+}
+
+func TestTierPlainTextGotoLineJumpsViaWindow(t *testing.T) {
+	files, e := openTierPlainText(t, 50)
+	v := newTestPreview(files, 60, 10)
+
+	v.ScrollToLine(e, 7)
+	if got := currentTopLine(e); got != 7 {
+		t.Fatalf("expected top line 7 after ScrollToLine(7), got %d", got)
+	}
+	if e.Lines[e.Scroll] != "line 7" {
+		t.Fatalf("expected line 7 at the scrolled-to row, got %q", e.Lines[e.Scroll])
+	}
+}
+
+func TestTierPlainTextFindKeyIsNoOp(t *testing.T) {
+	files, _ := openTierPlainText(t, 10)
+	v := newTestPreview(files, 60, 10)
+
+	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, '/', tcell.ModNone))
+	if v.FindPromptOpen {
+		t.Fatal("expected `/` to be a no-op on a TierPlainText entry (find not yet implemented for it)")
+	}
+}
+
+func TestGutterWidthUsesExactCountOnceTierPlainTextStreamDone(t *testing.T) {
+	_, e := openTierPlainText(t, 10)
+	if got := gutterWidth(e); got != canvas.GutterWidth(10) {
+		t.Fatalf("expected gutter sized off the exact final line count once done, got %d want %d", got, canvas.GutterWidth(10))
 	}
 }
 

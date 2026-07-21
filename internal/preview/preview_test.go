@@ -393,7 +393,7 @@ func waitStreamDone(t *testing.T, s *StreamIndex) []int64 {
 
 func TestStreamIndexRecordsLineStartOffsets(t *testing.T) {
 	path := writeTemp(t, []byte("ab\ncde\nf\n"))
-	offsets := waitStreamDone(t, StartStream(path))
+	offsets := waitStreamDone(t, StartStream(path, TierPlainText))
 	want := []int64{0, 3, 7}
 	if len(offsets) != len(want) {
 		t.Fatalf("got %v, want %v", offsets, want)
@@ -407,7 +407,7 @@ func TestStreamIndexRecordsLineStartOffsets(t *testing.T) {
 
 func TestStreamIndexNoTrailingNewlineStillRecordsLastLine(t *testing.T) {
 	path := writeTemp(t, []byte("ab\ncde"))
-	offsets := waitStreamDone(t, StartStream(path))
+	offsets := waitStreamDone(t, StartStream(path, TierPlainText))
 	want := []int64{0, 3}
 	if len(offsets) != len(want) || offsets[0] != want[0] || offsets[1] != want[1] {
 		t.Fatalf("got %v, want %v", offsets, want)
@@ -416,7 +416,7 @@ func TestStreamIndexNoTrailingNewlineStillRecordsLastLine(t *testing.T) {
 
 func TestStreamIndexEmptyFileRecordsSingleLine(t *testing.T) {
 	path := writeTemp(t, []byte(""))
-	offsets := waitStreamDone(t, StartStream(path))
+	offsets := waitStreamDone(t, StartStream(path, TierPlainText))
 	if len(offsets) != 1 || offsets[0] != 0 {
 		t.Fatalf("expected a single offset at 0 for an empty file, got %v", offsets)
 	}
@@ -424,7 +424,7 @@ func TestStreamIndexEmptyFileRecordsSingleLine(t *testing.T) {
 
 func TestStreamIndexNonexistentFileFinishesDoneWithNoOffsets(t *testing.T) {
 	dir := t.TempDir()
-	offsets := waitStreamDone(t, StartStream(filepath.Join(dir, "nope.txt")))
+	offsets := waitStreamDone(t, StartStream(filepath.Join(dir, "nope.txt"), TierPlainText))
 	if len(offsets) != 0 {
 		t.Fatalf("expected no offsets for a file that can't be opened, got %v", offsets)
 	}
@@ -442,10 +442,114 @@ func TestStreamIndexSinceDoneReportsZeroUntilFinished(t *testing.T) {
 	}
 
 	path := writeTemp(t, []byte("a\nb\n"))
-	s := StartStream(path)
+	s := StartStream(path, TierPlainText)
 	waitStreamDone(t, s)
 	if d := s.SinceDone(); d < 0 {
 		t.Fatalf("expected a non-negative elapsed duration once done, got %v", d)
+	}
+}
+
+func TestTierForAtOrUnderCeilingIsHighlighted(t *testing.T) {
+	orig := HighlightCeiling
+	defer func() { HighlightCeiling = orig }()
+	HighlightCeiling = 100
+
+	if got := TierFor(100); got != TierHighlighted {
+		t.Errorf("TierFor(100) with ceiling 100 = %v, want TierHighlighted", got)
+	}
+	if got := TierFor(0); got != TierHighlighted {
+		t.Errorf("TierFor(0) = %v, want TierHighlighted", got)
+	}
+}
+
+func TestTierForOverCeilingIsPlainText(t *testing.T) {
+	orig := HighlightCeiling
+	defer func() { HighlightCeiling = orig }()
+	HighlightCeiling = 100
+
+	if got := TierFor(101); got != TierPlainText {
+		t.Errorf("TierFor(101) with ceiling 100 = %v, want TierPlainText", got)
+	}
+}
+
+func waitContentSynced(t *testing.T, s *StreamIndex) (lines []string, segs [][]Segment) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if lines, segs = s.Content(); lines != nil {
+			return lines, segs
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("stream's highlighted content did not finish building in time")
+	return nil, nil
+}
+
+func TestStreamIndexTierHighlightedBuildsFullContent(t *testing.T) {
+	path := writeTemp(t, []byte("package main\n\nfunc main() {}\n"))
+	s := StartStream(path, TierHighlighted)
+	lines, segs := waitContentSynced(t, s)
+	want := []string{"package main", "", "func main() {}"}
+	if len(lines) != len(want) {
+		t.Fatalf("got %v, want %v", lines, want)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Fatalf("got %v, want %v", lines, want)
+		}
+	}
+	if len(segs) != len(lines) {
+		t.Fatalf("expected one segment list per line, got %d segs for %d lines", len(segs), len(lines))
+	}
+}
+
+func TestStreamIndexTierPlainTextBuildsNoContent(t *testing.T) {
+	path := writeTemp(t, []byte("a\nb\n"))
+	s := StartStream(path, TierPlainText)
+	waitStreamDone(t, s)
+	if lines, segs := s.Content(); lines != nil || segs != nil {
+		t.Fatalf("expected no content built for a TierPlainText stream, got lines=%v segs=%v", lines, segs)
+	}
+}
+
+func TestReadWindowSeeksToRequestedStartLine(t *testing.T) {
+	path := writeTemp(t, []byte("one\ntwo\nthree\nfour\nfive\n"))
+	offsets := waitStreamDone(t, StartStream(path, TierPlainText))
+
+	lines, err := ReadWindow(path, offsets, 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"three", "four"}
+	if len(lines) != len(want) || lines[0] != want[0] || lines[1] != want[1] {
+		t.Fatalf("got %v, want %v", lines, want)
+	}
+}
+
+func TestReadWindowTruncatesAtEndOfFile(t *testing.T) {
+	path := writeTemp(t, []byte("one\ntwo\nthree\n"))
+	offsets := waitStreamDone(t, StartStream(path, TierPlainText))
+
+	lines, err := ReadWindow(path, offsets, 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"two", "three"}
+	if len(lines) != len(want) || lines[0] != want[0] || lines[1] != want[1] {
+		t.Fatalf("got %v, want %v", lines, want)
+	}
+}
+
+func TestReadWindowPastEndOfFileReturnsNoLines(t *testing.T) {
+	path := writeTemp(t, []byte("one\ntwo\n"))
+	offsets := waitStreamDone(t, StartStream(path, TierPlainText))
+
+	lines, err := ReadWindow(path, offsets, 5, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 0 {
+		t.Fatalf("expected no lines past the end of file, got %v", lines)
 	}
 }
 
