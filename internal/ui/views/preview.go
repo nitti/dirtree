@@ -3,15 +3,31 @@ package views
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/nitti/dirtree/internal/find"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
+	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/tree"
 	"github.com/nitti/dirtree/internal/ui/canvas"
 )
+
+// streamSpinnerMinDisplayDuration mirrors the corner badge's own
+// minimum-display-duration floor (internal/ui's spinnerMinDisplayDuration,
+// SPEC.md §5.2/§5.3): once the file-legend "building…" indicator has
+// crossed the perceptibility threshold, it stays legible for at least
+// this long even if the background stream pass finishes sooner. Kept as
+// its own constant rather than importing the ui package's (which would
+// create an import cycle, since ui already imports views) — same value,
+// same rationale, one per animated indicator.
+const streamSpinnerMinDisplayDuration = 1 * time.Second
+
+// goto-line's block-flash color reuses canvas.FlashDuration (SPEC.md
+// §5.2's red-flash convention, applied here to the file title bar rather
+// than a list row).
 
 // fileLegend lists actions specific to the currently-displayed file (as
 // opposed to app-wide navigation), shown in the file title bar rather
@@ -100,6 +116,20 @@ type Preview struct {
 	GotoPromptOpen bool
 	GotoInput      string
 
+	// GotoBlockedPath/GotoBlockedFlashStart track a `g` pressed while the
+	// displayed entry's background stream pass (docs/STREAMING_PREVIEW_
+	// DESIGN.md §4) isn't done yet: the goto-line prompt doesn't open at
+	// all, and the file title bar instead flashes red and shows an
+	// inline "still indexing" message, the same red-flash-plus-inline-
+	// message convention SPEC.md §2.2/§5.2 already uses for a failed file
+	// open. GotoBlockedPath is keyed by path so switching to a different
+	// entry doesn't carry a stale flash/message over; the message itself
+	// is shown only while that same entry's stream is still not done —
+	// once the pass finishes, the reason for it no longer holds, so it
+	// stops being shown without needing anything to explicitly clear it.
+	GotoBlockedPath       string
+	GotoBlockedFlashStart time.Time
+
 	FindPromptOpen bool
 	FindInput      string
 }
@@ -148,9 +178,14 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 	case ev.Key() == tcell.KeyPgDn:
 		v.scroll(v.viewportHeight())
 	case ev.Rune() == 'g':
-		if v.Files.DisplayedEntry() != nil {
-			v.GotoPromptOpen = true
-			v.GotoInput = ""
+		if e := v.Files.DisplayedEntry(); e != nil {
+			if gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done()) {
+				v.GotoBlockedPath = e.Path
+				v.GotoBlockedFlashStart = time.Now()
+			} else {
+				v.GotoPromptOpen = true
+				v.GotoInput = ""
+			}
 		}
 	case ev.Rune() == '/':
 		if v.Files.DisplayedEntry() != nil {
@@ -504,12 +539,16 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 		left = "[copy mode] " + rel
 	}
 
+	gotoBlocked := interactive && v.GotoBlockedPath == e.Path && gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done())
+
 	var text string
 	switch {
 	case interactive && v.FindPromptOpen:
 		text = canvas.LegendText(w, "/"+v.FindInput, findPromptLegend)
 	case !interactive:
 		text = left
+	case gotoBlocked:
+		text = canvas.LegendText(w, left, withStatus("still indexing, try again shortly", nil))
 	case e.FindQuery != "" && len(e.FindMatches) > 0:
 		text = canvas.LegendText(w, left, withStatus(findStatusText(e), findLegend))
 	case e.FindQuery != "":
@@ -517,15 +556,90 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	case e.CopyMode:
 		text = canvas.LegendText(w, left, fileLegendCopyModeOn)
 	default:
-		text = canvas.LegendText(w, rel, fileLegend)
+		text = canvas.LegendText(w, rel, v.fileLegendForIdle(e))
 	}
 
 	style := canvas.StyleFileTitle
-	if e.CopyMode {
+	switch {
+	case e.CopyMode:
 		style = canvas.StyleCopyModeTitle
+	case gotoBlocked && time.Since(v.GotoBlockedFlashStart) < canvas.FlashDuration:
+		style = canvas.StyleFlashError
 	}
 	v.Canvas.DrawText(x0, y0, w, text, style)
 	return 1
+}
+
+// fileLegendForIdle returns the idle file title bar's legend for e: the
+// normal fileLegend, or fileLegend with its `[g] goto line` entry
+// replaced by a "building…" spinner while e's background stream pass is
+// running and has crossed the perceptibility threshold
+// (docs/STREAMING_PREVIEW_DESIGN.md §7) — reusing the corner badge's own
+// threshold/minimum-display-duration discipline (SPEC.md §5.3) rather
+// than inventing new timing rules for this second indicator.
+func (v *Preview) fileLegendForIdle(e *openfiles.Entry) []canvas.LegendEntry {
+	if e.Stream == nil {
+		return fileLegend
+	}
+	elapsed, sinceDone, done := e.Stream.Elapsed(), e.Stream.SinceDone(), e.Stream.Done()
+	if !streamBuildingVisible(elapsed, sinceDone, done, canvas.SpinnerThreshold, streamSpinnerMinDisplayDuration) {
+		return fileLegend
+	}
+	frame := spinner.Frame(elapsed, canvas.SpinnerFPS, spinner.DefaultFrames)
+	return buildingLegend(frame)
+}
+
+// buildingLegend is fileLegend with its goto-line entry swapped for a
+// "building…" spinner (docs/STREAMING_PREVIEW_DESIGN.md §7) — goto-line
+// isn't available while this is showing (SPEC.md §2.1), so advertising
+// it here would be misleading the same way the rest of the app never
+// lists a key that currently does nothing.
+func buildingLegend(frame rune) []canvas.LegendEntry {
+	return []canvas.LegendEntry{
+		{Text: "[/] find", Priority: 1},
+		{Text: "building " + string(frame), Priority: 2},
+		{Text: "[c] copy mode", Priority: 2},
+	}
+}
+
+// gotoLineBlocked reports whether goto-line should be blocked because
+// the displayed entry's background stream pass hasn't finished yet
+// (SPEC.md §2.1, docs/STREAMING_PREVIEW_DESIGN.md §4): pressing `g`
+// doesn't open the prompt at all in that case. A pure function of just
+// "is a stream present" and "is it done" (rather than taking
+// *preview.StreamIndex directly) so it's testable without spinning up a
+// real background pass — streamPresent false (no stream tracked at all)
+// never blocks.
+func gotoLineBlocked(streamPresent, streamDone bool) bool {
+	return streamPresent && !streamDone
+}
+
+// streamBuildingVisible is fileLegendForIdle's show/hide decision as a
+// pure function of elapsed/sinceDone durations (SPEC.md §5.3's "unit-
+// testable without real elapsed wall-clock time" discipline), the same
+// shape spinner.BadgeDecision uses for the corner badge's own spinner
+// phase — simplified since this indicator has no completion-message/
+// fade-out phase of its own (docs/STREAMING_PREVIEW_DESIGN.md §7): once
+// both done and the minimum display duration have been satisfied, it
+// just reverts straight to the normal legend.
+func streamBuildingVisible(elapsed, sinceDone time.Duration, done bool, threshold, minDisplayDuration time.Duration) bool {
+	doneAt := elapsed - sinceDone
+	var crossedThreshold bool
+	if done {
+		crossedThreshold = doneAt >= threshold
+	} else {
+		crossedThreshold = elapsed >= threshold
+	}
+	if !crossedThreshold {
+		return false
+	}
+	if !done {
+		return true
+	}
+	if doneAt < minDisplayDuration {
+		doneAt = minDisplayDuration
+	}
+	return elapsed < doneAt
 }
 
 // withStatus prepends a synthetic, always-shown (priority 1) legend

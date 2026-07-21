@@ -26,6 +26,17 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - `build_display_rows` assigns the source line number only to each source line's first wrapped row; continuation rows carry no line number.
 - `build_display_rows`'s returned line→display-row index correctly points at the first display row for every source line, including source lines that wrapped into multiple rows.
 
+## Background line-offset index / goto-line gating (§2.1, §5.2, §5.3)
+
+- The background line-offset pass records the byte offset of the start of every line in a normal small text file.
+- The pass still records the last line's offset when the file has no trailing newline.
+- An empty file's pass still records a single offset (matching reading's own "empty result set becomes a single empty line" rule).
+- A file that can't be opened for the pass (deleted, permission denied) still finishes as "done," with no offsets recorded, rather than hanging.
+- `SinceDone` reports zero while the pass hasn't finished, and a non-negative duration once it has.
+- Opening a new entry starts a background stream for it; reloading an entry (§6.1a) starts a fresh stream rather than reusing the stale one.
+- Goto-line's block/allow decision is blocked exactly when a stream is present and not yet done, and allowed both when no stream is tracked at all and once the stream is done.
+- The file-legend "building…" spinner's show/hide decision follows the same perceptibility-threshold and minimum-display-duration rules as the corner badge (boundary-tested at the threshold and at the minimum display duration), reverting to the normal legend once both are satisfied — with no completion-message/fade-out phase of its own.
+
 ## Open-failure detection at open time (§2.2)
 
 - Opening a path not already in the open-files list, whose read bytes contain a NUL byte, returns a "failed" result with the message "binary file, preview not available": no entry is created, and the previously-displayed entry (if any) is unaffected.
@@ -248,6 +259,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Reloading mutates the existing `*Entry` in place rather than replacing it, and leaves the open-files list's order and displayed index exactly as they were.
 - An open file that's deleted (or otherwise fails to re-read, e.g. permission lost or now binary) between opens is skipped by reload — its last-known content is left untouched and it is not reported as reloaded, rather than the entry being cleared or removed.
 - A reload invalidates the entry's line-wrap cache (`Rows`/`FirstRow`/`RowsWidth`) and clears its in-file find state (`FindQuery`/`FindMatches`/`FindCurrent`/`FindWrapNote`), since both are derived from content that just changed.
+- A reload also restarts the entry's background line-offset stream (§2.1) rather than reusing the one from before the reload.
 
 ## Legend fit/drop order (§5.2)
 

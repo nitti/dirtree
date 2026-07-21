@@ -22,6 +22,14 @@ type Entry struct {
 	Lines []string
 	Segs  [][]preview.Segment
 
+	// Stream is the background line-offset index kicked off when this
+	// entry was opened (docs/STREAMING_PREVIEW_DESIGN.md §3, §4). Reading
+	// and highlighting above are unaffected by it for now — Stream exists
+	// so goto-line can gate itself on a completed pass (SPEC.md §2.1) and
+	// the file title bar can show a "building…" indicator (SPEC.md §5.2)
+	// while it's running.
+	Stream *preview.StreamIndex
+
 	// ModTime is the file's mtime as of the last successful load or
 	// reload (SPEC.md §6.1a), used by Reload to detect whether the file
 	// has changed on disk since without re-reading its content on every
@@ -125,6 +133,7 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 	if info, err := os.Stat(path); err == nil {
 		e.ModTime = info.ModTime()
 	}
+	e.Stream = preview.StartStream(path)
 	l.Entries = append(l.Entries, e)
 	l.Displayed = len(l.Entries) - 1
 	return OpenResult{Outcome: Opened, Entry: e}
@@ -161,6 +170,7 @@ func (l *List) Reload(capBytes int64) []string {
 		e.Lines = res.Lines
 		e.Segs = res.Segs
 		e.ModTime = info.ModTime()
+		e.Stream = preview.StartStream(e.Path)
 		e.Rows = nil
 		e.FirstRow = nil
 		e.RowsWidth = 0
