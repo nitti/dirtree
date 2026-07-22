@@ -155,7 +155,7 @@ func TestOpenOverCeilingIsTierPlainText(t *testing.T) {
 	}
 }
 
-func TestReloadKeepsEntrysOriginalTierRegardlessOfNewSize(t *testing.T) {
+func TestReloadPromotesEntryWhenShrunkUnderCeiling(t *testing.T) {
 	orig := preview.HighlightCeiling
 	defer func() { preview.HighlightCeiling = orig }()
 	preview.HighlightCeiling = 4
@@ -172,8 +172,62 @@ func TestReloadKeepsEntrysOriginalTierRegardlessOfNewSize(t *testing.T) {
 	// ...then rewritten small enough to now be under the ceiling.
 	rewriteWithNewerMtime(t, path, []byte("hi\n"))
 	l.Reload(preview.DefaultByteCap)
+	if l.Entries[0].Tier != preview.TierHighlighted {
+		t.Fatalf("expected reload to re-decide tier from the new size (promotion to TierHighlighted), got %v", l.Entries[0].Tier)
+	}
+}
+
+func TestReloadDemotesEntryWhenGrownOverCeiling(t *testing.T) {
+	orig := preview.HighlightCeiling
+	defer func() { preview.HighlightCeiling = orig }()
+	preview.HighlightCeiling = 4
+
+	dir := t.TempDir()
+	// Opened at/under the ceiling (TierHighlighted)...
+	path := writeFile(t, dir, "a.txt", []byte("hi\n"))
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	if l.Entries[0].Tier != preview.TierHighlighted {
+		t.Fatalf("expected TierHighlighted at open, got %v", l.Entries[0].Tier)
+	}
+
+	// ...then rewritten large enough to now be over the ceiling.
+	rewriteWithNewerMtime(t, path, []byte("hello world\n"))
+	l.Reload(preview.DefaultByteCap)
 	if l.Entries[0].Tier != preview.TierPlainText {
-		t.Fatalf("expected tier to stay TierPlainText across a reload (no promotion), got %v", l.Entries[0].Tier)
+		t.Fatalf("expected reload to re-decide tier from the new size (demotion to TierPlainText), got %v", l.Entries[0].Tier)
+	}
+}
+
+func TestReloadResetsScrollWhenTierFlips(t *testing.T) {
+	orig := preview.HighlightCeiling
+	defer func() { preview.HighlightCeiling = orig }()
+	preview.HighlightCeiling = 4
+
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", []byte("hello\n"))
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	l.Entries[0].Scroll = 42
+
+	rewriteWithNewerMtime(t, path, []byte("hi\n"))
+	l.Reload(preview.DefaultByteCap)
+	if l.Entries[0].Scroll != 0 {
+		t.Fatalf("expected scroll reset to 0 across a tier flip, got %d", l.Entries[0].Scroll)
+	}
+}
+
+func TestReloadLeavesScrollAloneWhenTierUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", []byte("old\n"))
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	l.Entries[0].Scroll = 7
+
+	rewriteWithNewerMtime(t, path, []byte("new\n"))
+	l.Reload(preview.DefaultByteCap)
+	if l.Entries[0].Scroll != 7 {
+		t.Fatalf("expected scroll left as-is when tier doesn't change, got %d", l.Entries[0].Scroll)
 	}
 }
 
