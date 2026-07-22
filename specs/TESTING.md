@@ -36,6 +36,16 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Opening a new entry starts a background stream for it; reloading an entry (§6.1a) starts a fresh stream rather than reusing the stale one.
 - Goto-line's block/allow decision is blocked exactly when a stream is present and not yet done, and allowed both when no stream is tracked at all and once the stream is done.
 - The file-legend "building…" spinner's show/hide decision follows the same perceptibility-threshold and minimum-display-duration rules as the corner badge (boundary-tested at the threshold and at the minimum display duration), reverting to the normal legend once both are satisfied — with no completion-message/fade-out phase of its own.
+- A file at or under `HighlightCeiling` is decided `TierHighlighted`; a file over it is decided `TierPlainText` (boundary-tested exactly at the ceiling).
+- A `TierHighlighted` stream's background pass builds full decoded, tab-expanded, highlighted content (one segment list per line) alongside its line-offset index; a `TierPlainText` stream builds no content at all, only offsets.
+- Opening a file starts its background stream with the tier decided from its on-disk size; reloading an entry re-decides its tier from the file's new on-disk size (promoting a shrunk-under-the-ceiling file back to `TierHighlighted`, demoting a grown-past-the-ceiling file to `TierPlainText`), rather than keeping whatever tier it was opened with.
+- A reload that flips an entry's tier resets its scroll position to the top; a reload that doesn't change tier leaves scroll as-is.
+- `ReadWindow` seeks directly to the requested start line's byte offset rather than reading from the start of the file, returns fewer lines than requested (down to zero) when the requested range runs past the end of the file, and decodes/tab-expands each line the same way the rest of the preview pipeline does.
+- A `TierHighlighted` entry's content is available (ready to render/scroll/goto-line) once its background pass has finished and been synced into the entry; a `TierPlainText` entry's content is available once its background pass has finished, full stop — this stage gates plain-text-tier viewing on the same signal goto-line already gates on, not on partial progress.
+- A `TierPlainText` entry's on-screen window is (re)fetched to cover a requested target source line, reusing the already-loaded window without a fresh disk read when the target already falls within it (and without re-reading from disk at all when only the render width changed).
+- A `TierPlainText` entry's Up/Down and Page Up/Page Down scrolling move by source-line count, clamped to `[1, total lines]`; goto-line jumps to the requested line the same way, both via the entry's on-screen window rather than a whole-file wrap cache.
+- The line-number gutter for a `TierPlainText` entry, while its background pass is still running, renders against a floor of 4 digits regardless of how few lines have been seen so far; once the pass is done, it renders against the exact final line count.
+- `/` (in-file find) is a no-op on a `TierPlainText` entry, the same "don't offer a key that doesn't do anything yet" no-op the empty state already gets for the same key.
 
 ## Open-failure detection at open time (§2.2)
 
@@ -44,7 +54,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - That explanatory message does not repeat the path being opened, even though the underlying OS error text normally does — it's already visible via whichever row the message ends up displayed inline on.
 - Opening a path not already in the open-files list, whose read succeeds and whose bytes contain no NUL byte, returns an "opened" result and creates/displays an entry as normal — neither failure check false-positives on ordinary readable text content.
 - Opening a path that already has an entry in the open-files list returns an "opened" result and reuses that entry without re-reading the file, regardless of current on-disk content (an existing entry is, by construction, never a "failed" open, since a failed open never creates one).
-- Both the read-error check and the binary check are derived from the same byte-cap-bounded read used for normal preview loading (§2.1) — determining either does not require a second, separate read of the file.
+- Both the read-error check and the binary check are derived from the same byte-cap-bounded peek (§2.1) — determining either does not require a second, separate read of the file, and does not require reading the whole file regardless of its actual size.
 - The browser's Return action on a path that fails to open (read error or binary) leaves the browser open and selection unchanged, and does not add an entry to the open-files list.
 - Quick open's open action on a path that fails to open leaves the overlay open and match selection unchanged (rather than exiting to the preview), and does not add an entry to the open-files list.
 - A "failed" result does not block subsequent input: the next open attempt (same or different path) from the same context proceeds normally, evaluated independently.
@@ -260,6 +270,8 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - An open file that's deleted (or otherwise fails to re-read, e.g. permission lost or now binary) between opens is skipped by reload — its last-known content is left untouched and it is not reported as reloaded, rather than the entry being cleared or removed.
 - A reload invalidates the entry's line-wrap cache (`Rows`/`FirstRow`/`RowsWidth`) and clears its in-file find state (`FindQuery`/`FindMatches`/`FindCurrent`/`FindWrapNote`), since both are derived from content that just changed.
 - A reload also restarts the entry's background line-offset stream (§2.1) rather than reusing the one from before the reload.
+- A reload re-decides the entry's tier from the reloaded file's new on-disk size (§2.1): promoted to `TierHighlighted` if it shrunk under the ceiling, demoted to `TierPlainText` if it grew past it.
+- A reload that changes an entry's tier resets its scroll position to the top; a reload that doesn't change tier leaves scroll untouched (§2.1, §6.1a above).
 
 ## Legend fit/drop order (§5.2)
 

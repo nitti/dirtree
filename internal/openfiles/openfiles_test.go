@@ -22,6 +22,23 @@ func newListWithN(n int) *List {
 	return l
 }
 
+// waitSynced blocks until e's background stream has finished and its
+// content has been pulled into Lines/Segs (SyncContent), for tests that
+// need to observe a TierHighlighted entry's actual content rather than
+// just that Open/Reload started the background pass.
+func waitSynced(t *testing.T, e *Entry) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		e.SyncContent()
+		if e.Lines != nil {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("entry's background stream did not finish in time")
+}
+
 func writeFile(t *testing.T, dir, name string, content []byte) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -105,6 +122,112 @@ func TestOpenStartsBackgroundStreamForNewEntry(t *testing.T) {
 	l.Open(path, preview.DefaultByteCap)
 	if l.Entries[0].Stream == nil {
 		t.Fatal("expected a background stream to be started for a newly-opened entry")
+	}
+}
+
+func TestOpenAtOrUnderCeilingIsTierHighlighted(t *testing.T) {
+	orig := preview.HighlightCeiling
+	defer func() { preview.HighlightCeiling = orig }()
+	preview.HighlightCeiling = 100
+
+	dir := t.TempDir()
+	path := writeFile(t, dir, "small.txt", []byte("hello\n"))
+
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	if got := l.Entries[0].Tier; got != preview.TierHighlighted {
+		t.Fatalf("expected TierHighlighted for a file under the ceiling, got %v", got)
+	}
+}
+
+func TestOpenOverCeilingIsTierPlainText(t *testing.T) {
+	orig := preview.HighlightCeiling
+	defer func() { preview.HighlightCeiling = orig }()
+	preview.HighlightCeiling = 4
+
+	dir := t.TempDir()
+	path := writeFile(t, dir, "big.txt", []byte("hello\n"))
+
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	if got := l.Entries[0].Tier; got != preview.TierPlainText {
+		t.Fatalf("expected TierPlainText for a file over the ceiling, got %v", got)
+	}
+}
+
+func TestReloadPromotesEntryWhenShrunkUnderCeiling(t *testing.T) {
+	orig := preview.HighlightCeiling
+	defer func() { preview.HighlightCeiling = orig }()
+	preview.HighlightCeiling = 4
+
+	dir := t.TempDir()
+	// Opened over the ceiling (TierPlainText)...
+	path := writeFile(t, dir, "a.txt", []byte("hello\n"))
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	if l.Entries[0].Tier != preview.TierPlainText {
+		t.Fatalf("expected TierPlainText at open, got %v", l.Entries[0].Tier)
+	}
+
+	// ...then rewritten small enough to now be under the ceiling.
+	rewriteWithNewerMtime(t, path, []byte("hi\n"))
+	l.Reload(preview.DefaultByteCap)
+	if l.Entries[0].Tier != preview.TierHighlighted {
+		t.Fatalf("expected reload to re-decide tier from the new size (promotion to TierHighlighted), got %v", l.Entries[0].Tier)
+	}
+}
+
+func TestReloadDemotesEntryWhenGrownOverCeiling(t *testing.T) {
+	orig := preview.HighlightCeiling
+	defer func() { preview.HighlightCeiling = orig }()
+	preview.HighlightCeiling = 4
+
+	dir := t.TempDir()
+	// Opened at/under the ceiling (TierHighlighted)...
+	path := writeFile(t, dir, "a.txt", []byte("hi\n"))
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	if l.Entries[0].Tier != preview.TierHighlighted {
+		t.Fatalf("expected TierHighlighted at open, got %v", l.Entries[0].Tier)
+	}
+
+	// ...then rewritten large enough to now be over the ceiling.
+	rewriteWithNewerMtime(t, path, []byte("hello world\n"))
+	l.Reload(preview.DefaultByteCap)
+	if l.Entries[0].Tier != preview.TierPlainText {
+		t.Fatalf("expected reload to re-decide tier from the new size (demotion to TierPlainText), got %v", l.Entries[0].Tier)
+	}
+}
+
+func TestReloadResetsScrollWhenTierFlips(t *testing.T) {
+	orig := preview.HighlightCeiling
+	defer func() { preview.HighlightCeiling = orig }()
+	preview.HighlightCeiling = 4
+
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", []byte("hello\n"))
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	l.Entries[0].Scroll = 42
+
+	rewriteWithNewerMtime(t, path, []byte("hi\n"))
+	l.Reload(preview.DefaultByteCap)
+	if l.Entries[0].Scroll != 0 {
+		t.Fatalf("expected scroll reset to 0 across a tier flip, got %d", l.Entries[0].Scroll)
+	}
+}
+
+func TestReloadLeavesScrollAloneWhenTierUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", []byte("old\n"))
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	l.Entries[0].Scroll = 7
+
+	rewriteWithNewerMtime(t, path, []byte("new\n"))
+	l.Reload(preview.DefaultByteCap)
+	if l.Entries[0].Scroll != 7 {
+		t.Fatalf("expected scroll left as-is when tier doesn't change, got %d", l.Entries[0].Scroll)
 	}
 }
 
@@ -617,6 +740,7 @@ func TestReloadPicksUpChangedContentOnDisk(t *testing.T) {
 	if len(reloaded) != 1 || reloaded[0] != "a.txt" {
 		t.Fatalf("expected [\"a.txt\"] reloaded, got %v", reloaded)
 	}
+	waitSynced(t, l.Entries[0])
 	if got := l.Entries[0].Lines; len(got) != 1 || got[0] != "new" {
 		t.Fatalf("expected reloaded content, got %v", got)
 	}
@@ -637,6 +761,7 @@ func TestReloadLeavesUnchangedFilesAlone(t *testing.T) {
 	if len(reloaded) != 1 || reloaded[0] != "changed.txt" {
 		t.Fatalf("expected only changed.txt reloaded, got %v", reloaded)
 	}
+	waitSynced(t, l.Entries[1])
 	if got := l.Entries[1].Lines; len(got) != 1 || got[0] != "stays" {
 		t.Fatalf("expected untouched entry's content unchanged, got %v", got)
 	}
@@ -685,6 +810,7 @@ func TestReloadLeavesDeletedFileEntryStale(t *testing.T) {
 
 	l := New()
 	l.Open(path, preview.DefaultByteCap)
+	waitSynced(t, l.Entries[0])
 	linesBefore := l.Entries[0].Lines
 
 	if err := os.Remove(path); err != nil {
