@@ -229,13 +229,78 @@ func TestTierPlainTextGotoLineJumpsViaWindow(t *testing.T) {
 	}
 }
 
-func TestTierPlainTextFindKeyIsNoOp(t *testing.T) {
+func TestTierPlainTextFindKeyOpensPrompt(t *testing.T) {
 	files, _ := openTierPlainText(t, 10)
 	v := newTestPreview(files, 60, 10)
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, '/', tcell.ModNone))
-	if v.FindPromptOpen {
-		t.Fatal("expected `/` to be a no-op on a TierPlainText entry (find not yet implemented for it)")
+	if !v.FindPromptOpen {
+		t.Fatal("expected `/` to open the find prompt on a TierPlainText entry (docs/STREAMING_PREVIEW_DESIGN.md §9)")
+	}
+}
+
+// waitFindScanDone blocks until e's in-progress find scan has been
+// picked up by syncFindScan (i.e. FindScan cleared back to nil), the
+// same signal the real Draw loop's per-frame sync relies on.
+func waitFindScanDone(t *testing.T, v *Preview, e *openfiles.Entry) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		v.syncFindScan(e)
+		if e.FindScan == nil {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("find scan did not finish in time")
+}
+
+func TestTierPlainTextFindStartsBackgroundScan(t *testing.T) {
+	files, e := openTierPlainText(t, 10)
+	v := newTestPreview(files, 60, 10)
+
+	v.performFind("line 7")
+	if e.FindScan == nil {
+		t.Fatal("expected performFind to start a background scan for a TierPlainText entry")
+	}
+	if len(e.FindMatches) != 0 || e.FindCurrent != -1 {
+		t.Fatalf("expected no matches yet while the scan is in flight, got FindMatches=%v FindCurrent=%d", e.FindMatches, e.FindCurrent)
+	}
+}
+
+func TestTierPlainTextFindScanResultsSyncOnceDone(t *testing.T) {
+	files, e := openTierPlainText(t, 10)
+	v := newTestPreview(files, 60, 10)
+
+	v.performFind("line 7")
+	waitFindScanDone(t, v, e)
+
+	if len(e.FindMatches) != 1 || e.FindMatches[0].Line != 6 {
+		t.Fatalf("expected a single match on source line 6 (the 0-based index of the text \"line 7\"), got %v", e.FindMatches)
+	}
+	if e.FindCurrent != 0 {
+		t.Fatalf("expected the single match to be current, got %d", e.FindCurrent)
+	}
+	matchRow := e.FindMatches[0].Line - e.WindowStartLine
+	if matchRow < 0 || matchRow >= len(e.Lines) || e.Lines[matchRow] != "line 7" {
+		t.Fatalf("expected the match's window-relative row to hold \"line 7\", got %v (row %d)", e.Lines, matchRow)
+	}
+	if matchRow < e.Scroll || matchRow >= e.Scroll+v.viewportHeight() {
+		t.Fatalf("expected the match's row (%d) to be scrolled into view (Scroll=%d, viewportHeight=%d)", matchRow, e.Scroll, v.viewportHeight())
+	}
+}
+
+func TestTierPlainTextFindClearCancelsInFlightScan(t *testing.T) {
+	files, e := openTierPlainText(t, 10)
+	v := newTestPreview(files, 60, 10)
+
+	v.performFind("line 7")
+	if e.FindScan == nil {
+		t.Fatal("expected a scan to be in flight")
+	}
+	v.clearFind()
+	if e.FindScan != nil || e.FindQuery != "" {
+		t.Fatalf("expected clearFind to cancel and clear the in-flight scan, got FindScan=%v FindQuery=%q", e.FindScan, e.FindQuery)
 	}
 }
 

@@ -98,6 +98,17 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - A query with no occurrences anywhere in the file returns no matches.
 - A match's column is a rune offset, not a byte offset: a query appearing after a multi-byte character lands on the correct column regardless of that character's UTF-8 byte width.
 
+## Async in-file find over the plain-text tier (§2.1, §2.4, §9)
+
+- A background scan finds every case-insensitive substring match across a file's lines, in source order — the same matching semantics `InLines` provides for a resident line list, applied via a streamed, non-blocking read instead.
+- An empty query's scan matches nothing.
+- A scan of a file that can't be opened finishes done with no matches, rather than hanging.
+- Canceling a scan (directly, or via an already-canceled context passed into the streaming loop) stops it from making further progress; a canceled scan still eventually reports done.
+- Starting a find on a plain-text-tier entry starts a background scan and leaves its match list/current index empty until that scan reports done — no synchronous result.
+- Once a scan reports done, its matches are copied into the entry's match list and a current match is seeded (searching forward from the top of the viewport, wrapping to the first match and noting the wrap if none exists at or after that point) exactly like a synchronous highlighted-tier find's result would be, and the scan reference is cleared so this only happens once.
+- Clearing an active find (or superseding it with a new query) cancels a still-running scan rather than leaving it to finish unread; a reload also cancels and clears any in-flight scan for the entry, alongside its other find-state invalidation.
+- `/` opens the find prompt on a plain-text-tier entry the same as any other (no longer a no-op for that tier).
+
 ## Node / tree construction and flattening (§3.1)
 
 - A freshly-built root node is expanded and has its children loaded.
