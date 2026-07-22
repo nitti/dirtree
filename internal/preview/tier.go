@@ -1,12 +1,9 @@
 package preview
 
-// Tier is the highlighting/residency strategy for an open file, decided
-// from its size (docs/STREAMING_PREVIEW_DESIGN.md §2, §5): at open time,
-// and re-decided the same way on every reload that changes the file
-// (openfiles.List.Reload) rather than treated as sticky for the entry's
-// lifetime — the tier bounds memory/highlighting cost against the
-// file's *current* size, not whatever size it happened to be when first
-// opened.
+// Tier is the highlighting/residency strategy decided once, at open
+// time, from a file's size (docs/STREAMING_PREVIEW_DESIGN.md §2, §5).
+// There is no promotion or demotion between tiers for the life of an
+// entry, including across a reload.
 type Tier int
 
 const (

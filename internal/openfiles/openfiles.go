@@ -20,10 +20,9 @@ import (
 type Entry struct {
 	Path string
 
-	// Tier is decided from the file's size (SPEC.md §2.1's ceiling) at
-	// open time, and re-decided the same way on every reload that
-	// changes the file (docs/STREAMING_PREVIEW_DESIGN.md §2) — not
-	// sticky across the entry's lifetime.
+	// Tier is decided once, at open time, from the file's size (SPEC.md
+	// §2.1's ceiling) and never changes for this entry's lifetime,
+	// including across a reload (docs/STREAMING_PREVIEW_DESIGN.md §2).
 	Tier preview.Tier
 
 	// Lines/Segs hold this entry's resident content. For a
@@ -194,29 +193,7 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 // disturbs list order or which entry is currently shown. The wrap
 // cache and any in-file find state are invalidated, since both are
 // derived from content that just changed; Scroll is left as-is and
-// self-clamps the next time the entry is scrolled or displayed, unless
-// the reload also flips the entry's tier (below), in which case Scroll
-// is reset to the top instead.
-//
-// The entry's tier (docs/STREAMING_PREVIEW_DESIGN.md §2, §5) is
-// re-decided here from the file's current on-disk size, the same way
-// it's decided at open time — not treated as sticky from whenever the
-// entry was first opened. This falls out of the Stat call already made
-// to compare mtimes: re-checking size against the ceiling at that same
-// moment costs nothing extra, and reload is the only mechanism by which
-// dirtree ever learns a file changed at all, so it's the only point
-// where a stale tier decision could otherwise ever be corrected. Without
-// this, a file that grows well past the ceiling after being opened would
-// keep being fully read and highlighted in the background on every
-// reload for the rest of the session, exactly the unbounded cost the
-// ceiling exists to prevent; a file that shrinks back under the ceiling
-// is symmetrically promoted back to full highlighting. A tier flip
-// resets Scroll to the top: a display-row index means something
-// different under each tier's model (an index into a whole-file wrap
-// cache for TierHighlighted vs. into a small on-screen window for
-// TierPlainText, §8), so there's no meaningful way to carry the old
-// value across the change — it would either point at an arbitrary,
-// unrelated row or fall past the end of a much smaller window.
+// self-clamps the next time the entry is scrolled or displayed.
 //
 // An entry whose file can no longer be stat'd or read (deleted,
 // permission lost, now binary) is left with its last-known content
@@ -236,14 +213,14 @@ func (l *List) Reload(capBytes int64) []string {
 		if _, binary, err := preview.ReadCapped(e.Path, capBytes); err != nil || binary {
 			continue
 		}
-		if newTier := preview.TierFor(info.Size()); newTier != e.Tier {
-			e.Tier = newTier
-			e.Scroll = 0
-		}
 		e.Lines = nil
 		e.Segs = nil
 		e.WindowStartLine = 0
 		e.ModTime = info.ModTime()
+		// Tier is not re-decided on reload (docs/STREAMING_PREVIEW_DESIGN.md
+		// §2's "no promotion" rule extended across reloads too): a file
+		// that grows or shrinks past the ceiling between reloads keeps
+		// whatever tier it was opened with for the rest of the session.
 		e.Stream = preview.StartStream(e.Path, e.Tier)
 		e.Rows = nil
 		e.FirstRow = nil
