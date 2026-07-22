@@ -852,3 +852,20 @@ func TestReloadInvalidatesWrapCacheAndFindState(t *testing.T) {
 			e.FindQuery, e.FindMatches, e.FindCurrent, e.FindWrapNote)
 	}
 }
+
+func TestReloadCancelsAndClearsInFlightFindScan(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", []byte("old\n"))
+
+	l := New()
+	l.Open(path, preview.DefaultByteCap)
+	e := l.Entries[0]
+	e.FindScan = find.StartScan(path, "old")
+
+	rewriteWithNewerMtime(t, path, []byte("new\n"))
+	l.Reload(preview.DefaultByteCap)
+
+	if e.FindScan != nil {
+		t.Fatalf("expected reload to cancel and clear an in-flight find scan, got %v", e.FindScan)
+	}
+}

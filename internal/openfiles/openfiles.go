@@ -80,6 +80,15 @@ type Entry struct {
 	FindCurrent  int
 	FindWrapNote string
 
+	// FindScan is a TierPlainText entry's in-progress background find
+	// scan (docs/STREAMING_PREVIEW_DESIGN.md §9), non-nil only while one
+	// is running: that tier never holds full file content resident, so
+	// FindMatches can't be computed synchronously from Lines the way a
+	// TierHighlighted entry's find already is. Cleared once its result
+	// has been consumed into FindMatches, or by Reload/clearing an
+	// active find, either of which cancels it first if still running.
+	FindScan *find.Scan
+
 	// CopyMode strips the preview's line-number gutter and syntax-color
 	// styling for this entry specifically (SPEC.md §2.1), so a terminal
 	// mouse selection over its content grabs exactly the file's own
@@ -248,6 +257,10 @@ func (l *List) Reload(capBytes int64) []string {
 		e.Rows = nil
 		e.FirstRow = nil
 		e.RowsWidth = 0
+		if e.FindScan != nil {
+			e.FindScan.Cancel()
+			e.FindScan = nil
+		}
 		e.FindQuery = ""
 		e.FindMatches = nil
 		e.FindCurrent = -1
