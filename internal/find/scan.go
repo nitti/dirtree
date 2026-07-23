@@ -88,7 +88,7 @@ func scanFileForMatches(ctx context.Context, path, query string) []Match {
 	var matches []Match
 	r := bufio.NewReader(f)
 	lineNum := 0
-	_ = scanline.ScanWhile(r, ctx, func(l scanline.Line) bool {
+	_ = scanline.ScanWhile(ctx, r, func(l scanline.Line) bool {
 		runes := []rune(strings.ToLower(l.Text))
 		for i := 0; i+len(q) <= len(runes); i++ {
 			if runeSliceEqual(runes[i:i+len(q)], q) {

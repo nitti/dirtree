@@ -250,7 +250,7 @@ func scanFile(ctx context.Context, c Candidate, needle []byte, re *regexp.Regexp
 
 	var hits []Hit
 	lineNum := 0
-	scanErr := scanline.ScanWhile(reader, fctx, func(l scanline.Line) bool {
+	scanErr := scanline.ScanWhile(fctx, reader, func(l scanline.Line) bool {
 		lineNum++
 		matched := false
 		if re != nil {
