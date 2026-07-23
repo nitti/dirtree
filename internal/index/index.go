@@ -9,8 +9,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/nitti/dirtree/internal/asyncjob"
 )
 
 // Ignorer decides whether a candidate path should be skipped, matching
@@ -29,25 +30,21 @@ type Entry struct {
 // Index holds the background-built path list and its build status,
 // safe for concurrent reads via the accessor methods (SPEC.md §6, §10).
 type Index struct {
-	mu        sync.RWMutex
-	entries   []Entry
-	done      bool
-	startTime time.Time
-	doneTime  time.Time
+	asyncjob.State
+	entries []Entry
 }
 
 // Start kicks off building the index in a background goroutine and
 // returns immediately; the interactive UI must not block on it
 // (SPEC.md §6).
 func Start(rootPath string, ignorer Ignorer) *Index {
-	idx := &Index{startTime: time.Now()}
+	idx := &Index{State: asyncjob.New()}
 	go func() {
 		entries := build(rootPath, ignorer)
-		idx.mu.Lock()
+		idx.Lock()
 		idx.entries = entries
-		idx.done = true
-		idx.doneTime = time.Now()
-		idx.mu.Unlock()
+		idx.MarkDone()
+		idx.Unlock()
 	}()
 	return idx
 }
@@ -61,33 +58,31 @@ func Start(rootPath string, ignorer Ignorer) *Index {
 // fast rebuild stays invisible, a slow one (re-walking a huge tree)
 // shows the same spinner/"indexing…" state a fresh Start would.
 func (idx *Index) Rebuild(rootPath string, ignorer Ignorer) {
-	idx.mu.Lock()
-	idx.done = false
-	idx.startTime = time.Now()
-	idx.mu.Unlock()
+	idx.Lock()
+	idx.Reset()
+	idx.Unlock()
 
 	go func() {
 		entries := build(rootPath, ignorer)
-		idx.mu.Lock()
+		idx.Lock()
 		idx.entries = entries
-		idx.done = true
-		idx.doneTime = time.Now()
-		idx.mu.Unlock()
+		idx.MarkDone()
+		idx.Unlock()
 	}()
 }
 
 // Snapshot returns the current entries (nil if not yet done) and
 // whether building has completed.
 func (idx *Index) Snapshot() ([]Entry, bool) {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	return idx.entries, idx.done
+	idx.RLock()
+	defer idx.RUnlock()
+	return idx.entries, idx.IsDone()
 }
 
 // Elapsed returns how much wall-clock time has passed since indexing
 // started, for the delayed-loading-indicator logic in SPEC.md §10.
 func (idx *Index) Elapsed() time.Duration {
-	return time.Since(idx.startTime)
+	return idx.State.Elapsed()
 }
 
 // SinceDone returns how much wall-clock time has passed since indexing
@@ -96,12 +91,9 @@ func (idx *Index) Elapsed() time.Duration {
 // §10. The duration is meaningless (and reported as 0) while indexing
 // is still running.
 func (idx *Index) SinceDone() (time.Duration, bool) {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	if !idx.done {
-		return 0, false
-	}
-	return time.Since(idx.doneTime), true
+	idx.RLock()
+	defer idx.RUnlock()
+	return idx.State.SinceDone()
 }
 
 // build walks rootPath depth-first, applying the same skip/ignore rules

@@ -4,8 +4,9 @@ import (
 	"bufio"
 	"io"
 	"os"
-	"sync"
 	"time"
+
+	"github.com/nitti/dirtree/internal/asyncjob"
 )
 
 // StreamIndex is a per-open-file background pass building the
@@ -25,14 +26,11 @@ import (
 // shared mutable state between the UI goroutine and the background one,
 // so no locking is needed beyond the snapshot's own accessor methods.
 type StreamIndex struct {
-	mu        sync.RWMutex
-	tier      Tier
-	offsets   []int64
-	lines     []string    // TierHighlighted only
-	segs      [][]Segment // TierHighlighted only
-	done      bool
-	startTime time.Time
-	doneTime  time.Time
+	asyncjob.State
+	tier    Tier
+	offsets []int64
+	lines   []string    // TierHighlighted only
+	segs    [][]Segment // TierHighlighted only
 }
 
 // StartStream kicks off building path's background pass for the given
@@ -44,16 +42,15 @@ type StreamIndex struct {
 // §2.2), so this is a best-effort re-read of the same path, not a
 // second correctness gate.
 func StartStream(path string, tier Tier) *StreamIndex {
-	s := &StreamIndex{tier: tier, startTime: time.Now()}
+	s := &StreamIndex{State: asyncjob.New(), tier: tier}
 	go func() {
 		offsets, lines, segs := scanFile(path, tier)
-		s.mu.Lock()
+		s.Lock()
 		s.offsets = offsets
 		s.lines = lines
 		s.segs = segs
-		s.done = true
-		s.doneTime = time.Now()
-		s.mu.Unlock()
+		s.MarkDone()
+		s.Unlock()
 	}()
 	return s
 }
@@ -140,17 +137,17 @@ func trimSuffixByte(s string, b byte) string {
 // not yet done), the number of lines that implies, and whether the
 // background pass has completed.
 func (s *StreamIndex) Snapshot() (offsets []int64, lineCount int, done bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.offsets, len(s.offsets), s.done
+	s.RLock()
+	defer s.RUnlock()
+	return s.offsets, len(s.offsets), s.IsDone()
 }
 
 // Content returns the full decoded/highlighted lines and segments for a
 // TierHighlighted stream (nil, nil if not yet done, or if this stream is
 // TierPlainText — that tier never builds full content here at all).
 func (s *StreamIndex) Content() (lines []string, segs [][]Segment) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.RLock()
+	defer s.RUnlock()
 	return s.lines, s.segs
 }
 
@@ -164,16 +161,16 @@ func (s *StreamIndex) Tier() Tier {
 // goto-line's block/allow decision (SPEC.md §2.1) and the file-legend
 // spinner (SPEC.md §5.2).
 func (s *StreamIndex) Done() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.done
+	s.RLock()
+	defer s.RUnlock()
+	return s.IsDone()
 }
 
 // Elapsed returns how much wall-clock time has passed since the
 // background pass started, for the file-legend spinner's perceptibility
 // threshold (SPEC.md §5.2, §5.3).
 func (s *StreamIndex) Elapsed() time.Duration {
-	return time.Since(s.startTime)
+	return s.State.Elapsed()
 }
 
 // SinceDone returns how much wall-clock time has passed since the
@@ -182,12 +179,10 @@ func (s *StreamIndex) Elapsed() time.Duration {
 // duration floor (SPEC.md §5.3), the same shape internal/index.Index's
 // own SinceDone gives the corner badge.
 func (s *StreamIndex) SinceDone() time.Duration {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if !s.done {
-		return 0
-	}
-	return time.Since(s.doneTime)
+	s.RLock()
+	defer s.RUnlock()
+	d, _ := s.State.SinceDone()
+	return d
 }
 
 // ReadWindow reads count source lines starting at the 0-based startLine,

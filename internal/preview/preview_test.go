@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nitti/dirtree/internal/asyncjob"
 )
 
 func writeTemp(t *testing.T, content []byte) string {
@@ -436,7 +438,7 @@ func TestStreamIndexSinceDoneReportsZeroUntilFinished(t *testing.T) {
 	// file the background goroutine can finish before control returns to
 	// the test, so racing it would make this assertion flaky rather than
 	// meaningful (same rationale as internal/index's own SinceDone test).
-	notYetStarted := &StreamIndex{startTime: time.Now()}
+	notYetStarted := &StreamIndex{State: asyncjob.New()}
 	if d := notYetStarted.SinceDone(); d != 0 {
 		t.Fatalf("expected SinceDone to report 0 before the pass has finished, got %v", d)
 	}

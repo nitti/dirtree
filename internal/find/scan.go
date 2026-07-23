@@ -5,8 +5,9 @@ import (
 	"context"
 	"os"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/nitti/dirtree/internal/asyncjob"
 )
 
 // Scan is a background, cancelable line-by-line search of a single
@@ -19,11 +20,9 @@ import (
 // goroutine and the background one, so no locking is needed beyond the
 // snapshot's own accessor methods.
 type Scan struct {
-	mu        sync.RWMutex
-	matches   []Match
-	done      bool
-	startTime time.Time
-	cancel    context.CancelFunc
+	asyncjob.State
+	matches []Match
+	cancel  context.CancelFunc
 }
 
 // StartScan kicks off a background scan of path for query (the same
@@ -32,13 +31,13 @@ type Scan struct {
 // clearing the find, supersedes it before it finishes.
 func StartScan(path, query string) *Scan {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Scan{startTime: time.Now(), cancel: cancel}
+	s := &Scan{State: asyncjob.New(), cancel: cancel}
 	go func() {
 		matches := scanFileForMatches(ctx, path, query)
-		s.mu.Lock()
+		s.Lock()
 		s.matches = matches
-		s.done = true
-		s.mu.Unlock()
+		s.MarkDone()
+		s.Unlock()
 	}()
 	return s
 }
@@ -56,16 +55,16 @@ func (s *Scan) Cancel() {
 // whether the scan has finished, whether it ran to completion or was
 // canceled partway through.
 func (s *Scan) Snapshot() (matches []Match, done bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.matches, s.done
+	s.RLock()
+	defer s.RUnlock()
+	return s.matches, s.IsDone()
 }
 
 // Elapsed returns how much wall-clock time has passed since the scan
 // started, for the find status area's own perceptibility-threshold
 // spinner (SPEC.md §5.2, §5.3, docs/STREAMING_PREVIEW_DESIGN.md §9).
 func (s *Scan) Elapsed() time.Duration {
-	return time.Since(s.startTime)
+	return s.State.Elapsed()
 }
 
 // scanFileForMatches streams path line by line (the same

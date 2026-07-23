@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nitti/dirtree/internal/asyncjob"
 	"github.com/nitti/dirtree/internal/ignore"
 	"github.com/nitti/dirtree/internal/tree"
 )
@@ -28,7 +29,7 @@ func TestSinceDoneReportsFalseUntilBuildFinishes(t *testing.T) {
 	// immediately after a real Start call: on a small/empty tree the
 	// background goroutine can finish before control returns to the test,
 	// so racing it would make this assertion flaky rather than meaningful.
-	notYetStarted := &Index{startTime: time.Now()}
+	notYetStarted := &Index{State: asyncjob.New()}
 	if _, done := notYetStarted.SinceDone(); done {
 		t.Fatal("expected SinceDone to report not-done before the build has finished")
 	}
