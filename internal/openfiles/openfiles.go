@@ -121,6 +121,63 @@ type OpenResult struct {
 type List struct {
 	Entries   []*Entry
 	Displayed int // index into Entries, or -1 if none
+
+	// resident tracks which entries currently hold a TierHighlighted
+	// entry's resident Lines/Segs, most-recently-displayed first,
+	// capped at ResidentCap (below) — the LRU eviction bookkeeping
+	// behind SyncContent's memory-footprint bound. Never touches
+	// TierPlainText entries, which never hold full content resident to
+	// begin with.
+	resident []*Entry
+}
+
+// ResidentCap bounds how many entries' fully-decoded/highlighted content
+// (Lines/Segs) are kept memory-resident at once, LRU-evicted beyond
+// that. Without a cap, every TierHighlighted file ever opened in a
+// session stays fully resident until manually closed (`x`), even though
+// only the currently-displayed entry is ever on screen — a handful of
+// files near HighlightCeiling left open can retain hundreds of MB for
+// no benefit. Kept deliberately small, the same "simple fixed constant,
+// tuned later against real usage" stance internal/ui/views/scroll.go's
+// windowLines/windowMargin already take, so ordinary quick tab-switching
+// among a few recently-viewed files still finds their content resident
+// (no re-read/re-highlight), while a session that accumulates many open
+// files doesn't retain all of them forever.
+const ResidentCap = 4
+
+// touchResident marks e as the most-recently-displayed entry for
+// residency purposes, evicting the least-recently-displayed entry's
+// Lines/Segs once more than ResidentCap entries have been displayed.
+// Called every time an entry becomes displayed — newly opened, reused
+// by path, or switched to — so the resident set always reflects actual
+// recent viewing, not list order or open order.
+func (l *List) touchResident(e *Entry) {
+	for i, r := range l.resident {
+		if r == e {
+			l.resident = append(l.resident[:i], l.resident[i+1:]...)
+			break
+		}
+	}
+	l.resident = append([]*Entry{e}, l.resident...)
+	for len(l.resident) > ResidentCap {
+		last := len(l.resident) - 1
+		l.resident[last].evictContent()
+		l.resident = l.resident[:last]
+	}
+}
+
+// forgetResident drops e from residency tracking without evicting its
+// content — for Remove, where e is leaving the list entirely, so there's
+// nothing left to evict content *from*, but the stale pointer must not
+// be left in l.resident or it would keep e (and its content) reachable,
+// and thus never collected, for as long as the list itself lives.
+func (l *List) forgetResident(e *Entry) {
+	for i, r := range l.resident {
+		if r == e {
+			l.resident = append(l.resident[:i], l.resident[i+1:]...)
+			return
+		}
+	}
 }
 
 // New returns an empty open-files list.
@@ -157,6 +214,33 @@ func (e *Entry) SyncContent() {
 	e.Segs = segs
 }
 
+// evictContent frees e's resident Lines/Segs — the memory-heavy
+// decoded/highlighted copy of a TierHighlighted file's full content,
+// SyncContent's counterpart — and restarts e's background Stream so
+// SyncContent transparently rebuilds them (re-read plus re-highlight,
+// the same work Open/Reload already do) the next time e is displayed,
+// rather than leaving Lines/Segs permanently nil. Note this restart
+// means switching back to an evicted entry briefly shows the same
+// "building preview…" state a freshly opened file does, until the new
+// background pass finishes — normally fast, but a real (and deliberate)
+// memory-for-latency tradeoff for a file that takes a while to
+// highlight, same as the original open did.
+//
+// A no-op for a TierPlainText entry, which never holds full content
+// resident to begin with (it holds only an on-screen window,
+// independently bounded by windowLines), or for an entry whose content
+// isn't resident yet (e.g. its background pass hasn't finished, or it
+// was already evicted) — nothing to evict, and restarting an
+// already-running or not-yet-started pass would just be wasted work.
+func (e *Entry) evictContent() {
+	if e.Tier != preview.TierHighlighted || e.Lines == nil {
+		return
+	}
+	e.Lines = nil
+	e.Segs = nil
+	e.Stream = preview.StartStream(e.Path, e.Tier)
+}
+
 // Open implements SPEC.md §2.2's open semantics for a resolved absolute
 // path: reuse an existing entry without re-reading or moving it if the
 // path is already open; otherwise check the file (capBytes bounds this
@@ -171,6 +255,7 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 	for i, e := range l.Entries {
 		if e.Path == path {
 			l.Displayed = i
+			l.touchResident(e)
 			return OpenResult{Outcome: Opened, Entry: e}
 		}
 	}
@@ -193,6 +278,7 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 	e.Stream = preview.StartStream(path, e.Tier)
 	l.Entries = append(l.Entries, e)
 	l.Displayed = len(l.Entries) - 1
+	l.touchResident(e)
 	return OpenResult{Outcome: Opened, Entry: e}
 }
 
@@ -288,6 +374,7 @@ func (l *List) Display(i int) {
 		return
 	}
 	l.Displayed = i
+	l.touchResident(l.Entries[i])
 }
 
 // Remove removes the entry at i — the open-files-list overlay's own
@@ -307,6 +394,7 @@ func (l *List) Remove(i int) (newSelected int) {
 	}
 
 	wasDisplayed := i == l.Displayed
+	l.forgetResident(l.Entries[i])
 	l.Entries = append(l.Entries[:i], l.Entries[i+1:]...)
 
 	if len(l.Entries) == 0 {

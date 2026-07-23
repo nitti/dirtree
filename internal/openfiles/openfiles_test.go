@@ -584,6 +584,155 @@ func TestIsOpenReflectsCurrentEntries(t *testing.T) {
 	}
 }
 
+// --- Resident-content eviction (TESTING.md "Open files list (§2.2, §2.3)") ---
+
+// openAndSyncN opens n distinct small text files, in order, waiting for
+// each one's background stream to finish and be synced into Lines/Segs
+// before opening the next — so by the time it returns, displaying entry
+// i is entry i+1's "one file ago," letting tests exercise eviction with
+// a precise, deterministic display order rather than racing background
+// streams.
+func openAndSyncN(t *testing.T, l *List, dir string, n int) []string {
+	t.Helper()
+	paths := make([]string, n)
+	for i := range n {
+		path := writeFile(t, dir, fmt.Sprintf("f%02d.txt", i), []byte(fmt.Sprintf("content %d\n", i)))
+		l.Open(path, preview.DefaultByteCap)
+		waitSynced(t, l.DisplayedEntry())
+		paths[i] = path
+	}
+	return paths
+}
+
+func TestDisplayingBeyondResidentCapEvictsLeastRecentlyDisplayed(t *testing.T) {
+	dir := t.TempDir()
+	l := New()
+	openAndSyncN(t, l, dir, ResidentCap+1)
+
+	// Entry 0 was displayed longest ago (it was displayed once, at open
+	// time, and never touched again) and is now the least-recently-
+	// displayed of ResidentCap+1 entries — it should have been evicted
+	// the moment the (ResidentCap+1)th entry was displayed.
+	if l.Entries[0].Lines != nil {
+		t.Fatal("expected entry 0's content evicted once more than ResidentCap entries were displayed")
+	}
+	// The ResidentCap entries displayed most recently (1..ResidentCap)
+	// should still be resident.
+	for i := 1; i <= ResidentCap; i++ {
+		if l.Entries[i].Lines == nil {
+			t.Fatalf("expected entry %d's content still resident, got evicted", i)
+		}
+	}
+}
+
+func TestDisplayingEvictedEntryRepopulatesContent(t *testing.T) {
+	dir := t.TempDir()
+	l := New()
+	openAndSyncN(t, l, dir, ResidentCap+1)
+
+	evicted := l.Entries[0]
+	if evicted.Lines != nil {
+		t.Fatal("expected entry 0 evicted as setup for this test")
+	}
+
+	l.Display(0)
+	waitSynced(t, evicted)
+	if evicted.Lines == nil {
+		t.Fatal("expected evicted entry's content transparently rebuilt after being displayed again")
+	}
+	if got := evicted.Lines[0]; got != "content 0" {
+		t.Fatalf("expected rebuilt content to match the file's actual content, got %q", got)
+	}
+}
+
+func TestEvictionLeavesOtherEntryStateUntouched(t *testing.T) {
+	dir := t.TempDir()
+	l := New()
+	openAndSyncN(t, l, dir, ResidentCap+1)
+
+	evicted := l.Entries[0]
+	evicted.Scroll = 3
+	evicted.CopyMode = true
+	evicted.FindQuery = "needle"
+
+	// Force eviction again is unnecessary — entry 0 is already evicted
+	// by openAndSyncN above — but re-assert the fields eviction must not
+	// touch are exactly as set, not reset by the eviction that already
+	// happened.
+	if evicted.Scroll != 3 || !evicted.CopyMode || evicted.FindQuery != "needle" {
+		t.Fatalf("expected non-content state left alone by eviction, got scroll=%d copyMode=%v findQuery=%q",
+			evicted.Scroll, evicted.CopyMode, evicted.FindQuery)
+	}
+}
+
+func TestCurrentlyDisplayedEntryIsNeverEvicted(t *testing.T) {
+	dir := t.TempDir()
+	l := New()
+	openAndSyncN(t, l, dir, ResidentCap)
+	first := l.Entries[0]
+
+	l.Display(0)
+	waitSynced(t, first)
+
+	// Switch through many more entries than ResidentCap while entry 0
+	// stays displayed the whole time via repeated re-opens of itself in
+	// between — entry 0, as the entry actually displayed right now,
+	// must never be the one evicted.
+	for i := range ResidentCap * 3 {
+		path := writeFile(t, dir, fmt.Sprintf("extra%02d.txt", i), []byte("x\n"))
+		l.Open(path, preview.DefaultByteCap)
+		waitSynced(t, l.DisplayedEntry())
+		l.Display(0)
+	}
+	if first.Lines == nil {
+		t.Fatal("expected the currently-displayed entry to never be evicted")
+	}
+}
+
+func TestTierPlainTextEntryIsNeverEvicted(t *testing.T) {
+	orig := preview.HighlightCeiling
+	defer func() { preview.HighlightCeiling = orig }()
+	preview.HighlightCeiling = 4
+
+	dir := t.TempDir()
+	big := writeFile(t, dir, "big.txt", []byte("hello\n"))
+
+	l := New()
+	l.Open(big, preview.DefaultByteCap)
+	if l.Entries[0].Tier != preview.TierPlainText {
+		t.Fatal("expected the fixture to land in TierPlainText")
+	}
+
+	// Displaying many more entries than ResidentCap must not panic or
+	// otherwise misbehave against a TierPlainText entry, which never has
+	// Lines/Segs to evict in the first place.
+	for i := range ResidentCap * 2 {
+		path := writeFile(t, dir, fmt.Sprintf("small%02d.txt", i), []byte("s\n"))
+		l.Open(path, preview.DefaultByteCap)
+	}
+	if l.Entries[0].Lines != nil {
+		t.Fatal("expected TierPlainText entry's Lines to remain nil throughout")
+	}
+}
+
+func TestRemovingResidentEntryDropsResidencyTracking(t *testing.T) {
+	dir := t.TempDir()
+	l := New()
+	openAndSyncN(t, l, dir, 2)
+
+	// Remove the currently-resident, currently-displayed entry; then
+	// open enough new entries to have cycled it out of the resident set
+	// had it (incorrectly) still been tracked. This must not panic —
+	// forgetResident's whole point is that a removed entry's pointer
+	// isn't left behind in the residency list for a later eviction pass
+	// to dereference.
+	l.Remove(l.Displayed)
+	for i := range ResidentCap + 2 {
+		path := writeFile(t, dir, fmt.Sprintf("post-remove%02d.txt", i), []byte("y\n"))
+		l.Open(path, preview.DefaultByteCap)
+	}
+}
+
 // --- Open-files dropdown paging (TESTING.md "Open files list (§2.2, §2.3)") ---
 
 func TestPageComputesZeroBasedPageFromIndex(t *testing.T) {
