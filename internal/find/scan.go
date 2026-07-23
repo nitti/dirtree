@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nitti/dirtree/internal/asyncjob"
+	"github.com/nitti/dirtree/internal/scanline"
 )
 
 // Scan is a background, cancelable line-by-line search of a single
@@ -67,12 +68,12 @@ func (s *Scan) Elapsed() time.Duration {
 	return s.State.Elapsed()
 }
 
-// scanFileForMatches streams path line by line (the same
-// bufio.Reader.ReadString('\n') shape internal/search's and
-// internal/preview's own streaming scans already use), returning every
-// case-insensitive substring match of query in source order — or
-// whatever was found so far if ctx is canceled partway through. An empty
-// query matches nothing, the same convention InLines uses.
+// scanFileForMatches streams path line by line (the same scanline.Scan
+// loop internal/search's and internal/preview's own streaming scans
+// already use), returning every case-insensitive substring match of
+// query in source order — or whatever was found so far if ctx is
+// canceled partway through. An empty query matches nothing, the same
+// convention InLines uses.
 func scanFileForMatches(ctx context.Context, path, query string) []Match {
 	if query == "" {
 		return nil
@@ -87,31 +88,23 @@ func scanFileForMatches(ctx context.Context, path, query string) []Match {
 	var matches []Match
 	r := bufio.NewReader(f)
 	lineNum := 0
-	for {
+	canContinue := func() bool {
 		select {
 		case <-ctx.Done():
-			return matches
+			return false
 		default:
-		}
-		line, rerr := r.ReadString('\n')
-		if len(line) > 0 {
-			runes := []rune(strings.ToLower(trimTrailingNewline(line)))
-			for i := 0; i+len(q) <= len(runes); i++ {
-				if runeSliceEqual(runes[i:i+len(q)], q) {
-					matches = append(matches, Match{Line: lineNum, Col: i, Len: len(q)})
-				}
-			}
-			lineNum++
-		}
-		if rerr != nil {
-			break
+			return true
 		}
 	}
+	_ = scanline.ScanWhile(r, canContinue, func(l scanline.Line) bool {
+		runes := []rune(strings.ToLower(l.Text))
+		for i := 0; i+len(q) <= len(runes); i++ {
+			if runeSliceEqual(runes[i:i+len(q)], q) {
+				matches = append(matches, Match{Line: lineNum, Col: i, Len: len(q)})
+			}
+		}
+		lineNum++
+		return true
+	})
 	return matches
-}
-
-func trimTrailingNewline(line string) string {
-	line = strings.TrimSuffix(line, "\n")
-	line = strings.TrimSuffix(line, "\r")
-	return line
 }

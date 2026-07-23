@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/nitti/dirtree/internal/preview"
+	"github.com/nitti/dirtree/internal/scanline"
 )
 
 // perFileTimeout bounds how long a single candidate's scan is allowed to
@@ -249,39 +250,39 @@ func scanFile(ctx context.Context, c Candidate, needle []byte, re *regexp.Regexp
 
 	var hits []Hit
 	lineNum := 0
-	for {
+	canContinue := func() bool {
 		select {
 		case <-fctx.Done():
-			if ctx.Err() != nil {
-				return FileResult{}, false
-			}
-			return FileResult{AbsPath: c.AbsPath, RelPath: c.RelPath, Hits: hits, Issue: fmt.Sprintf("scan timed out after %s, results may be incomplete", perFileTimeout)}, true
+			return false
 		default:
+			return true
 		}
+	}
+	scanErr := scanline.ScanWhile(reader, canContinue, func(l scanline.Line) bool {
+		lineNum++
+		matched := false
+		if re != nil {
+			matched = re.MatchString(l.Text)
+		} else {
+			matched = bytes.Contains(bytes.ToLower([]byte(l.Text)), needle)
+		}
+		if matched {
+			hits = append(hits, Hit{LineNum: lineNum, LineText: l.Text})
+		}
+		return true
+	})
 
-		line, rerr := reader.ReadString('\n')
-		if line != "" || rerr == nil {
-			lineNum++
-			text := strings.TrimSuffix(line, "\n")
-			matched := false
-			if re != nil {
-				matched = re.MatchString(text)
-			} else {
-				matched = bytes.Contains(bytes.ToLower([]byte(text)), needle)
-			}
-			if matched {
-				hits = append(hits, Hit{LineNum: lineNum, LineText: text})
-			}
+	if fctx.Err() != nil {
+		if ctx.Err() != nil {
+			return FileResult{}, false
 		}
-		if rerr != nil {
-			if rerr == io.EOF {
-				break
-			}
-			if ctx.Err() != nil {
-				return FileResult{}, false
-			}
-			return FileResult{AbsPath: c.AbsPath, RelPath: c.RelPath, Hits: hits, Issue: preview.ErrText(rerr)}, true
+		return FileResult{AbsPath: c.AbsPath, RelPath: c.RelPath, Hits: hits, Issue: fmt.Sprintf("scan timed out after %s, results may be incomplete", perFileTimeout)}, true
+	}
+	if scanErr != nil {
+		if ctx.Err() != nil {
+			return FileResult{}, false
 		}
+		return FileResult{AbsPath: c.AbsPath, RelPath: c.RelPath, Hits: hits, Issue: preview.ErrText(scanErr)}, true
 	}
 
 	if len(hits) == 0 {

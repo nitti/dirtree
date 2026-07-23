@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nitti/dirtree/internal/asyncjob"
+	"github.com/nitti/dirtree/internal/scanline"
 )
 
 // StreamIndex is a per-open-file background pass building the
@@ -56,12 +57,13 @@ func StartStream(path string, tier Tier) *StreamIndex {
 }
 
 // scanFile streams path line by line, recording the byte offset each
-// line starts at (the same bufio.Reader.ReadString('\n') shape
-// internal/search's scanFile already uses for streamed content search,
-// docs/STREAMING_PREVIEW_DESIGN.md §4), and — for a TierHighlighted
-// file, whose size is bounded by HighlightCeiling — also decoding,
-// tab-expanding, and highlighting the full content, the same work
-// Load's synchronous path did, just performed here in the background.
+// line starts at (the same scanline.Scan loop internal/search's scanFile
+// and internal/find's scanFileForMatches also use for their own streamed
+// scans, docs/STREAMING_PREVIEW_DESIGN.md §4), and — for a
+// TierHighlighted file, whose size is bounded by HighlightCeiling — also
+// decoding, tab-expanding, and highlighting the full content, the same
+// work Load's synchronous path did, just performed here in the
+// background.
 func scanFile(path string, tier Tier) (offsets []int64, lines []string, segs [][]Segment) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -71,28 +73,20 @@ func scanFile(path string, tier Tier) (offsets []int64, lines []string, segs [][
 
 	var rawLines []string
 	r := bufio.NewReader(f)
-	var pos int64
-	for {
-		offset := pos
-		line, rerr := r.ReadString('\n')
-		pos += int64(len(line))
-		switch {
-		case len(line) > 0:
-			offsets = append(offsets, offset)
-			if tier == TierHighlighted {
-				rawLines = append(rawLines, trimTrailingNewline(line))
-			}
-		case offset == 0:
-			// Empty file: still one (empty) line, matching
-			// linesFromBytes' "empty result set becomes a single
-			// empty line" rule (SPEC.md §2.1).
-			offsets = append(offsets, offset)
-			if tier == TierHighlighted {
-				rawLines = append(rawLines, "")
-			}
+	_ = scanline.Scan(r, func(l scanline.Line) bool {
+		offsets = append(offsets, l.Offset)
+		if tier == TierHighlighted {
+			rawLines = append(rawLines, l.Text)
 		}
-		if rerr != nil {
-			break
+		return true
+	})
+	if len(offsets) == 0 {
+		// Empty file: still one (empty) line, matching linesFromBytes'
+		// "empty result set becomes a single empty line" rule (SPEC.md
+		// §2.1).
+		offsets = append(offsets, 0)
+		if tier == TierHighlighted {
+			rawLines = append(rawLines, "")
 		}
 	}
 
@@ -115,22 +109,6 @@ func scanFile(path string, tier Tier) (offsets []int64, lines []string, segs [][
 		segs = AlignSegmentsToLines(segs, len(rawLines))
 	}
 	return offsets, rawLines, segs
-}
-
-// trimTrailingNewline strips a line's trailing "\n" (and a preceding
-// "\r", for a CRLF-terminated file) the same way ReadLines/Load's
-// strings.Split-based decoding drops the newline delimiter itself.
-func trimTrailingNewline(line string) string {
-	line = trimSuffixByte(line, '\n')
-	line = trimSuffixByte(line, '\r')
-	return line
-}
-
-func trimSuffixByte(s string, b byte) string {
-	if len(s) > 0 && s[len(s)-1] == b {
-		return s[:len(s)-1]
-	}
-	return s
 }
 
 // Snapshot returns the line-start byte offsets collected so far (nil if
@@ -208,14 +186,9 @@ func ReadWindow(path string, offsets []int64, startLine, count int) ([]string, e
 	}
 	r := bufio.NewReader(f)
 	lines := make([]string, 0, count)
-	for i := 0; i < count; i++ {
-		line, rerr := r.ReadString('\n')
-		if len(line) > 0 {
-			lines = append(lines, expandTabs(trimTrailingNewline(line)))
-		}
-		if rerr != nil {
-			break
-		}
-	}
+	_ = scanline.Scan(r, func(l scanline.Line) bool {
+		lines = append(lines, expandTabs(l.Text))
+		return len(lines) < count
+	})
 	return lines, nil
 }
