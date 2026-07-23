@@ -252,7 +252,11 @@ func (v *QuickOpen) drawList(w, h int) {
 				break
 			}
 			m := v.Matches[i]
-			label := m.RelPath(v.RootPath)
+			open := " "
+			if v.Files.IsOpen(m.AbsPath) {
+				open = "●"
+			}
+			label := open + " " + m.RelPath(v.RootPath)
 			errored := v.ErrorPath != "" && m.AbsPath == v.ErrorPath
 			if errored {
 				label += " [" + v.ErrorMessage + "]"
