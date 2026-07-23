@@ -448,7 +448,7 @@ func (v *Search) Draw(w, h int) {
 			msg = "searching…"
 		default:
 			frame := spinner.Frame(time.Since(v.ScanStart), canvas.SpinnerFPS, spinner.DefaultFrames)
-			msg = string(frame) + " searching…"
+			msg = "searching " + string(frame)
 		}
 		v.Canvas.DrawText(0, listTop, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
 	case len(v.Results) == 0:
