@@ -130,14 +130,10 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 	}
 }
 
-func TestDrawFileTitleBarShowsOpenFileCount(t *testing.T) {
+func TestDrawFileTitleBarShowsLineCount(t *testing.T) {
 	dir := t.TempDir()
-	path1 := filepath.Join(dir, "one.txt")
-	path2 := filepath.Join(dir, "two.txt")
-	if err := os.WriteFile(path1, []byte("hello\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path2, []byte("world\n"), 0o644); err != nil {
+	path := filepath.Join(dir, "three.txt")
+	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -150,10 +146,7 @@ func TestDrawFileTitleBarShowsOpenFileCount(t *testing.T) {
 
 	files := openfiles.New()
 	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim), RootPath: dir}}
-	if res := files.Open(path1, 1<<20); res.Outcome != openfiles.Opened {
-		t.Fatalf("Open failed: %s", res.Message)
-	}
-	if res := files.Open(path2, 1<<20); res.Outcome != openfiles.Opened {
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %s", res.Message)
 	}
 	waitEntryReady(t, files.DisplayedEntry())
@@ -162,8 +155,38 @@ func TestDrawFileTitleBarShowsOpenFileCount(t *testing.T) {
 	sim.Show()
 
 	row := rowText(sim, 0, w)
-	if !strings.HasPrefix(row, "2 files  two.txt") {
-		t.Fatalf("title row = %q, want it to start with the open-file count and name", row)
+	if !strings.HasPrefix(row, "3 lines  three.txt") {
+		t.Fatalf("title row = %q, want it to start with the file's line count and name", row)
+	}
+}
+
+func TestDrawFileTitleBarShowsSingularLineCount(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "one.txt")
+	if err := os.WriteFile(path, []byte("only line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim), RootPath: dir}}
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	waitEntryReady(t, files.DisplayedEntry())
+
+	v.Draw(0, 0, w, h, true)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	if !strings.HasPrefix(row, "1 line  one.txt") {
+		t.Fatalf("title row = %q, want singular \"1 line\"", row)
 	}
 }
 
