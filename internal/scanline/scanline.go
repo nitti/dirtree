@@ -30,7 +30,7 @@ type Line struct {
 // satisfied match, a fixed line budget) without that being reported as
 // an error.
 func Scan(r *bufio.Reader, yield func(Line) bool) error {
-	return ScanWhile(r, nil, yield)
+	return ScanWhile(nil, r, yield)
 }
 
 // ScanWhile is Scan with an additional ctx.Done() check made before each
@@ -41,7 +41,7 @@ func Scan(r *bufio.Reader, yield func(Line) bool) error {
 // the scan before it reads one more line, rather than racing whatever's
 // left in the buffer. A nil ctx behaves exactly like Scan (always
 // continue).
-func ScanWhile(r *bufio.Reader, ctx context.Context, yield func(Line) bool) error {
+func ScanWhile(ctx context.Context, r *bufio.Reader, yield func(Line) bool) error {
 	var pos int64
 	for {
 		if ctx != nil {
