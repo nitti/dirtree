@@ -116,7 +116,7 @@ func (v *QuickOpen) RefreshMatches() {
 	}
 	matches := make([]index.Entry, 0, len(entries))
 	for _, e := range entries {
-		if !e.IsDir && match.Matches(v.Query, e.RelPath) {
+		if !e.IsDir && match.Matches(v.Query, e.RelPath(v.RootPath)) {
 			matches = append(matches, e)
 		}
 	}
@@ -252,7 +252,7 @@ func (v *QuickOpen) drawList(w, h int) {
 				break
 			}
 			m := v.Matches[i]
-			label := m.RelPath
+			label := m.RelPath(v.RootPath)
 			errored := v.ErrorPath != "" && m.AbsPath == v.ErrorPath
 			if errored {
 				label += " [" + v.ErrorMessage + "]"

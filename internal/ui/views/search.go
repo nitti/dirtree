@@ -224,7 +224,7 @@ func (v *Search) RecomputeSearch() {
 	candidates := make([]search.Candidate, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir {
-			candidates = append(candidates, search.Candidate{AbsPath: e.AbsPath, RelPath: e.RelPath})
+			candidates = append(candidates, search.Candidate{AbsPath: e.AbsPath, RelPath: e.RelPath(v.RootPath)})
 		}
 	}
 

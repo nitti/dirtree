@@ -165,7 +165,7 @@ func (a *App) syncWatches() {
 		if !n.IsDir || !n.Loaded() {
 			return
 		}
-		a.watcher.Add(n.Path)
+		a.watcher.Add(n.Path())
 		for _, c := range n.Children {
 			walk(c)
 		}

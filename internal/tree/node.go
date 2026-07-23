@@ -29,10 +29,16 @@ func errText(err error) string {
 }
 
 // Node is one entry in the lazily-loaded tree.
+//
+// A Node deliberately does not store its own absolute path or depth as
+// fields: both are fully reconstructable by walking Parent, and caching
+// a copy on every node instead would mean holding two full-length path
+// strings (plus a redundant depth int) per node for the tree's entire
+// lifetime — on a 100k-node tree that's on the order of tens of
+// megabytes of otherwise-inert duplicate string data. See Path and
+// Depth below.
 type Node struct {
-	Path     string // absolute path
 	Name     string // display name (basename, or full path for a root whose basename is empty)
-	Depth    int
 	Parent   *Node
 	IsDir    bool
 	Expanded bool
@@ -47,6 +53,50 @@ type Node struct {
 	Err string
 
 	loaded bool
+
+	// rootPath is the tree root's own absolute path, set only on the
+	// root node (Parent == nil, by NewRoot). Every other node's absolute
+	// path is reconstructed on demand by Path() by walking up to the
+	// root and joining Name segments back onto this.
+	rootPath string
+}
+
+// Path returns n's absolute path, reconstructed by walking up to the
+// tree's root (whose absolute path was recorded once by NewRoot) and
+// joining Name segments back down to n. This is a small, bounded walk
+// proportional to n's depth, not the tree's size, traded deliberately
+// for not storing a full path string per node — see the Node doc
+// comment. A caller that needs many nodes' paths in a tight loop (e.g. a
+// render pass) should be mindful this does real work per call, but it's
+// cheap relative to a single frame's other per-row work.
+func (n *Node) Path() string {
+	if n.Parent == nil {
+		return n.rootPath
+	}
+	names := []string{n.Name}
+	cur := n.Parent
+	for cur.Parent != nil {
+		names = append(names, cur.Name)
+		cur = cur.Parent
+	}
+	// cur is now the root.
+	parts := make([]string, 0, len(names)+1)
+	parts = append(parts, cur.rootPath)
+	for i := len(names) - 1; i >= 0; i-- {
+		parts = append(parts, names[i])
+	}
+	return filepath.Join(parts...)
+}
+
+// Depth returns n's distance from the tree root (the root itself is
+// depth 0), reconstructed by walking Parent rather than stored per node
+// — same rationale as Path.
+func (n *Node) Depth() int {
+	d := 0
+	for cur := n.Parent; cur != nil; cur = cur.Parent {
+		d++
+	}
+	return d
 }
 
 // Ignorer decides whether a candidate path should be skipped during
@@ -74,17 +124,16 @@ func NewRoot(absPath string, ignorer Ignorer) *Node {
 		name = absPath
 	}
 	root := &Node{
-		Path:  absPath,
-		Name:  name,
-		Depth: 0,
-		IsDir: true,
+		Name:     name,
+		IsDir:    true,
+		rootPath: absPath,
 	}
 	root.LoadChildren(absPath, ignorer)
 	root.Expanded = true
 	return root
 }
 
-// LoadChildren populates n.Children by listing the directory at n.Path
+// LoadChildren populates n.Children by listing the directory at n.Path()
 // on disk. rootPath is the tree root's absolute path, needed to compute
 // each candidate's root-relative path for ignore matching. Loading an
 // already-successfully-loaded node is a no-op (SPEC.md §2); a node whose
@@ -99,7 +148,7 @@ func (n *Node) LoadChildren(rootPath string, ignorer Ignorer) {
 	}
 	n.loaded = true
 
-	entries, err := os.ReadDir(n.Path)
+	entries, err := os.ReadDir(n.Path())
 	if err != nil {
 		n.Err = errText(err)
 		n.Children = nil
@@ -116,7 +165,7 @@ func (n *Node) LoadChildren(rootPath string, ignorer Ignorer) {
 		if e.Name() == ".git" {
 			continue
 		}
-		childPath := filepath.Join(n.Path, e.Name())
+		childPath := filepath.Join(n.Path(), e.Name())
 		isDir := e.IsDir()
 		if !isDir && e.Type()&os.ModeSymlink != 0 {
 			if info, statErr := os.Stat(childPath); statErr == nil {
@@ -128,9 +177,7 @@ func (n *Node) LoadChildren(rootPath string, ignorer Ignorer) {
 			continue
 		}
 		children = append(children, &Node{
-			Path:   childPath,
 			Name:   e.Name(),
-			Depth:  n.Depth + 1,
 			Parent: n,
 			IsDir:  isDir,
 		})
@@ -175,7 +222,7 @@ func RefreshTree(n *Node, rootPath string, ignorer Ignorer) []string {
 	n.refreshChildren(rootPath, ignorer)
 	var newlyErrored []string
 	if n.Err != "" && !hadErr {
-		newlyErrored = append(newlyErrored, n.Path)
+		newlyErrored = append(newlyErrored, n.Path())
 	}
 	for _, c := range n.Children {
 		newlyErrored = append(newlyErrored, RefreshTree(c, rootPath, ignorer)...)
@@ -188,7 +235,7 @@ func RefreshTree(n *Node, rootPath string, ignorer Ignorer) []string {
 // same directory-ness) reuses its existing *Node; anything else is a
 // fresh Node. Entries no longer present on disk are dropped.
 func (n *Node) refreshChildren(rootPath string, ignorer Ignorer) {
-	entries, err := os.ReadDir(n.Path)
+	entries, err := os.ReadDir(n.Path())
 	if err != nil {
 		n.Err = errText(err)
 		n.Children = nil
@@ -199,9 +246,10 @@ func (n *Node) refreshChildren(rootPath string, ignorer Ignorer) {
 		ignorer = noopIgnorer{}
 	}
 
+	nPath := n.Path()
 	existing := make(map[string]*Node, len(n.Children))
 	for _, c := range n.Children {
-		existing[c.Path] = c
+		existing[c.Path()] = c
 	}
 
 	children := make([]*Node, 0, len(entries))
@@ -209,7 +257,7 @@ func (n *Node) refreshChildren(rootPath string, ignorer Ignorer) {
 		if e.Name() == ".git" {
 			continue
 		}
-		childPath := filepath.Join(n.Path, e.Name())
+		childPath := filepath.Join(nPath, e.Name())
 		isDir := e.IsDir()
 		if !isDir && e.Type()&os.ModeSymlink != 0 {
 			if info, statErr := os.Stat(childPath); statErr == nil {
@@ -225,9 +273,7 @@ func (n *Node) refreshChildren(rootPath string, ignorer Ignorer) {
 			continue
 		}
 		children = append(children, &Node{
-			Path:   childPath,
 			Name:   e.Name(),
-			Depth:  n.Depth + 1,
 			Parent: n,
 			IsDir:  isDir,
 		})
