@@ -10,6 +10,7 @@ package scanline
 
 import (
 	"bufio"
+	"context"
 	"io"
 )
 
@@ -32,19 +33,23 @@ func Scan(r *bufio.Reader, yield func(Line) bool) error {
 	return ScanWhile(r, nil, yield)
 }
 
-// ScanWhile is Scan with an additional canContinue check made before each
+// ScanWhile is Scan with an additional ctx.Done() check made before each
 // read attempt, including the first — unlike a check inside yield, which
 // only ever runs after a line has already been read off r. Callers cutting
-// a scan short based on an external signal (a timeout, a canceled
-// context) that can fire between reads, not just between lines, need this
-// so an already-expired signal reliably stops the scan before it reads
-// one more line, rather than racing whatever's left in the buffer. A nil
-// canContinue behaves exactly like Scan (always continue).
-func ScanWhile(r *bufio.Reader, canContinue func() bool, yield func(Line) bool) error {
+// a scan short based on cancellation that can fire between reads, not
+// just between lines, need this so an already-canceled ctx reliably stops
+// the scan before it reads one more line, rather than racing whatever's
+// left in the buffer. A nil ctx behaves exactly like Scan (always
+// continue).
+func ScanWhile(r *bufio.Reader, ctx context.Context, yield func(Line) bool) error {
 	var pos int64
 	for {
-		if canContinue != nil && !canContinue() {
-			return nil
+		if ctx != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+			}
 		}
 		offset := pos
 		raw, rerr := r.ReadString('\n')
