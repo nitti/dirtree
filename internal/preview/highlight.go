@@ -140,3 +140,23 @@ func Highlight(path string, lines []string) [][]Segment {
 	}
 	return out
 }
+
+// highlightOrPlain is Highlight with its nil-result fallback applied: one
+// plain CategoryText segment per line when no lexer matched, otherwise
+// Highlight's own output aligned to exactly len(lines) segment lists (a
+// lexer can under/over-produce relative to the source line count, e.g.
+// around a final line with no trailing newline). Load and StreamIndex's
+// background pass both need this same fallback/alignment step after
+// calling Highlight, so callers never need to special-case a nil
+// highlighting result themselves.
+func highlightOrPlain(path string, lines []string) [][]Segment {
+	segs := Highlight(path, lines)
+	if segs == nil {
+		segs = make([][]Segment, len(lines))
+		for i, l := range lines {
+			segs[i] = []Segment{{Text: l, Category: CategoryText}}
+		}
+		return segs
+	}
+	return AlignSegmentsToLines(segs, len(lines))
+}

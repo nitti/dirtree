@@ -99,15 +99,7 @@ func scanFile(path string, tier Tier) (offsets []int64, lines []string, segs [][
 	for i, l := range rawLines {
 		rawLines[i] = expandTabs(l)
 	}
-	segs = Highlight(path, rawLines)
-	if segs == nil {
-		segs = make([][]Segment, len(rawLines))
-		for i, l := range rawLines {
-			segs[i] = []Segment{{Text: l, Category: CategoryText}}
-		}
-	} else {
-		segs = AlignSegmentsToLines(segs, len(rawLines))
-	}
+	segs = highlightOrPlain(path, rawLines)
 	return offsets, rawLines, segs
 }
 

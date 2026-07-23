@@ -169,15 +169,7 @@ func Load(path string, cap int64) LoadResult {
 	}
 
 	lines := linesFromBytes(data, truncated, cap)
-	segs := Highlight(path, lines)
-	if segs == nil {
-		segs = make([][]Segment, len(lines))
-		for i, l := range lines {
-			segs[i] = []Segment{{Text: l, Category: CategoryText}}
-		}
-	} else {
-		segs = AlignSegmentsToLines(segs, len(lines))
-	}
+	segs := highlightOrPlain(path, lines)
 	return LoadResult{Lines: lines, Segs: segs}
 }
 
