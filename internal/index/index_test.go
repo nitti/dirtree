@@ -52,7 +52,7 @@ func TestIndexReachesIntoCollapsedDirs(t *testing.T) {
 
 	found := false
 	for _, e := range entries {
-		if e.RelPath == "sub/f.txt" {
+		if e.RelPath(root) == "sub/f.txt" {
 			found = true
 		}
 	}
@@ -88,7 +88,7 @@ func TestIndexSortedCaseInsensitive(t *testing.T) {
 
 	idx := Start(root, nil)
 	entries := waitDone(t, idx)
-	if len(entries) != 2 || entries[0].RelPath != "apple.txt" || entries[1].RelPath != "Banana.txt" {
+	if len(entries) != 2 || entries[0].RelPath(root) != "apple.txt" || entries[1].RelPath(root) != "Banana.txt" {
 		t.Fatalf("expected case-insensitive sort, got %+v", entries)
 	}
 }
@@ -103,7 +103,7 @@ func TestIndexRespectsGitignore(t *testing.T) {
 	idx := Start(root, m)
 	entries := waitDone(t, idx)
 	for _, e := range entries {
-		if e.RelPath == "a.log" {
+		if e.RelPath(root) == "a.log" {
 			t.Fatal("expected .gitignore'd file excluded from index")
 		}
 	}
@@ -119,7 +119,7 @@ func TestIndexRespectsDirtreeIgnore(t *testing.T) {
 	idx := Start(root, m)
 	entries := waitDone(t, idx)
 	for _, e := range entries {
-		if e.RelPath == "a.secret" {
+		if e.RelPath(root) == "a.secret" {
 			t.Fatal("expected .dirtreeignore'd file excluded from index")
 		}
 	}
@@ -153,7 +153,7 @@ func TestIndexRebuildPicksUpNewEntry(t *testing.T) {
 
 	found := false
 	for _, e := range entries {
-		if e.RelPath == "b.txt" {
+		if e.RelPath(root) == "b.txt" {
 			found = true
 		}
 	}

@@ -27,8 +27,8 @@ func TestFilterMatchesMiddleSegmentAndDoesNotDuplicate(t *testing.T) {
 
 	var got []string
 	for _, e := range entries {
-		if match.Matches("mid", e.RelPath) {
-			got = append(got, e.RelPath)
+		if match.Matches("mid", e.RelPath(root)) {
+			got = append(got, e.RelPath(root))
 		}
 	}
 

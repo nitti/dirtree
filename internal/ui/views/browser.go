@@ -148,7 +148,7 @@ func (v *Browser) HandleKey(ev *tcell.EventKey) {
 		// §3.1), so a still-broken directory the user keeps trying to
 		// disclose should keep giving feedback each time, not just once.
 		if target.Err != "" {
-			v.FlagErrorFlashes([]string{target.Path})
+			v.FlagErrorFlashes([]string{target.Path()})
 		}
 	case ev.Key() == tcell.KeyLeft:
 		v.Selected = v.Selected.MoveLeft()
@@ -245,7 +245,7 @@ func (v *Browser) handleJumpKey(ev *tcell.EventKey) {
 		target := v.JumpMatches[0]
 		target.Expand(v.RootPath, v.Ignorer)
 		if target.Err != "" {
-			v.FlagErrorFlashes([]string{target.Path})
+			v.FlagErrorFlashes([]string{target.Path()})
 		} else {
 			v.JumpScope = target
 			v.JumpDisclosed += v.JumpQuery + "/"
@@ -283,18 +283,18 @@ func (v *Browser) performOpen() {
 	if v.Selected.IsDir {
 		v.Selected.ToggleExpand(v.RootPath, v.Ignorer)
 		if v.Selected.Err != "" {
-			v.FlagErrorFlashes([]string{v.Selected.Path})
+			v.FlagErrorFlashes([]string{v.Selected.Path()})
 		}
 		return
 	}
-	res := v.Files.Open(v.Selected.Path, preview.DefaultByteCap)
+	res := v.Files.Open(v.Selected.Path(), preview.DefaultByteCap)
 	if res.Outcome != openfiles.Opened {
 		v.Selected.Err = res.Message
-		v.FlagErrorFlashes([]string{v.Selected.Path})
+		v.FlagErrorFlashes([]string{v.Selected.Path()})
 		return
 	}
 	v.Selected.Err = ""
-	v.FlashPath = v.Selected.Path
+	v.FlashPath = v.Selected.Path()
 	v.FlashStart = time.Now()
 }
 
@@ -368,13 +368,17 @@ func (v *Browser) drawList(x0, y0, w, h int) {
 			break
 		}
 		n := flat[i]
+		// Computed once per row: n.Path() walks up to the tree root
+		// (see internal/tree/node.go), and it's checked against two
+		// separate flash conditions below.
+		nPath := n.Path()
 		style := canvas.StyleNormal
 		switch {
 		// SPEC.md §6.1: same reasoning as the open-flash case below —
 		// the errored directory could well be the currently-selected
 		// row, and reverse-video would otherwise mask the flash
 		// entirely, so it takes precedence even over selection.
-		case isErrorFlashing(v.ErrorFlashes, n.Path):
+		case isErrorFlashing(v.ErrorFlashes, nPath):
 			style = canvas.StyleFlashError
 		// SPEC.md §5.2: the flash takes precedence here, unlike content
 		// search's own flash/selected precedence — Return never moves
@@ -382,7 +386,7 @@ func (v *Browser) drawList(x0, y0, w, h int) {
 		// always the already-selected row; if StyleSelected won here the
 		// same way it does in content search, the flash would be
 		// permanently masked by reverse-video and never actually visible.
-		case n.Path == v.FlashPath && time.Since(v.FlashStart) < canvas.FlashDuration:
+		case nPath == v.FlashPath && time.Since(v.FlashStart) < canvas.FlashDuration:
 			style = canvas.StyleFlash
 		case n == v.Selected:
 			style = canvas.StyleSelected
@@ -406,7 +410,7 @@ func isErrorFlashing(flashes map[string]time.Time, path string) bool {
 // open-files list, SPEC.md §2.2/§5.2 — also shared with content search's
 // file rows), name, and any per-node error indicator.
 func (v *Browser) label(n *tree.Node) string {
-	indent := strings.Repeat("  ", n.Depth)
+	indent := strings.Repeat("  ", n.Depth())
 	marker := "  "
 	if n.IsDir {
 		if n.Expanded {
@@ -416,7 +420,7 @@ func (v *Browser) label(n *tree.Node) string {
 		}
 	}
 	openMarker := " "
-	if v.Files.IsOpen(n.Path) {
+	if v.Files.IsOpen(n.Path()) {
 		openMarker = "●"
 	}
 	label := indent + marker + openMarker + " " + n.Name

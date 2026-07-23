@@ -21,10 +21,23 @@ type Ignorer interface {
 }
 
 // Entry is one indexed path.
+//
+// Entry deliberately does not store a root-relative display path
+// alongside AbsPath: it's trivially derivable from AbsPath plus the
+// index's scan root, and storing both as separate resident strings for
+// the app's entire lifetime would roughly double the index's memory
+// footprint for no benefit — on a 100k-file tree that's on the order of
+// ten-plus megabytes of duplicate string data. Callers compute it via
+// RelPath below.
 type Entry struct {
 	AbsPath string
-	RelPath string // root-relative, slash-delimited display path
 	IsDir   bool
+}
+
+// RelPath returns e's path relative to root as a root-relative,
+// slash-delimited display path, computed on demand instead of stored.
+func (e Entry) RelPath(root string) string {
+	return relSlashPath(root, e.AbsPath)
 }
 
 // Index holds the background-built path list and its build status,
@@ -133,7 +146,7 @@ func build(rootPath string, ignorer Ignorer) []Entry {
 			if ignorer != nil && ignorer.Match(rel, isDir) {
 				continue
 			}
-			entries = append(entries, Entry{AbsPath: childPath, RelPath: rel, IsDir: isDir})
+			entries = append(entries, Entry{AbsPath: childPath, IsDir: isDir})
 			if isDir {
 				walk(childPath)
 			}
@@ -142,7 +155,7 @@ func build(rootPath string, ignorer Ignorer) []Entry {
 	walk(rootPath)
 
 	sort.SliceStable(entries, func(i, j int) bool {
-		return strings.ToLower(entries[i].RelPath) < strings.ToLower(entries[j].RelPath)
+		return strings.ToLower(entries[i].RelPath(rootPath)) < strings.ToLower(entries[j].RelPath(rootPath))
 	})
 	return entries
 }
