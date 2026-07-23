@@ -32,9 +32,18 @@ func New() State {
 	return State{startTime: time.Now()}
 }
 
-func (s *State) Lock()    { s.mu.Lock() }
-func (s *State) Unlock()  { s.mu.Unlock() }
-func (s *State) RLock()   { s.mu.RLock() }
+// Lock acquires the write lock guarding State and the embedding job
+// struct's own payload fields.
+func (s *State) Lock() { s.mu.Lock() }
+
+// Unlock releases the write lock acquired by Lock.
+func (s *State) Unlock() { s.mu.Unlock() }
+
+// RLock acquires the read lock guarding State and the embedding job
+// struct's own payload fields.
+func (s *State) RLock() { s.mu.RLock() }
+
+// RUnlock releases the read lock acquired by RLock.
 func (s *State) RUnlock() { s.mu.RUnlock() }
 
 // Reset clears done/doneTime and sets startTime to now, for restarting a
