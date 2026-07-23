@@ -86,6 +86,12 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Selecting a digit past the current page's last row (e.g. a short final page) reports no entry, distinguishing it from a valid position 0.
 - A bulk page-reorder (Shift-Page-Up/Shift-Page-Down) moves the entry up to a full page's worth of positions toward the top/bottom, and the displayed entry (if it was the one moved) follows it.
 - A bulk page-reorder that would cross a list end stops at that end rather than being a no-op or wrapping around — moving as many positions as are actually available.
+- Displaying more than `ResidentCap` distinct `TierHighlighted` entries in most-recently-displayed order evicts the least-recently-displayed one's `Lines`/`Segs` (nil'd out) once the cap is exceeded, leaving the `ResidentCap` most-recently-displayed entries' content resident.
+- Displaying an already-evicted entry again transparently rebuilds its content (a fresh background stream repopulates `Lines`/`Segs` the same way a newly-opened entry's does) rather than leaving it permanently empty.
+- An evicted entry's scroll position, wrap cache, find state, tier, and copy-mode setting are left untouched by eviction — only `Lines`/`Segs` are cleared.
+- The currently-displayed entry is never evicted, even transiently, while switching among more than `ResidentCap` other entries.
+- A `TierPlainText` entry is never evicted (it never holds full content resident to begin with).
+- Removing an entry via `x` (§2.3) that was tracked as resident does not leave a stale reference behind — it drops out of residency tracking along with the rest of its state.
 
 ## In-file find matching (§2.4)
 
