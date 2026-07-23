@@ -229,6 +229,13 @@ func (v *Preview) drawContent(x0, y0, w, h int) {
 	}
 	if !contentReady(e) {
 		msg := "building preview…"
+		if e.Stream != nil {
+			elapsed := e.Stream.Elapsed()
+			if spinner.ShouldShow(e.Stream.Done(), elapsed, canvas.SpinnerThreshold) {
+				frame := spinner.Frame(elapsed, canvas.SpinnerFPS, spinner.DefaultFrames)
+				msg = "building preview " + string(frame)
+			}
+		}
 		row := y0 + max(h/2, 1)
 		v.Canvas.DrawText(x0, row, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
 		return
