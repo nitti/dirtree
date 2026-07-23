@@ -31,7 +31,7 @@ func TestQuickOpenLegendTier1FitsMinTerminalWidth(t *testing.T) {
 // exactly as created.
 type noopIgnorer struct{}
 
-func (noopIgnorer) Match(relPath string, isDir bool) bool { return false }
+func (noopIgnorer) Match(_ string, _ bool) bool { return false }
 
 func waitIndexDone(t *testing.T, idx *index.Index) {
 	t.Helper()
