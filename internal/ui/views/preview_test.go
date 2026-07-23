@@ -130,6 +130,43 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 	}
 }
 
+func TestDrawFileTitleBarShowsOpenFileCount(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "one.txt")
+	path2 := filepath.Join(dir, "two.txt")
+	if err := os.WriteFile(path1, []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path2, []byte("world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim), RootPath: dir}}
+	if res := files.Open(path1, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	if res := files.Open(path2, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	waitEntryReady(t, files.DisplayedEntry())
+
+	v.Draw(0, 0, w, h, true)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	if !strings.HasPrefix(row, "2 files  two.txt") {
+		t.Fatalf("title row = %q, want it to start with the open-file count and name", row)
+	}
+}
+
 // waitEntryReady blocks until e's content is ready to render (its
 // background stream pass has finished and, for TierHighlighted, been
 // synced into Lines/Segs) — the real app never opens the goto-line
