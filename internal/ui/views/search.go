@@ -404,6 +404,30 @@ func (v *Search) performOpen() {
 	v.LastOpenedLine = line
 }
 
+// searchSummary renders a "N hits across N files" right-hand summary
+// for the query input row (SPEC.md §9.2), counting only files that
+// actually contributed at least one hit — a file present in results
+// solely because it hit a scan issue (a timeout or read error, §9.1)
+// contributes no hits and isn't counted as one of the files either.
+func searchSummary(results []search.FileResult) string {
+	var hits, files int
+	for _, r := range results {
+		if len(r.Hits) == 0 {
+			continue
+		}
+		hits += len(r.Hits)
+		files++
+	}
+	hitWord, fileWord := "hit", "file"
+	if hits != 1 {
+		hitWord = "hits"
+	}
+	if files != 1 {
+		fileWord = "files"
+	}
+	return fmt.Sprintf("%d %s across %d %s", hits, hitWord, files, fileWord)
+}
+
 // Draw renders the content search overlay (SPEC.md §9.2): a header row
 // (title plus keybinding legend), the query input on its own row
 // directly below, and a two-level list — one row per matching file,
@@ -415,7 +439,13 @@ func (v *Search) Draw(w, h int) {
 	if v.Regex {
 		prompt = "[regex] > "
 	}
-	v.Canvas.DrawText(0, 1, w, prompt+v.Query, canvas.StyleSearchInput)
+	queryRow := prompt + v.Query
+	if v.Results != nil {
+		if text, ok := canvas.FitPair(w, queryRow, searchSummary(v.Results)); ok {
+			queryRow = text
+		}
+	}
+	v.Canvas.DrawText(0, 1, w, queryRow, canvas.StyleSearchInput)
 
 	const listTop = 2
 	listHeight := h - listTop
