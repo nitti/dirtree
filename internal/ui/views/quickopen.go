@@ -1,6 +1,7 @@
 package views
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -214,8 +215,31 @@ func (v *QuickOpen) performOpen() {
 // search uses, §9.2), and the flat match list.
 func (v *QuickOpen) Draw(w, h int) {
 	v.Canvas.DrawHeaderMode(w, "QUICK OPEN", quickOpenLegend)
-	v.Canvas.DrawText(0, 1, w, "> "+v.Query, canvas.StyleSearchInput)
+	queryRow := "> " + v.Query
+	if v.Matches != nil {
+		if text, ok := canvas.FitPair(w, queryRow, quickOpenSummary(v.Idx, len(v.Matches))); ok {
+			queryRow = text
+		}
+	}
+	v.Canvas.DrawText(0, 1, w, queryRow, canvas.StyleSearchInput)
 	v.drawList(w, h)
+}
+
+// quickOpenSummary renders a "N of N files" right-hand summary for the
+// query input row (SPEC.md §4.2), where the first N is how many of the
+// background index's files (§4.1, directories excluded) currently
+// match the query — the same len(v.Matches) drawList already paginates
+// through — and the second is the index's total file count regardless
+// of query.
+func quickOpenSummary(idx *index.Index, shown int) string {
+	entries, _ := idx.Snapshot()
+	total := 0
+	for _, e := range entries {
+		if !e.IsDir {
+			total++
+		}
+	}
+	return fmt.Sprintf("%d of %d files", shown, total)
 }
 
 // drawList renders quick open's flat, root-relative match list (SPEC.md
