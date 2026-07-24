@@ -21,7 +21,7 @@ var (
 	// search are alternate entry points to the same goal and drop first
 	// on a narrow terminal.
 	previewLegend = []canvas.LegendEntry{
-		{Text: "[tab] open-files list", Priority: 1},
+		{Text: "[tab] switch files", Priority: 1},
 		{Text: "[o] quick open", Priority: 2},
 		{Text: "[b] browse", Priority: 1},
 		{Text: "[s] search", Priority: 2},

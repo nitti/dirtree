@@ -35,7 +35,7 @@ func TestLegendTier1FitsMinTerminalWidth(t *testing.T) {
 // detail of how the var literal happens to be written.
 func TestPreviewLegendOrder(t *testing.T) {
 	want := []string{
-		"[tab] open-files list",
+		"[tab] switch files",
 		"[o] quick open",
 		"[b] browse",
 		"[s] search",
