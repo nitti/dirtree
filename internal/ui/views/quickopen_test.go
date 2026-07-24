@@ -183,12 +183,78 @@ func TestQuickOpenDrawSuppressesGhostTextForMidPathMatch(t *testing.T) {
 	sim.Show()
 
 	row := rowText(sim, 1, w)
-	if strings.TrimRight(row, " ") != "> txt" {
+	if !strings.HasPrefix(row, "> txt") || strings.Contains(row, "txt.") {
 		t.Errorf("query row = %q, want no ghost text appended for a non-prefix match", row)
+	}
+	if !strings.HasSuffix(strings.TrimRight(row, " "), "1 of 1 files") {
+		t.Errorf("query row = %q, want the file summary still shown alongside the absent ghost text", row)
 	}
 
 	const listTop = 2
 	if style := cellStyle(sim, 0, listTop); style != canvas.StyleFindCurrent {
 		t.Errorf("sole match row style = %v, want StyleFindCurrent even without ghost text", style)
+	}
+}
+
+// TestQuickOpenSummaryCountsFilesOnly guards quickOpenSummary's total:
+// it counts the background index's non-directory entries regardless of
+// the current query, so it always reads as the full file count the
+// query is narrowing down from, not whatever's currently matching.
+func TestQuickOpenSummaryCountsFilesOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"one.txt", "two.txt", filepath.Join("sub", "three.txt")} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	if got := quickOpenSummary(idx, 1); got != "1 of 3 files" {
+		t.Errorf("quickOpenSummary(idx, 1) = %q, want %q", got, "1 of 3 files")
+	}
+}
+
+// TestQuickOpenDrawShowsFileSummary guards the query row's rendered
+// "N of N files" summary (SPEC.md §4.2): once the background index has
+// finished (Matches is non-nil, even if empty), the row's right side
+// shows how many of the index's files currently match the query out of
+// its total file count.
+func TestQuickOpenDrawShowsFileSummary(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"one.txt", "two.txt", "three.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{
+		Shared:  &Shared{Files: openfiles.New(), Canvas: canvas.New(sim), RootPath: dir, Idx: idx},
+		Query:   "one",
+		Matches: []index.Entry{{AbsPath: filepath.Join(dir, "one.txt")}},
+	}
+	v.Draw(w, h)
+	sim.Show()
+
+	row := rowText(sim, 1, w)
+	if !strings.HasPrefix(row, "> one") {
+		t.Fatalf("query row = %q, want it to start with the prompt and query", row)
+	}
+	if !strings.HasSuffix(strings.TrimRight(row, " "), "1 of 3 files") {
+		t.Fatalf("query row = %q, want it to end with the file summary", row)
 	}
 }
