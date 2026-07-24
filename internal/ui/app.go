@@ -78,8 +78,13 @@ const (
 	// long to visibly register. Checked on the existing resize-poll ticker
 	// (resizePollInterval) rather than a dedicated timer — imprecision on
 	// the order of one poll tick is negligible against a threshold this
-	// size.
-	quitHoldReleaseGap = 600 * time.Millisecond
+	// size. 300ms is an unmeasured, tightened-from-600ms guess (not
+	// verified against any specific terminal's real auto-repeat timing —
+	// see the two prior, larger regressions this value's own history
+	// caused): if flicker or a restart mid-hold reappears, that means a
+	// real terminal's auto-repeat gap exceeds this value, and the fix is
+	// to raise it back, not to add a second threshold again.
+	quitHoldReleaseGap = 300 * time.Millisecond
 )
 
 // App holds all interactive state for a running session.
