@@ -12,6 +12,12 @@ import (
 	"github.com/nitti/dirtree/internal/ui/views"
 )
 
+// switchFilesLegendText is previewLegend's open-files-list entry,
+// broken out as its own constant so drawPreviewHeader's dim-when-empty
+// check (below) can find it in the fitted legend text without
+// duplicating the literal.
+const switchFilesLegendText = "[tab] switch files"
+
 var (
 	// previewLegend is the primary preview view's app-wide legend
 	// (SPEC.md §5.2): the four ways to leave the preview for another
@@ -21,7 +27,7 @@ var (
 	// search are alternate entry points to the same goal and drop first
 	// on a narrow terminal.
 	previewLegend = []canvas.LegendEntry{
-		{Text: "[tab] switch files", Priority: 1},
+		{Text: switchFilesLegendText, Priority: 1},
 		{Text: "[o] quick open", Priority: 2},
 		{Text: "[b] browse", Priority: 1},
 		{Text: "[s] search", Priority: 2},
@@ -46,12 +52,12 @@ func (a *App) draw() {
 	case views.OverlayQuickOpen:
 		a.QuickOpen.Draw(w, h)
 	case views.OverlayOpenFiles:
-		a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
+		a.drawPreviewHeader(w)
 		a.OpenFiles.Draw(0, 1, w, h-1, &a.Preview)
 	case views.OverlaySearch:
 		a.Search.Draw(w, h)
 	default:
-		a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
+		a.drawPreviewHeader(w)
 		a.Preview.Draw(0, 1, w, h-1, true)
 	}
 	a.drawBadge(w, h)
@@ -173,6 +179,23 @@ func shellAbbreviate(path string) string {
 // every frame so a live resize can bring it back.
 func (a *App) menuBarText(w int, entries []canvas.LegendEntry) string {
 	return canvas.LegendText(w, a.rootLabel(), entries)
+}
+
+// drawPreviewHeader draws the top menu bar (SPEC.md §5.2) for both
+// places the primary preview view's own header/title bar row is shown:
+// the primary preview view itself, and underneath the open-files-list
+// overlay's dropdown (which draws its own separate header below this
+// one, §2.3). previewLegend's "switch files" entry is dimmed whenever
+// the open-files list is empty, since there is then nothing for Tab to
+// switch to or from — the entry stays in the legend (so the keybinding
+// hint doesn't disappear and reappear as files are opened/closed) but
+// reads as visually inert rather than actionable.
+func (a *App) drawPreviewHeader(w int) {
+	if len(a.shared.Files.Entries) == 0 {
+		a.shared.Canvas.DrawHeaderDimmed(w, a.rootLabel(), previewLegend, switchFilesLegendText)
+		return
+	}
+	a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
 }
 
 // drawBadge renders the bottom-right delayed-loading indicator badge
