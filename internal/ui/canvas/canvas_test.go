@@ -3,6 +3,8 @@ package canvas
 import (
 	"strings"
 	"testing"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 // TestLegendFit covers LegendFit's narrow-terminal drop order (SPEC.md
@@ -73,6 +75,85 @@ func TestLegendFitNeverReordersOrTruncatesMidEntry(t *testing.T) {
 		}
 		if strings.Count(text, "[") != strings.Count(text, "]") {
 			t.Fatalf("w=%d: legend text %q has an unbalanced bracket, suggesting mid-entry truncation", w, text)
+		}
+	}
+}
+
+// newTestCanvas builds a Canvas backed by a fixed-size simulation
+// screen, for tests that need to inspect actually-drawn cell styles
+// rather than just the composed text LegendFit/LegendText return.
+func newTestCanvas(t *testing.T, w, h int) (*Canvas, tcell.SimulationScreen) {
+	t.Helper()
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	sim.SetSize(w, h)
+	return New(sim), sim
+}
+
+// cellStyle returns the style of the cell at (x, y) after Show.
+func cellStyle(sim tcell.SimulationScreen, x, y int) tcell.Style {
+	cells, width, _ := sim.GetContents()
+	return cells[y*width+x].Style
+}
+
+// TestDrawHeaderDimmedStylesOnlyTheMatchedEntry guards
+// DrawHeaderDimmed's "compose once, overlay a styled sub-span"
+// behavior: dimText's own columns get StyleHeaderDim while every other
+// column on the row keeps the plain StyleHeader, regardless of where
+// in the fitted (right-aligned) legend dimText's substring happens to
+// land.
+func TestDrawHeaderDimmedStylesOnlyTheMatchedEntry(t *testing.T) {
+	w, h := 40, 5
+	c, sim := newTestCanvas(t, w, h)
+	entries := []LegendEntry{
+		{Text: "[tab] switch files", Priority: 1},
+		{Text: "[q] quit", Priority: 1},
+	}
+	c.DrawHeaderDimmed(w, "root", entries, "[tab] switch files")
+	sim.Show()
+
+	text := LegendText(w, "root", entries)
+	runes := []rune(text)
+	target := []rune("[tab] switch files")
+	start := strings.Index(string(runes), "[tab] switch files")
+	if start < 0 {
+		t.Fatalf("test setup: %q not found in fitted legend %q", "[tab] switch files", text)
+	}
+	// start above is a byte offset from strings.Index on an ASCII-only
+	// string here, so it doubles as the rune offset DrawText itself uses.
+	for x := range w {
+		style := cellStyle(sim, x, 0)
+		inTarget := x >= start && x < start+len(target)
+		switch {
+		case inTarget && style != StyleHeaderDim:
+			t.Errorf("column %d (inside dimText) has style %v, want StyleHeaderDim", x, style)
+		case !inTarget && style != StyleHeader:
+			t.Errorf("column %d (outside dimText) has style %v, want StyleHeader", x, style)
+		}
+	}
+}
+
+// TestDrawHeaderDimmedNoopsWhenDimTextIsDropped guards the case where
+// dimText didn't survive LegendFit's own priority dropping at the
+// given width (e.g. it's priority 2+ and the terminal is narrow): with
+// no matching substring to overlay, the row is drawn exactly like
+// DrawHeader would, entirely in StyleHeader, rather than panicking or
+// styling the wrong span.
+func TestDrawHeaderDimmedNoopsWhenDimTextIsDropped(t *testing.T) {
+	w, h := 12, 5
+	c, sim := newTestCanvas(t, w, h)
+	entries := []LegendEntry{
+		{Text: "[tab] switch files", Priority: 2},
+		{Text: "[q] quit", Priority: 1},
+	}
+	c.DrawHeaderDimmed(w, "root", entries, "[tab] switch files")
+	sim.Show()
+
+	for x := range w {
+		if style := cellStyle(sim, x, 0); style != StyleHeader {
+			t.Errorf("column %d has style %v, want StyleHeader (dimText should have been dropped)", x, style)
 		}
 	}
 }

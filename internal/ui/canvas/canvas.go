@@ -31,7 +31,13 @@ var (
 	// than the primary preview view is active — bold sets the label
 	// apart from the plain-weight legend sharing the same row, similar
 	// to how editors like hx render their current mode name.
-	StyleHeaderMode  = StyleHeader.Bold(true)
+	StyleHeaderMode = StyleHeader.Bold(true)
+	// StyleHeaderDim is StyleHeader with the dim attribute applied, used
+	// to mark a single header legend entry as currently inert (e.g.
+	// "switch files" while no file is open) without removing it from
+	// the legend or dropping its keybinding hint — the entry is still
+	// legible, just visually deprioritized against the rest of the row.
+	StyleHeaderDim   = StyleHeader.Dim(true)
 	StyleFileTitle   = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
 	StyleError       = tcell.StyleDefault.Foreground(tcell.ColorRed)
 	StyleBadge       = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
@@ -334,6 +340,26 @@ func (c *Canvas) FillRect(x0, y0, w, h int, style tcell.Style) {
 // style.
 func (c *Canvas) DrawHeader(w int, text string) {
 	c.DrawText(0, 0, w, text, StyleHeader)
+}
+
+// DrawHeaderDimmed draws the header/title bar exactly like DrawHeader,
+// then re-draws dimText in StyleHeaderDim if it appears in the fitted
+// legend text — it may not, having been dropped for width per
+// LegendFit's own priority order, in which case this is a no-op beyond
+// the base draw. Generalizes DrawHeaderMode's "compose once, overlay a
+// styled sub-span" pattern from a fixed column-0 span to an arbitrary
+// legend entry whose position shifts with which other entries survive
+// dropping and how the row right-aligns.
+func (c *Canvas) DrawHeaderDimmed(w int, left string, entries []LegendEntry, dimText string) {
+	text := LegendText(w, left, entries)
+	c.DrawText(0, 0, w, text, StyleHeader)
+	runes, dim := []rune(text), []rune(dimText)
+	for i := 0; i+len(dim) <= len(runes); i++ {
+		if string(runes[i:i+len(dim)]) == dimText {
+			c.DrawText(i, 0, len(dim), dimText, StyleHeaderDim)
+			return
+		}
+	}
 }
 
 // DrawHeaderMode renders the header/title bar with label (a bold,
