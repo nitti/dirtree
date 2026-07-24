@@ -18,6 +18,12 @@ import (
 // duplicating the literal.
 const switchFilesLegendText = "[tab] switch files"
 
+// quitHoldWord is the "hold" inside previewLegend's quit entry
+// ("[hold q] quit"), broken out as its own constant so
+// boldHoldInQuitLegend's substring search doesn't duplicate the
+// literal.
+const quitHoldWord = "hold"
+
 var (
 	// previewLegend is the primary preview view's app-wide legend
 	// (SPEC.md §5.2): the four ways to leave the preview for another
@@ -178,37 +184,31 @@ func shellAbbreviate(path string) string {
 	return path
 }
 
-// menuBarText composes the top menu bar's content (SPEC.md §5.2): the
-// tree root path left-aligned and a short keybinding legend
-// right-aligned, with at least one space of separation between them.
-// The root path is dropped once even priority-3 legend entries can't
-// buy back enough room (canvas.LegendFit's drop order), re-evaluated
-// every frame so a live resize can bring it back.
-func (a *App) menuBarText(w int, entries []canvas.LegendEntry) string {
-	return canvas.LegendText(w, a.rootLabel(), entries)
-}
-
 // drawPreviewHeader draws the top menu bar (SPEC.md §5.2) for both
 // places the primary preview view's own header/title bar row is shown:
 // the primary preview view itself, and underneath the open-files-list
 // overlay's dropdown (which draws its own separate header below this
-// one, §2.3). previewLegend's "switch files" entry is dimmed whenever
-// the open-files list is empty, since there is then nothing for Tab to
-// switch to or from — the entry stays in the legend (so the keybinding
-// hint doesn't disappear and reappear as files are opened/closed) but
-// reads as visually inert rather than actionable. While the open-files
-// overlay itself is active, every entry in this row is inert — the
-// overlay owns all input, and none of switch/quick-open/browse/
-// search/quit are reachable until it's closed — so the whole legend
-// (not just "switch files") is dimmed instead, rather than leaving
-// four keys visibly advertised that this key press won't do anything.
+// one, §2.3). The root path is bolded, the same "compose once, overlay
+// a bold sub-span" treatment DrawHeaderMode gives a mode label
+// elsewhere, so it reads as this row's own distinct identity against
+// the plain-weight legend beside it. previewLegend's "switch files"
+// entry is dimmed whenever the open-files list is empty, since there
+// is then nothing for Tab to switch to or from — the entry stays in
+// the legend (so the keybinding hint doesn't disappear and reappear as
+// files are opened/closed) but reads as visually inert rather than
+// actionable. While the open-files overlay itself is active, every
+// entry in this row is inert — the overlay owns all input, and none of
+// switch/quick-open/browse/search/quit are reachable until it's closed
+// — so the whole legend (not just "switch files") is dimmed instead,
+// rather than leaving four keys visibly advertised that this key press
+// won't do anything.
 func (a *App) drawPreviewHeader(w int) {
 	if !a.quitHoldStart.IsZero() {
 		a.drawQuitHoldHeader(w)
 		return
 	}
 	if a.shared.HelpVisible {
-		a.shared.Canvas.DrawHeader(w, a.menuBarText(w, canvas.HideKeysLegend))
+		a.shared.Canvas.DrawHeaderMode(w, a.rootLabel(), canvas.HideKeysLegend)
 		return
 	}
 	if a.overlay == views.OverlayOpenFiles {
@@ -217,9 +217,32 @@ func (a *App) drawPreviewHeader(w int) {
 	}
 	if len(a.shared.Files.Entries) == 0 {
 		a.shared.Canvas.DrawHeaderDimmed(w, a.rootLabel(), previewLegend, switchFilesLegendText)
+		a.boldHoldInQuitLegend(w)
 		return
 	}
-	a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
+	a.shared.Canvas.DrawHeaderMode(w, a.rootLabel(), previewLegend)
+	a.boldHoldInQuitLegend(w)
+}
+
+// boldHoldInQuitLegend re-draws "hold" (within previewLegend's quit
+// entry, "[hold q] quit") in canvas.StyleHeaderMode, layered on top of
+// an already-drawn header/title bar row — calling out that quitting
+// takes holding the key down, not a single tap, the one entry in this
+// legend whose mechanic differs from every other single-press
+// keybinding shown alongside it. Only called from the two
+// drawPreviewHeader branches where the legend renders at (at least
+// partly) normal weight; the whole-legend-dimmed open-files-overlay
+// case and the help overlay's HideKeysLegend replacement (which has no
+// quit entry at all) skip it themselves.
+func (a *App) boldHoldInQuitLegend(w int) {
+	text, _ := canvas.LegendFit(w, a.rootLabel(), previewLegend)
+	runes, target := []rune(text), []rune(quitHoldWord)
+	for i := 0; i+len(target) <= len(runes); i++ {
+		if string(runes[i:i+len(target)]) == quitHoldWord {
+			a.shared.Canvas.DrawText(i, 0, len(target), quitHoldWord, canvas.StyleHeaderMode)
+			return
+		}
+	}
 }
 
 // drawQuitHoldHeader replaces the header/title bar with the hold-to-quit

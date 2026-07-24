@@ -90,6 +90,74 @@ func TestSearchSummaryCountsHitsAndFilesWithHits(t *testing.T) {
 	}
 }
 
+// TestSearchDrawBoldsFileNamesWithHits guards a file row's own name
+// (as opposed to its disclosure marker, open-indicator, or match-count
+// suffix) rendering bolded when the file actually contributed at least
+// one hit, and staying plain when it didn't (a result present solely
+// because of a scan issue, §9.1) — so a scanned-but-empty file is
+// visually distinguishable from one with real matches at a glance.
+// Hit rows (indented under a file) never bold anything, since a hit row
+// has no file name of its own to bold.
+func TestSearchDrawBoldsFileNamesWithHits(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	v := &Search{
+		Shared: &Shared{Files: openfiles.New(), Canvas: canvas.New(sim)},
+		Query:  "needle",
+		Results: []search.FileResult{
+			{AbsPath: "a", RelPath: "hit.txt", Hits: []search.Hit{{LineNum: 1, LineText: "needle"}}},
+			{AbsPath: "b", RelPath: "empty.txt", Issue: "timed out"},
+		},
+	}
+	v.Draw(w, h)
+	sim.Show()
+
+	// runeIndex finds target's rune-column start within row — a plain
+	// byte-offset search (strings.Index) would misalign against cell
+	// columns here, since the disclosure marker and open-indicator
+	// ahead of the name are multi-byte runes.
+	runeIndex := func(t *testing.T, row, target string) int {
+		t.Helper()
+		runes, targetRunes := []rune(row), []rune(target)
+		for i := 0; i+len(targetRunes) <= len(runes); i++ {
+			if string(runes[i:i+len(targetRunes)]) == target {
+				return i
+			}
+		}
+		t.Fatalf("test setup: %q not found in row %q", target, row)
+		return -1
+	}
+
+	// Row 2 (below the header and query rows): the "hit.txt" file row.
+	rowY := 2
+	row := rowText(sim, rowY, w)
+	start := runeIndex(t, row, "hit.txt")
+	for x := start; x < start+len([]rune("hit.txt")); x++ {
+		_, _, attr := cellStyle(sim, x, rowY).Decompose()
+		if attr&tcell.AttrBold == 0 {
+			t.Errorf("hit.txt: column %d not bold, want bold", x)
+		}
+	}
+
+	// Row 3 is hit.txt's own (expanded-by-default) hit row; row 4 is
+	// the "empty.txt" scan-issue-only file row, which has no hits, so
+	// its own name must stay plain (not bold).
+	rowY = 4
+	row = rowText(sim, rowY, w)
+	start = runeIndex(t, row, "empty.txt")
+	for x := start; x < start+len([]rune("empty.txt")); x++ {
+		_, _, attr := cellStyle(sim, x, rowY).Decompose()
+		if attr&tcell.AttrBold != 0 {
+			t.Errorf("empty.txt: column %d is bold, want not bold", x)
+		}
+	}
+}
+
 // TestSearchDrawShowsHitSummaryRightAligned guards SPEC.md §9.2: once
 // results exist (even zero matches), the query row's right side shows
 // "N hits across N files", right-aligned with at least one space of

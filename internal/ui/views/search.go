@@ -509,7 +509,7 @@ func (v *Search) Draw(w, h int) {
 				break
 			}
 			row := rows[i]
-			label, issueStart := v.rowLabel(row)
+			label, issueStart, nameStart, nameLen := v.rowLabel(row)
 			fileErrored := !row.isHit && v.ErrorPath != "" && v.Results[row.file].AbsPath == v.ErrorPath
 			if fileErrored {
 				label += " [" + v.ErrorMessage + "]"
@@ -524,6 +524,15 @@ func (v *Search) Draw(w, h int) {
 				style = canvas.StyleFlash
 			}
 			v.Canvas.DrawText(0, listTop+line, w, label, style)
+			// A file row's own name is bolded when it actually
+			// contributed at least one hit, distinguishing it at a
+			// glance from a file listed solely for a scan issue (§9.1)
+			// with nothing found — layered on top of the row's own
+			// style (selection/flash/error) rather than replacing it.
+			if nameStart >= 0 {
+				name := []rune(label)[nameStart : nameStart+nameLen]
+				v.Canvas.DrawText(nameStart, listTop+line, nameLen, string(name), style.Bold(true))
+			}
 			// A persistent scan issue (SPEC.md §9.1's Issue) is rendered
 			// in the same contrasting error style the invalid-regex
 			// message above uses, layered on top of the row's own style
@@ -547,8 +556,14 @@ func (v *Search) Draw(w, h int) {
 // index within the returned label where an appended scan-issue message
 // begins (SPEC.md §9.1's Issue), or -1 if the row has none — the caller
 // uses it to render that suffix in a contrasting error style without a
-// second, separately-tracked copy of the message.
-func (v *Search) rowLabel(row searchRow) (label string, issueStart int) {
+// second, separately-tracked copy of the message. nameStart/nameLen
+// similarly bound a file row's own path text (the marker plus the
+// open-indicator plus two spaces always precede it, fixed at 4 runes),
+// or (-1, 0) for a hit row or a file row with zero hits — the caller
+// uses this to bold the name of every file that actually contributed a
+// hit, distinguishing it at a glance from a file listed solely for a
+// scan issue (§9.1) with nothing found.
+func (v *Search) rowLabel(row searchRow) (label string, issueStart, nameStart, nameLen int) {
 	r := v.Results[row.file]
 	if row.isHit {
 		h := r.Hits[row.hit]
@@ -556,7 +571,7 @@ func (v *Search) rowLabel(row searchRow) (label string, issueStart int) {
 		// (marker + open-indicator + two spaces = 4 columns), so a hit
 		// row reads as visually nested under its file rather than lining
 		// up with it.
-		return fmt.Sprintf("      %d: %s", h.LineNum, strings.TrimSpace(h.LineText)), -1
+		return fmt.Sprintf("      %d: %s", h.LineNum, strings.TrimSpace(h.LineText)), -1, -1, 0
 	}
 	marker := "▾"
 	if v.Collapsed[r.AbsPath] {
@@ -571,14 +586,18 @@ func (v *Search) rowLabel(row searchRow) (label string, issueStart int) {
 		plural = ""
 	}
 	base := fmt.Sprintf("%s %s %s", marker, open, r.RelPath)
+	nameStart, nameLen = -1, 0
+	if len(r.Hits) > 0 {
+		nameStart, nameLen = 4, len([]rune(r.RelPath))
+	}
 	switch {
 	case r.Issue == "":
-		return fmt.Sprintf("%s (%d match%s)", base, len(r.Hits), plural), -1
+		return fmt.Sprintf("%s (%d match%s)", base, len(r.Hits), plural), -1, nameStart, nameLen
 	case len(r.Hits) > 0:
 		prefix := fmt.Sprintf("%s (%d match%s) — ", base, len(r.Hits), plural)
-		return prefix + r.Issue, len([]rune(prefix))
+		return prefix + r.Issue, len([]rune(prefix)), nameStart, nameLen
 	default:
 		prefix := base + " — "
-		return prefix + r.Issue, len([]rune(prefix))
+		return prefix + r.Issue, len([]rune(prefix)), nameStart, nameLen
 	}
 }
