@@ -46,6 +46,21 @@ const (
 	flashDuration  = 400 * time.Millisecond
 	watchDebounce  = 300 * time.Millisecond
 	previewByteCap = preview.DefaultByteCap
+	// quitHoldDuration is how long `q` must be held at the primary
+	// preview view before the app actually quits (SPEC.md §5.2's
+	// hold-to-quit gesture) — long enough that a single accidental tap
+	// can't discard the session's open-files state, short enough that a
+	// deliberate press doesn't feel sluggish.
+	quitHoldDuration = 1 * time.Second
+	// quitHoldReleaseGap is the longest gap allowed between consecutive
+	// `q` key-repeat events before the hold is considered released.
+	// Terminals deliver no key-up event, so a held key can only be
+	// inferred from a steady stream of repeat events; this threshold
+	// tells a genuine release (or a single tap) apart from that stream,
+	// set generously above the resize-poll tick (resizePollInterval)
+	// that drives the release check to absorb a slow initial OS
+	// key-repeat delay without falsely detecting a release.
+	quitHoldReleaseGap = 600 * time.Millisecond
 )
 
 // App holds all interactive state for a running session.
@@ -102,6 +117,16 @@ type App struct {
 	Preview views.Preview
 
 	badgeSkip spinner.MinDurationSkip
+
+	// quitHoldStart is when the currently-in-progress hold-to-quit
+	// gesture (SPEC.md §5.2) began holding `q`, zero when no hold is in
+	// progress — render.go reads it directly to decide whether to draw
+	// the header/title bar's attention-grabbing quitting variant.
+	// quitHoldLastKey is the most recent `q` key-repeat event's time,
+	// used by checkQuitHoldRelease to infer a release from a gap in the
+	// repeat stream, since terminals deliver no key-up event.
+	quitHoldStart   time.Time
+	quitHoldLastKey time.Time
 
 	quit bool
 }
@@ -302,6 +327,14 @@ func (a *App) Run() error {
 			a.Search.ApplyOutcome(out)
 			a.draw()
 		case <-ticker.C:
+			// Catches a released `q` even when no further key event
+			// arrives to notice it directly (SPEC.md §5.2's
+			// hold-to-quit gesture): a genuinely held key keeps
+			// re-triggering progressQuitHold well within
+			// quitHoldReleaseGap of each other, so this only ever
+			// fires the reset once the stream of repeats actually
+			// stops.
+			a.checkQuitHoldRelease()
 			// Also catches the background index (re)build finishing
 			// while quick open is open with an unchanged query, so
 			// matches don't go stale until the next keystroke.
@@ -383,7 +416,13 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 			a.Search.LastOpenedEntry = nil
 		}
 	case views.OverlayNone:
-		switch a.Preview.HandleKey(ev) {
+		action := a.Preview.HandleKey(ev)
+		if action == views.ActionQuitKey {
+			a.progressQuitHold()
+		} else {
+			a.resetQuitHold()
+		}
+		switch action {
 		case views.ActionOpenBrowser:
 			a.overlay = views.OverlayBrowser
 		case views.ActionOpenFiles:
@@ -393,9 +432,43 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 			a.openQuickOpen()
 		case views.ActionOpenSearch:
 			a.openSearch()
-		case views.ActionQuit:
-			a.quit = true
 		}
+	}
+}
+
+// progressQuitHold records a `q` key-repeat event during the
+// hold-to-quit gesture (SPEC.md §5.2), starting the hold on its first
+// event and quitting once it's been held continuously for
+// quitHoldDuration.
+func (a *App) progressQuitHold() {
+	now := time.Now()
+	if a.quitHoldStart.IsZero() {
+		a.quitHoldStart = now
+	}
+	a.quitHoldLastKey = now
+	if now.Sub(a.quitHoldStart) >= quitHoldDuration {
+		a.quit = true
+	}
+}
+
+// resetQuitHold cancels an in-progress hold-to-quit gesture (SPEC.md
+// §5.2) — e.g. because a key other than `q` was pressed, or because
+// checkQuitHoldRelease inferred `q` was released.
+func (a *App) resetQuitHold() {
+	a.quitHoldStart = time.Time{}
+}
+
+// checkQuitHoldRelease infers whether an in-progress hold-to-quit
+// gesture (SPEC.md §5.2) has been released: terminals deliver no
+// key-up event, so a held key is inferred from a steady stream of
+// repeat events, and too long a gap since the last one means the key
+// is no longer down.
+func (a *App) checkQuitHoldRelease() {
+	if a.quitHoldStart.IsZero() {
+		return
+	}
+	if time.Since(a.quitHoldLastKey) > quitHoldReleaseGap {
+		a.resetQuitHold()
 	}
 }
 

@@ -31,8 +31,12 @@ var (
 		{Text: "[o] quick open", Priority: 2},
 		{Text: "[b] browse", Priority: 1},
 		{Text: "[s] search", Priority: 2},
-		{Text: "[q] quit", Priority: 1},
+		{Text: "[hold q] quit", Priority: 1},
 	}
+	// quitHoldMessage is drawn right-aligned on the header/title bar in
+	// place of the usual root path/legend while the hold-to-quit
+	// gesture (SPEC.md §5.2) is in progress.
+	quitHoldMessage = "quitting..."
 )
 
 // draw renders one frame.
@@ -199,6 +203,10 @@ func (a *App) menuBarText(w int, entries []canvas.LegendEntry) string {
 // (not just "switch files") is dimmed instead, rather than leaving
 // four keys visibly advertised that this key press won't do anything.
 func (a *App) drawPreviewHeader(w int) {
+	if !a.quitHoldStart.IsZero() {
+		a.drawQuitHoldHeader(w)
+		return
+	}
 	if a.shared.HelpVisible {
 		a.shared.Canvas.DrawHeader(w, a.menuBarText(w, canvas.HideKeysLegend))
 		return
@@ -212,6 +220,20 @@ func (a *App) drawPreviewHeader(w int) {
 		return
 	}
 	a.shared.Canvas.DrawHeader(w, a.menuBarText(w, previewLegend))
+}
+
+// drawQuitHoldHeader replaces the header/title bar with the hold-to-quit
+// gesture's attention-grabbing variant (SPEC.md §5.2) while `q` is held:
+// the whole row in canvas.StyleHeaderQuit with quitHoldMessage
+// right-aligned, fading away left-to-right (toast.Decide, reusing §5.3's
+// fade convention with a zero display duration so it starts fading
+// immediately) over quitHoldDuration as the hold progresses — releasing
+// early, anywhere in the fade, aborts the gesture the same as releasing
+// before it started, so the visible fade is a direct read of how much
+// longer the key must stay down.
+func (a *App) drawQuitHoldHeader(w int) {
+	_, hidden := toast.Decide(time.Since(a.quitHoldStart), 0, quitHoldDuration, w)
+	a.shared.Canvas.DrawHeaderQuitting(w, quitHoldMessage, hidden)
 }
 
 // drawBadge renders the bottom-right delayed-loading indicator badge

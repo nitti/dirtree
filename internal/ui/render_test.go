@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -103,6 +104,61 @@ func TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestDrawQuitHoldHeaderFadesLeftToRight guards the hold-to-quit
+// gesture's header/title bar variant (SPEC.md §5.2): at the start of
+// the hold nothing has faded yet, partway through the hold the row's
+// left edge has faded while quitHoldMessage's right-anchored text
+// still stands, and by the end of quitHoldDuration the entire row has
+// faded, all in canvas.StyleHeaderQuit rather than the normal header
+// style.
+func TestDrawQuitHoldHeaderFadesLeftToRight(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 5
+	sim.SetSize(w, h)
+
+	a := &App{rootPath: "/root", shared: &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)}}
+
+	blankRow := func() bool {
+		return strings.TrimSpace(rowText(sim, 0, w)) == ""
+	}
+
+	a.quitHoldStart = time.Now()
+	a.shared.Canvas.Clear()
+	a.drawPreviewHeader(w)
+	sim.Show()
+	for x := range w {
+		if style := cellStyle(sim, x, 0); style != canvas.StyleHeaderQuit {
+			t.Errorf("hold start: column %d has style %v, want StyleHeaderQuit", x, style)
+		}
+	}
+	if blankRow() {
+		t.Fatal("hold start: row is entirely blank, want the quitting message visible")
+	}
+
+	a.quitHoldStart = time.Now().Add(-quitHoldDuration / 2)
+	a.shared.Canvas.Clear()
+	a.drawPreviewHeader(w)
+	sim.Show()
+	row := rowText(sim, 0, w)
+	if row[0] != ' ' {
+		t.Errorf("hold midpoint: column 0 = %q, want faded (blank)", row[0])
+	}
+	if !strings.Contains(row, quitHoldMessage) {
+		t.Errorf("hold midpoint: row %q missing right-anchored %q", row, quitHoldMessage)
+	}
+
+	a.quitHoldStart = time.Now().Add(-quitHoldDuration)
+	a.shared.Canvas.Clear()
+	a.drawPreviewHeader(w)
+	sim.Show()
+	if !blankRow() {
+		t.Errorf("hold complete: row %q, want fully faded (blank)", rowText(sim, 0, w))
+	}
+}
+
 // TestDrawPreviewHeaderShowsHideKeysWhenHelpVisible guards SPEC.md
 // §5.4: while the help overlay is open, the main title bar's own
 // legend collapses to the single canvas.HideKeysLegend entry — this
@@ -182,7 +238,7 @@ func TestPreviewLegendOrder(t *testing.T) {
 		"[o] quick open",
 		"[b] browse",
 		"[s] search",
-		"[q] quit",
+		"[hold q] quit",
 	}
 	if len(previewLegend) != len(want) {
 		t.Fatalf("previewLegend has %d entries, want %d", len(previewLegend), len(want))

@@ -273,7 +273,7 @@ func TestDrawHelpRendersBoxAtUpperRightBelowTitleRows(t *testing.T) {
 	for y := titleRows; y < h; y++ {
 		full += rowText(sim, y, w) + "\n"
 	}
-	for _, want := range []string{"[tab] switch files", "[o] quick open", "[b] browse", "[s] search", "[q] quit", "[/] find", "[g] goto line", "[c] copy mode"} {
+	for _, want := range []string{"[tab] switch files", "[o] quick open", "[b] browse", "[s] search", "[hold q] quit", "[/] find", "[g] goto line", "[c] copy mode"} {
 		if !strings.Contains(full, want) {
 			t.Errorf("help box content missing entry %q; box text:\n%s", want, full)
 		}

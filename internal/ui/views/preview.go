@@ -19,14 +19,18 @@ import (
 type Action int
 
 // The Action values: ActionNone means HandleKey handled the key itself
-// and there's nothing further for App to do.
+// and there's nothing further for App to do. ActionQuitKey does not
+// mean "quit now" — it means `q` was pressed this frame, and App's
+// dispatcher, which owns the hold-to-quit timing (SPEC.md §5.2), should
+// progress that gesture; only continuously holding `q` for the full
+// hold duration actually quits.
 const (
 	ActionNone Action = iota
 	ActionOpenBrowser
 	ActionOpenFiles
 	ActionOpenQuickOpen
 	ActionOpenSearch
-	ActionQuit
+	ActionQuitKey
 )
 
 // Preview holds the primary preview view's own state (SPEC.md §2.1,
@@ -64,14 +68,15 @@ type Preview struct {
 // `b` only opens the browser overlay (SPEC.md §5.1); closing it back to
 // this view is Escape's job alone, handled by the browser view itself
 // (quick open, opened by `o`, is likewise not a toggle). Escape does
-// not quit and there is no overlay to back out of here (`q` is the only
-// way to quit, so an accidental Escape press can't lose the session's
-// open-files state) — its only effect at this view is clearFind,
-// clearing an active in-file find if there is one, and otherwise
-// remaining a no-op. Reaching another view (`b`/Tab/`o`/`s`) and
-// quitting (`q`) are reported via the returned Action so App's
-// dispatcher, which owns Overlay transitions and QuickOpen/Search's own
-// Open() setup, can perform them.
+// not quit and there is no overlay to back out of here (holding `q` is
+// the only way to quit, so an accidental Escape press, or a stray tap
+// of `q`, can't lose the session's open-files state) — its only effect
+// at this view is clearFind, clearing an active in-file find if there
+// is one, and otherwise remaining a no-op. Reaching another view
+// (`b`/Tab/`o`/`s`) and progressing the hold-to-quit gesture (`q`) are
+// reported via the returned Action so App's dispatcher, which owns
+// Overlay transitions, QuickOpen/Search's own Open() setup, and the
+// hold-to-quit timing, can perform them.
 func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 	if v.GotoPromptOpen {
 		v.handleGotoPromptKey(ev)
@@ -92,7 +97,7 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 	case ev.Rune() == 's':
 		return ActionOpenSearch
 	case ev.Rune() == 'q':
-		return ActionQuit
+		return ActionQuitKey
 	case ev.Key() == tcell.KeyUp:
 		v.scroll(-1)
 	case ev.Key() == tcell.KeyDown:
