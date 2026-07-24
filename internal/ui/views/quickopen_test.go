@@ -27,6 +27,36 @@ func TestQuickOpenLegendTier1FitsMinTerminalWidth(t *testing.T) {
 	}
 }
 
+// TestQuickOpenDrawSuppressesHeaderLegendWhenHelpVisible guards
+// SPEC.md §5.4: while the help overlay is showing, the header keeps
+// its "QUICK OPEN" mode label but its legend collapses to the single
+// canvas.HideKeysLegend entry.
+func TestQuickOpenDrawSuppressesHeaderLegendWhenHelpVisible(t *testing.T) {
+	dir := t.TempDir()
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{Shared: &Shared{Files: openfiles.New(), Canvas: canvas.New(sim), Idx: idx, HelpVisible: true}}
+	v.Draw(w, h)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	if !strings.Contains(row, "QUICK OPEN") || !strings.HasSuffix(strings.TrimRight(row, " "), "[?] hide keys") {
+		t.Errorf("header = %q, want QUICK OPEN label plus only [?] hide keys", row)
+	}
+	if got := v.CurrentLegend(); &got[0] != &quickOpenLegend[0] {
+		t.Errorf("CurrentLegend() = %v, want quickOpenLegend", got)
+	}
+}
+
 // noopIgnorer matches nothing, so index.Start walks a temp dir's files
 // exactly as created.
 type noopIgnorer struct{}
@@ -91,5 +121,170 @@ func TestQuickOpenDrawListShowsOpenIndicator(t *testing.T) {
 	closedRow := rowText(sim, listTop+1, w)
 	if !strings.HasPrefix(closedRow, "  two.txt") {
 		t.Errorf("closed match row = %q, want a blank placeholder in place of the open indicator", closedRow)
+	}
+}
+
+// cellStyle returns the style of the cell at (x, y) after Show.
+func cellStyle(sim tcell.SimulationScreen, x, y int) tcell.Style {
+	cells, width, _ := sim.GetContents()
+	return cells[y*width+x].Style
+}
+
+// TestQuickOpenDrawShowsGhostTextForPrefixMatch guards SPEC.md §4.2's
+// ghost-text autocomplete: once the query unambiguously matches a
+// single file *and* is a literal prefix of that file's path, the
+// remainder renders dimmed immediately after the typed text, and the
+// sole match's row gets the secondary StyleFindCurrent highlight
+// (distinct from plain cursor-position StyleSelected).
+func TestQuickOpenDrawShowsGhostTextForPrefixMatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "one.txt")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{
+		Shared:  &Shared{Files: openfiles.New(), Canvas: canvas.New(sim), RootPath: dir, Idx: idx},
+		Query:   "one",
+		Matches: []index.Entry{{AbsPath: path}},
+	}
+	v.Draw(w, h)
+	sim.Show()
+
+	row := rowText(sim, 1, w)
+	if !strings.HasPrefix(row, "> one.txt") {
+		t.Fatalf("query row = %q, want the ghost text \".txt\" appended after the typed query", row)
+	}
+	promptLen := len([]rune("> one"))
+	if style := cellStyle(sim, promptLen, 1); style != canvas.StyleQueryGhost {
+		t.Errorf("ghost text style = %v, want StyleQueryGhost", style)
+	}
+	if style := cellStyle(sim, 0, 1); style != canvas.StyleSearchInput {
+		t.Errorf("typed-query style = %v, want StyleSearchInput", style)
+	}
+
+	const listTop = 2
+	if style := cellStyle(sim, 0, listTop); style != canvas.StyleFindCurrent {
+		t.Errorf("sole match row style = %v, want StyleFindCurrent", style)
+	}
+}
+
+// TestQuickOpenDrawSuppressesGhostTextForMidPathMatch guards the
+// resolved ambiguity in SPEC.md §4.2: quick open's substring rule can
+// uniquely match a query that isn't a prefix of the matched path at
+// all — ghost text must not appear in that case (nothing correct to
+// autocomplete to), but the secondary highlight still applies, since
+// "unambiguously matches one file" only depends on match count, not on
+// whether ghost text happens to be renderable for it.
+func TestQuickOpenDrawSuppressesGhostTextForMidPathMatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "one.txt")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{
+		// "txt" is a substring match on one.txt but not a prefix of it.
+		Shared:  &Shared{Files: openfiles.New(), Canvas: canvas.New(sim), RootPath: dir, Idx: idx},
+		Query:   "txt",
+		Matches: []index.Entry{{AbsPath: path}},
+	}
+	v.Draw(w, h)
+	sim.Show()
+
+	row := rowText(sim, 1, w)
+	if !strings.HasPrefix(row, "> txt") || strings.Contains(row, "txt.") {
+		t.Errorf("query row = %q, want no ghost text appended for a non-prefix match", row)
+	}
+	if !strings.HasSuffix(strings.TrimRight(row, " "), "1 of 1 files") {
+		t.Errorf("query row = %q, want the file summary still shown alongside the absent ghost text", row)
+	}
+
+	const listTop = 2
+	if style := cellStyle(sim, 0, listTop); style != canvas.StyleFindCurrent {
+		t.Errorf("sole match row style = %v, want StyleFindCurrent even without ghost text", style)
+	}
+}
+
+// TestQuickOpenSummaryCountsFilesOnly guards quickOpenSummary's total:
+// it counts the background index's non-directory entries regardless of
+// the current query, so it always reads as the full file count the
+// query is narrowing down from, not whatever's currently matching.
+func TestQuickOpenSummaryCountsFilesOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"one.txt", "two.txt", filepath.Join("sub", "three.txt")} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	if got := quickOpenSummary(idx, 1); got != "1 of 3 files" {
+		t.Errorf("quickOpenSummary(idx, 1) = %q, want %q", got, "1 of 3 files")
+	}
+}
+
+// TestQuickOpenDrawShowsFileSummary guards the query row's rendered
+// "N of N files" summary (SPEC.md §4.2): once the background index has
+// finished (Matches is non-nil, even if empty), the row's right side
+// shows how many of the index's files currently match the query out of
+// its total file count.
+func TestQuickOpenDrawShowsFileSummary(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"one.txt", "two.txt", "three.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{
+		Shared:  &Shared{Files: openfiles.New(), Canvas: canvas.New(sim), RootPath: dir, Idx: idx},
+		Query:   "one",
+		Matches: []index.Entry{{AbsPath: filepath.Join(dir, "one.txt")}},
+	}
+	v.Draw(w, h)
+	sim.Show()
+
+	row := rowText(sim, 1, w)
+	if !strings.HasPrefix(row, "> one") {
+		t.Fatalf("query row = %q, want it to start with the prompt and query", row)
+	}
+	if !strings.HasSuffix(strings.TrimRight(row, " "), "1 of 3 files") {
+		t.Fatalf("query row = %q, want it to end with the file summary", row)
 	}
 }

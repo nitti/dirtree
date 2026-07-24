@@ -96,6 +96,19 @@ func (v *OpenFiles) HandleKey(ev *tcell.EventKey) {
 	}
 }
 
+// CurrentLegend returns the open-files-list overlay's own legend —
+// just Escape when the list is empty (mirroring Draw's own simplified
+// empty-state box), otherwise its full legend, including the
+// multi-page entries only when there's more than one page — for the
+// help overlay (§5.4) to mirror.
+func (v *OpenFiles) CurrentLegend() []canvas.LegendEntry {
+	if len(v.Files.Entries) == 0 {
+		return []canvas.LegendEntry{{Text: "[esc] close", Priority: 1}}
+	}
+	pageCount := openfiles.PageCount(len(v.Files.Entries), openfiles.PageSize)
+	return openFilesLegend(pageCount > 1)
+}
+
 // Draw renders the open-files-list overlay (SPEC.md §2.3): a
 // dropdown-style popup over the (unmodified, last-rendered) primary
 // preview view — rendered here via preview.Draw in its non-interactive
@@ -129,6 +142,9 @@ func (v *OpenFiles) Draw(x0, y0, w, h int, preview *Preview) {
 	pageCount := openfiles.PageCount(len(entries), pageSize)
 	counter := fmt.Sprintf("%d–%d/%d", start+1, end, len(entries))
 	legendEntries := openFilesLegend(pageCount > 1)
+	if v.HelpVisible {
+		legendEntries = nil
+	}
 
 	// Content-driven width: the header row (counter + a 1-column gap +
 	// legend) needs only the border columns around it, since LegendText

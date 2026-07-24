@@ -14,22 +14,6 @@ import (
 	"github.com/nitti/dirtree/internal/ui/views"
 )
 
-// rowText renders sim's row y as a plain string, blank cells included,
-// for substring assertions against a drawn header/legend row.
-func rowText(sim tcell.SimulationScreen, y, w int) string {
-	cells, width, _ := sim.GetContents()
-	var b strings.Builder
-	for x := 0; x < w && x < width; x++ {
-		c := cells[y*width+x]
-		if len(c.Runes) > 0 {
-			b.WriteRune(c.Runes[0])
-		} else {
-			b.WriteRune(' ')
-		}
-	}
-	return b.String()
-}
-
 // TestLegendTier1FitsMinTerminalWidth guards SPEC.md §6.4's minimum
 // terminal size against §5.2's legend tiering: previewLegend's
 // priority-1 (never-dropped) text must fit within canvas.MinTerminalWidth
@@ -172,6 +156,74 @@ func TestDrawQuitHoldHeaderFadesLeftToRight(t *testing.T) {
 	sim.Show()
 	if !blankRow() {
 		t.Errorf("hold complete: row %q, want fully faded (blank)", rowText(sim, 0, w))
+	}
+}
+
+// TestDrawPreviewHeaderShowsHideKeysWhenHelpVisible guards SPEC.md
+// §5.4: while the help overlay is open, the main title bar's own
+// legend collapses to the single canvas.HideKeysLegend entry — this
+// takes precedence over (and bypasses) the dim-when-empty behavior
+// TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty covers, since there's
+// no "switch files" entry left to dim once the legend is replaced.
+func TestDrawPreviewHeaderShowsHideKeysWhenHelpVisible(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 5
+	sim.SetSize(w, h)
+
+	a := &App{rootPath: "/root", shared: &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim), HelpVisible: true}}
+	a.drawPreviewHeader(w)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	if !strings.HasSuffix(strings.TrimRight(row, " "), "[?] hide keys") {
+		t.Errorf("header = %q, want it to end with [?] hide keys", row)
+	}
+	if strings.Contains(row, "switch files") || strings.Contains(row, "browse") {
+		t.Errorf("header = %q, want no other legend entries while HelpVisible", row)
+	}
+}
+
+// TestDrawPreviewHeaderDimsWholeLegendWhenOpenFilesOverlayActive guards
+// the open-files-list overlay case (SPEC.md §2.3/§5.2): while it's
+// active, none of previewLegend's entries are reachable (the overlay
+// owns every key until it's closed), so the entire legend — not just
+// "switch files" — renders dimmed, distinct from both the plain
+// (TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty's non-empty case) and
+// single-entry-dimmed (its empty case) rows.
+func TestDrawPreviewHeaderDimsWholeLegendWhenOpenFilesOverlayActive(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 90, 5
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "one.txt")
+	if err := os.WriteFile(path, []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+
+	a := &App{rootPath: "/root", shared: &views.Shared{Files: files, Canvas: canvas.New(sim)}, overlay: views.OverlayOpenFiles}
+	a.drawPreviewHeader(w)
+	sim.Show()
+
+	left := []rune(a.rootLabel())
+	for x := range w {
+		style := cellStyle(sim, x, 0)
+		switch {
+		case x < len(left) && style != canvas.StyleHeader:
+			t.Errorf("column %d (root label) has style %v, want StyleHeader", x, style)
+		case x >= len(left) && style != canvas.StyleHeaderDim:
+			t.Errorf("column %d (legend) has style %v, want StyleHeaderDim while open-files overlay is active", x, style)
+		}
 	}
 }
 

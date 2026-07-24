@@ -45,11 +45,18 @@ var (
 	// is about to discard the session's state and is worth demanding
 	// attention rather than staying quiet about it — the sole
 	// intentional exception to §5.3's "subtle, not flashy" default.
-	StyleHeaderQuit  = tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite).Bold(true)
-	StyleFileTitle   = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
-	StyleError       = tcell.StyleDefault.Foreground(tcell.ColorRed)
-	StyleBadge       = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
-	StyleFindMatch   = tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
+	StyleHeaderQuit = tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite).Bold(true)
+	StyleFileTitle  = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
+	StyleError      = tcell.StyleDefault.Foreground(tcell.ColorRed)
+	StyleBadge      = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
+	StyleFindMatch  = tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
+	// StyleFindCurrent marks in-file find's active match (§2.4), and
+	// doubles as the "this query unambiguously identifies exactly one
+	// row" highlight for quick open (§4.2) and jump to file (§4.3) —
+	// both are the same underlying idea (the one row a search-like query
+	// currently resolves to), distinct from both plain StyleSelected
+	// (cursor position, with no implication the query alone singled it
+	// out) and StyleFindMatch (one of several matches, not the sole one).
 	StyleFindCurrent = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack).Bold(true)
 	// StyleCopyModeTitle replaces StyleFileTitle whenever copy mode
 	// (SPEC.md §2.1) is active, so the file title bar itself makes copy
@@ -62,6 +69,14 @@ var (
 	// unmistakable at a glance rather than blending into the rest of the
 	// overlay.
 	StyleSearchInput = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
+	// StyleQueryGhost is StyleSearchInput with the dim attribute applied,
+	// used for the autocompleted "remainder of the path" ghost text a
+	// query row shows immediately after what the user actually typed,
+	// once that text unambiguously identifies a single match (quick
+	// open, SPEC.md §4.2; jump to file, §4.3) — same background as the
+	// query text it trails, dimmed so it reads as a suggestion rather
+	// than something already entered.
+	StyleQueryGhost = StyleSearchInput.Dim(true)
 	// StyleFlash briefly replaces a just-opened file row's normal style,
 	// as an on-open confirmation distinct from StyleSelected (cursor
 	// position) and from the lasting "●" already-open indicator every
@@ -134,6 +149,14 @@ type LegendEntry struct {
 	Text     string
 	Priority int
 }
+
+// HideKeysLegend replaces every main title bar's own legend while the
+// help overlay is showing (SPEC.md §5.4): every view's Draw checks its
+// own Shared.HelpVisible and substitutes this in place of its usual
+// legend, so the full keybinding reference (drawn separately by App)
+// isn't competing with a second, now-redundant copy of the same
+// information split across every title bar.
+var HideKeysLegend = []LegendEntry{{Text: "[?] hide keys", Priority: 1}}
 
 // LegendString joins entries' text left-to-right, in declaration order,
 // with the app's standard two-space separator between legend segments.
@@ -367,6 +390,28 @@ func (c *Canvas) DrawHeaderDimmed(w int, left string, entries []LegendEntry, dim
 			c.DrawText(i, 0, len(dim), dimText, StyleHeaderDim)
 			return
 		}
+	}
+}
+
+// DrawHeaderAllDimmed draws the header/title bar like DrawHeader, but
+// renders its entire legend (everything to the right of left) in
+// StyleHeaderDim, leaving left itself in the normal header style — used
+// when none of a header's own legend entries are actually invokable in
+// the current context (e.g. the primary preview view's title bar,
+// still drawn underneath the open-files-list overlay, SPEC.md §2.3,
+// which owns every key while it's active), as opposed to
+// DrawHeaderDimmed's single-entry dimming for the narrower case where
+// only one entry is inert.
+func (c *Canvas) DrawHeaderAllDimmed(w int, left string, entries []LegendEntry) {
+	text, leftIncluded := LegendFit(w, left, entries)
+	c.DrawText(0, 0, w, text, StyleHeader)
+	start := 0
+	if leftIncluded {
+		start = len([]rune(left))
+	}
+	runes := []rune(text)
+	if start < len(runes) {
+		c.DrawText(start, 0, len(runes)-start, string(runes[start:]), StyleHeaderDim)
 	}
 }
 

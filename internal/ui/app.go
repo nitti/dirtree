@@ -356,7 +356,38 @@ func (a *App) Run() error {
 	return nil
 }
 
+// helpToggleKey is the sole key that opens/closes the help overlay
+// (SPEC.md §5.4) — otherwise unused throughout the app, and the
+// conventional "show help" binding in terminal UIs generally.
+const helpToggleKey = '?'
+
+// textInputActive reports whether the current context is one where
+// every printable rune, including helpToggleKey itself, is live query
+// input (quick open, content search, jump to file, in-file find) —
+// `?` is also a quick open glob-match wildcard character (SPEC.md
+// §4.2), so it must never be intercepted as the help toggle in any
+// context where it could instead be typed.
+func (a *App) textInputActive() bool {
+	switch a.overlay {
+	case views.OverlayQuickOpen, views.OverlaySearch:
+		return true
+	case views.OverlayBrowser:
+		return a.Browser.JumpActive
+	case views.OverlayNone:
+		return a.Preview.FindPromptOpen
+	}
+	return false
+}
+
 func (a *App) handleKey(ev *tcell.EventKey) {
+	if ev.Key() == tcell.KeyRune && ev.Rune() == helpToggleKey && !a.textInputActive() {
+		// The help overlay (SPEC.md §5.4) is a passive HUD, not a modal
+		// overlay: it never owns input, so toggling it is the only
+		// effect this key has — whatever's currently active keeps
+		// handling every other key exactly as it would otherwise.
+		a.shared.HelpVisible = !a.shared.HelpVisible
+		return
+	}
 	switch a.overlay {
 	case views.OverlayBrowser:
 		a.Browser.HandleKey(ev)

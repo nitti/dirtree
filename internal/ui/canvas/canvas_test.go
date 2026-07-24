@@ -159,6 +159,53 @@ func TestDrawHeaderDimmedNoopsWhenDimTextIsDropped(t *testing.T) {
 }
 
 // TestKeepUpToPriority checks the tier-filtering building block directly.
+// TestDrawHeaderAllDimmedStylesEverythingAfterLeft guards
+// DrawHeaderAllDimmed's "left stays plain, everything after it dims"
+// behavior when left survives LegendFit's own priority dropping and is
+// included in the fitted text.
+func TestDrawHeaderAllDimmedStylesEverythingAfterLeft(t *testing.T) {
+	w, h := 40, 5
+	c, sim := newTestCanvas(t, w, h)
+	entries := []LegendEntry{
+		{Text: "[tab] switch files", Priority: 1},
+		{Text: "[q] quit", Priority: 1},
+	}
+	c.DrawHeaderAllDimmed(w, "root", entries)
+	sim.Show()
+
+	left := []rune("root")
+	for x := range w {
+		style := cellStyle(sim, x, 0)
+		switch {
+		case x < len(left) && style != StyleHeader:
+			t.Errorf("column %d (inside left) has style %v, want StyleHeader", x, style)
+		case x >= len(left) && style != StyleHeaderDim:
+			t.Errorf("column %d (after left) has style %v, want StyleHeaderDim", x, style)
+		}
+	}
+}
+
+// TestDrawHeaderAllDimmedStylesWholeRowWhenLeftDropped guards the case
+// where left itself didn't survive LegendFit's width-driven dropping
+// (a narrow terminal): with no left-hand span to leave undimmed, the
+// entire row — including the right-aligned padding preceding the
+// legend — is dimmed.
+func TestDrawHeaderAllDimmedStylesWholeRowWhenLeftDropped(t *testing.T) {
+	w, h := 12, 5
+	c, sim := newTestCanvas(t, w, h)
+	entries := []LegendEntry{
+		{Text: "[q] quit", Priority: 1},
+	}
+	c.DrawHeaderAllDimmed(w, "a very long root path that cannot fit", entries)
+	sim.Show()
+
+	for x := range w {
+		if style := cellStyle(sim, x, 0); style != StyleHeaderDim {
+			t.Errorf("column %d has style %v, want StyleHeaderDim (left should have been dropped)", x, style)
+		}
+	}
+}
+
 func TestKeepUpToPriority(t *testing.T) {
 	entries := []LegendEntry{{Text: "a", Priority: 1}, {Text: "b", Priority: 2}, {Text: "c", Priority: 3}, {Text: "d", Priority: 1}}
 	got := KeepUpToPriority(entries, 2)
