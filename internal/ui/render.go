@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/toast"
 	"github.com/nitti/dirtree/internal/ui/canvas"
@@ -18,11 +19,13 @@ import (
 // duplicating the literal.
 const switchFilesLegendText = "[tab] switch files"
 
-// quitHoldWord is the "hold" inside previewLegend's quit entry
-// ("[hold q] quit"), broken out as its own constant so
+// quitHoldWord is the "HOLD" inside previewLegend's quit entry
+// ("[HOLD q] quit"), broken out as its own constant so
 // boldHoldInQuitLegend's substring search doesn't duplicate the
-// literal.
-const quitHoldWord = "hold"
+// literal. Capitalized (unlike the rest of the legend, which is
+// lowercase) so it reads as an imperative emphasis on the one entry
+// that isn't a simple single-keypress binding.
+const quitHoldWord = "HOLD"
 
 var (
 	// previewLegend is the primary preview view's app-wide legend
@@ -37,7 +40,7 @@ var (
 		{Text: "[o] quick open", Priority: 2},
 		{Text: "[b] browse", Priority: 1},
 		{Text: "[s] search", Priority: 2},
-		{Text: "[hold q] quit", Priority: 1},
+		{Text: "[HOLD q] quit", Priority: 1},
 	}
 	// quitHoldMessage is drawn right-aligned on the header/title bar in
 	// place of the usual root path/legend while the hold-to-quit
@@ -235,8 +238,8 @@ func (a *App) drawPreviewHeader(w int) {
 	a.boldHoldInQuitLegend(w)
 }
 
-// boldHoldInQuitLegend re-draws "hold" (within previewLegend's quit
-// entry, "[hold q] quit") in canvas.StyleHeaderMode, layered on top of
+// boldHoldInQuitLegend re-draws "HOLD" (within previewLegend's quit
+// entry, "[HOLD q] quit") in canvas.StyleHeaderMode, layered on top of
 // an already-drawn header/title bar row — calling out that quitting
 // takes holding the key down, not a single tap, the one entry in this
 // legend whose mechanic differs from every other single-press
@@ -247,10 +250,21 @@ func (a *App) drawPreviewHeader(w int) {
 // quit entry at all) skip it themselves.
 func (a *App) boldHoldInQuitLegend(w int) {
 	text, _ := canvas.LegendFit(w, a.rootLabel(), previewLegend)
+	a.boldQuitHoldWord(0, 0, text, canvas.StyleHeaderMode)
+}
+
+// boldQuitHoldWord re-draws quitHoldWord ("HOLD") within text at row
+// y0 (starting at column x0), in style, if present — a no-op
+// otherwise. Factored out so the header/title bar (boldHoldInQuitLegend,
+// above) and the keys overview popup (drawHelp, help.go) apply the
+// exact same emphasis to the same previewLegend entry through their
+// two different draw paths, instead of each hand-rolling its own
+// substring search that could drift out of sync.
+func (a *App) boldQuitHoldWord(x0, y0 int, text string, style tcell.Style) {
 	runes, target := []rune(text), []rune(quitHoldWord)
 	for i := 0; i+len(target) <= len(runes); i++ {
 		if string(runes[i:i+len(target)]) == quitHoldWord {
-			a.shared.Canvas.DrawText(i, 0, len(target), quitHoldWord, canvas.StyleHeaderMode)
+			a.shared.Canvas.DrawText(x0+i, y0, len(target), quitHoldWord, style)
 			return
 		}
 	}

@@ -273,9 +273,52 @@ func TestDrawHelpRendersBoxAtUpperRightBelowTitleRows(t *testing.T) {
 	for y := titleRows; y < h; y++ {
 		full += rowText(sim, y, w) + "\n"
 	}
-	for _, want := range []string{"[tab] switch files", "[o] quick open", "[b] browse", "[s] search", "[hold q] quit", "[/] find", "[g] goto line", "[c] copy mode"} {
+	for _, want := range []string{"[tab] switch files", "[o] quick open", "[b] browse", "[s] search", "[HOLD q] quit", "[/] find", "[g] goto line", "[c] copy mode"} {
 		if !strings.Contains(full, want) {
 			t.Errorf("help box content missing entry %q; box text:\n%s", want, full)
+		}
+	}
+}
+
+// TestDrawHelpBoldsQuitHoldWord guards that the keys overview popup
+// applies the same "HOLD" emphasis to the quit entry that the
+// header/title bar does (SPEC.md §5.2, §5.4): both render the exact
+// same previewLegend entry, so a reader flipping between the two
+// should see the same word stand out, not just plain text in one and
+// bold in the other.
+func TestDrawHelpBoldsQuitHoldWord(t *testing.T) {
+	w, h := 80, 20
+	a := newTestApp(t, w, h)
+	a.shared.HelpVisible = true
+
+	a.drawHelp(w, h)
+	a.shared.Canvas.Show()
+
+	sim := a.shared.Canvas.Screen.(tcell.SimulationScreen)
+	titleRows := a.helpTitleRows()
+
+	quitRow := -1
+	for y := titleRows; y < h; y++ {
+		if strings.Contains(rowText(sim, y, w), "[HOLD q] quit") {
+			quitRow = y
+			break
+		}
+	}
+	if quitRow < 0 {
+		t.Fatalf("quit entry not found in help box")
+	}
+
+	line := rowText(sim, quitRow, w)
+	holdStart, holdEnd := findSpan(t, line, quitHoldWord)
+	for x := range w {
+		style := cellStyle(sim, x, quitRow)
+		_, _, attr := style.Decompose()
+		bold := attr&tcell.AttrBold != 0
+		switch {
+		case x >= holdStart && x < holdEnd && !bold:
+			t.Errorf("column %d (inside %q) is not bold, want bold", x, quitHoldWord)
+		case (x < holdStart || x >= holdEnd) && x < len([]rune(line)) && bold:
+			t.Errorf("column %d (outside %q) is bold, want plain", x, quitHoldWord)
 		}
 	}
 }

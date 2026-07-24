@@ -129,6 +129,7 @@ func (a *App) drawHelp(w, h int) {
 				return
 			}
 			a.shared.Canvas.DrawText(x0+1, y0+1+row, innerW, e.Text, canvas.StyleNormal)
+			a.boldQuitHoldWord(x0+1, y0+1+row, e.Text, canvas.StyleNormal.Bold(true))
 			row++
 		}
 	}
