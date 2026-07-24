@@ -152,7 +152,8 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	if e == nil {
 		return 0
 	}
-	rel := tree.RelativeDisplayPath(v.RootPath, e.Path)
+	path := tree.RelativeDisplayPath(v.RootPath, e.Path)
+	rel := path
 
 	lineCount := bestLineCount(e)
 	lineTag := fmt.Sprintf("%d line", lineCount)
@@ -211,7 +212,25 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 		style = canvas.StyleFlashError
 	}
 	v.Canvas.DrawText(x0, y0, w, text, style)
+	v.boldPathInFileTitleBar(x0, y0, text, path, style)
 	return 1
+}
+
+// boldPathInFileTitleBar re-draws path (the displayed entry's own
+// root-relative path) in style.Bold(true), if it appears in text — it
+// may not: the find prompt's own input replaces the path in this row
+// while open, and left-hand content (including the path) can be
+// dropped entirely for width under the fit/drop rule (SPEC.md §5.2),
+// in either of which cases this is a no-op rather than styling the
+// wrong span.
+func (v *Preview) boldPathInFileTitleBar(x0, y0 int, text, path string, style tcell.Style) {
+	runes, target := []rune(text), []rune(path)
+	for i := 0; i+len(target) <= len(runes); i++ {
+		if string(runes[i:i+len(target)]) == path {
+			v.Canvas.DrawText(x0+i, y0, len(target), path, style.Bold(true))
+			return
+		}
+	}
 }
 
 // fileLegendForIdle returns the idle file title bar's legend for e: the
