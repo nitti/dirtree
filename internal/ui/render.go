@@ -192,10 +192,19 @@ func (a *App) menuBarText(w int, entries []canvas.LegendEntry) string {
 // the open-files list is empty, since there is then nothing for Tab to
 // switch to or from — the entry stays in the legend (so the keybinding
 // hint doesn't disappear and reappear as files are opened/closed) but
-// reads as visually inert rather than actionable.
+// reads as visually inert rather than actionable. While the open-files
+// overlay itself is active, every entry in this row is inert — the
+// overlay owns all input, and none of switch/quick-open/browse/
+// search/quit are reachable until it's closed — so the whole legend
+// (not just "switch files") is dimmed instead, rather than leaving
+// four keys visibly advertised that this key press won't do anything.
 func (a *App) drawPreviewHeader(w int) {
 	if a.shared.HelpVisible {
 		a.shared.Canvas.DrawHeader(w, a.menuBarText(w, canvas.HideKeysLegend))
+		return
+	}
+	if a.overlay == views.OverlayOpenFiles {
+		a.shared.Canvas.DrawHeaderAllDimmed(w, a.rootLabel(), previewLegend)
 		return
 	}
 	if len(a.shared.Files.Entries) == 0 {

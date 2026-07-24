@@ -370,6 +370,28 @@ func (c *Canvas) DrawHeaderDimmed(w int, left string, entries []LegendEntry, dim
 	}
 }
 
+// DrawHeaderAllDimmed draws the header/title bar like DrawHeader, but
+// renders its entire legend (everything to the right of left) in
+// StyleHeaderDim, leaving left itself in the normal header style — used
+// when none of a header's own legend entries are actually invokable in
+// the current context (e.g. the primary preview view's title bar,
+// still drawn underneath the open-files-list overlay, SPEC.md §2.3,
+// which owns every key while it's active), as opposed to
+// DrawHeaderDimmed's single-entry dimming for the narrower case where
+// only one entry is inert.
+func (c *Canvas) DrawHeaderAllDimmed(w int, left string, entries []LegendEntry) {
+	text, leftIncluded := LegendFit(w, left, entries)
+	c.DrawText(0, 0, w, text, StyleHeader)
+	start := 0
+	if leftIncluded {
+		start = len([]rune(left))
+	}
+	runes := []rune(text)
+	if start < len(runes) {
+		c.DrawText(start, 0, len(runes)-start, string(runes[start:]), StyleHeaderDim)
+	}
+}
+
 // DrawHeaderMode renders the header/title bar with label (a bold,
 // all-caps mode name, e.g. "BROWSE" or "SEARCH") standing in for the
 // tree root path on the left, and legend right-aligned, using the same
