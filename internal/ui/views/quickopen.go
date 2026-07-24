@@ -17,10 +17,13 @@ import (
 // quickOpenLegend documents the quick open overlay's actions (SPEC.md
 // §4.2): Return opens the selected match into the open-files list, Page
 // Up/Down move the selection by a page (up/down move it by one row,
-// already covered by arrow keys and so not spelled out here), Ctrl+U
-// clears the query, Escape cancels back to the primary preview view.
+// already covered by arrow keys and so not spelled out here), Tab
+// narrows the query to the longest common prefix shared by every
+// current match, Ctrl+U clears the query, Escape cancels back to the
+// primary preview view.
 var quickOpenLegend = []canvas.LegendEntry{
 	{Text: "[return] open", Priority: 1},
+	{Text: "[tab] complete", Priority: 3},
 	{Text: "[pgup/pgdn] page", Priority: 3},
 	{Text: "[ctrl+u] clear", Priority: 3},
 	{Text: "[esc] cancel", Priority: 1},
@@ -159,6 +162,31 @@ func (v *QuickOpen) handleTypingKey(ev *tcell.EventKey) bool {
 		v.Query = ""
 		v.Selected = 0
 		v.recomputeMatches()
+	case ev.Key() == tcell.KeyTab:
+		// Narrows the query to the longest common prefix shared by
+		// every current match (§4.2), shell-tab-completion style, so
+		// typing "src/u" against a tree with several "src/utils/..."
+		// files can jump straight to "src/utils/" without typing the
+		// rest by hand. A no-op with zero or one match: an empty
+		// match set has nothing to complete to, and Return already
+		// opens a sole match directly, so completing its name first
+		// would only add a keystroke rather than save one. Also a
+		// no-op whenever match.CommonPrefixCompletion itself declines
+		// — the query isn't a literal prefix of every match (quick
+		// open's substring/glob matching, §4.1, can reach some of
+		// them another way), or the shared prefix doesn't actually
+		// extend past what's already typed.
+		if len(v.Matches) > 1 {
+			candidates := make([]string, len(v.Matches))
+			for i, m := range v.Matches {
+				candidates[i] = m.RelPath(v.RootPath)
+			}
+			if completed, ok := match.CommonPrefixCompletion(v.Query, candidates); ok {
+				v.Query = completed
+				v.Selected = 0
+				v.recomputeMatches()
+			}
+		}
 	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
 		v.Query += string(ev.Rune())
 		v.Selected = 0

@@ -226,6 +226,158 @@ func TestQuickOpenDrawSuppressesGhostTextForMidPathMatch(t *testing.T) {
 	}
 }
 
+// TestQuickOpenTabCompletesToCommonPrefix guards SPEC.md §4.2's
+// shell-tab-completion Tab action: with more than one match sharing a
+// literal prefix beyond what's been typed, Tab narrows the query to
+// that longest common prefix and recomputes matches.
+func TestQuickOpenTabCompletesToCommonPrefix(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sub/one.txt", "sub/two.txt", "other.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{
+		// "s" matches sub/one.txt and sub/two.txt (via "sub") but not
+		// other.txt; their shared prefix is "sub/".
+		Shared: &Shared{Files: openfiles.New(), RootPath: dir, Idx: idx},
+		Query:  "s",
+		Matches: []index.Entry{
+			{AbsPath: filepath.Join(dir, "sub", "one.txt")},
+			{AbsPath: filepath.Join(dir, "sub", "two.txt")},
+		},
+	}
+	v.HandleKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+
+	want := "sub/"
+	if v.Query != want {
+		t.Errorf("Query = %q, want %q", v.Query, want)
+	}
+	if len(v.Matches) != 2 || v.Selected != 0 {
+		t.Errorf("Matches/Selected = %v/%d, want both matches still present and selection reset", v.Matches, v.Selected)
+	}
+}
+
+// TestQuickOpenTabNoOpWhenMatchesDivergeImmediately guards Tab's no-op
+// case when the current matches share no more of a prefix than the
+// query itself already is — nothing left to complete to.
+func TestQuickOpenTabNoOpWhenMatchesDivergeImmediately(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"one.txt", "onetwo.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{
+		// "one.txt" and "onetwo.txt" share only "one" — no longer
+		// than the query already typed.
+		Shared: &Shared{Files: openfiles.New(), RootPath: dir, Idx: idx},
+		Query:  "one",
+		Matches: []index.Entry{
+			{AbsPath: filepath.Join(dir, "one.txt")},
+			{AbsPath: filepath.Join(dir, "onetwo.txt")},
+		},
+	}
+	v.HandleKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+
+	if v.Query != "one" {
+		t.Errorf("Query = %q, want unchanged %q", v.Query, "one")
+	}
+}
+
+// TestQuickOpenTabNoOpWhenQueryIsNotACommonPrefix guards Tab's no-op
+// case when the query wasn't itself a literal prefix of every current
+// match — quick open's substring/glob matching (§4.1) can reach a
+// match some other way, in which case there's no well-defined "common
+// continuation" of the typed text to extend.
+func TestQuickOpenTabNoOpWhenQueryIsNotACommonPrefix(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"one.txt", "two.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{
+		// "t" is a substring match on both (".txt") but not a prefix
+		// of either.
+		Shared: &Shared{Files: openfiles.New(), RootPath: dir, Idx: idx},
+		Query:  "t",
+		Matches: []index.Entry{
+			{AbsPath: filepath.Join(dir, "one.txt")},
+			{AbsPath: filepath.Join(dir, "two.txt")},
+		},
+	}
+	v.HandleKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+
+	if v.Query != "t" {
+		t.Errorf("Query = %q, want unchanged %q", v.Query, "t")
+	}
+}
+
+// TestQuickOpenTabNoOpWithSoleMatch guards Tab's no-op case when the
+// query already narrows to exactly one match — Return already opens it
+// directly, so completing its name first would only add a keystroke.
+func TestQuickOpenTabNoOpWithSoleMatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "one.txt")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{
+		Shared:  &Shared{Files: openfiles.New(), RootPath: dir, Idx: idx},
+		Query:   "one",
+		Matches: []index.Entry{{AbsPath: path}},
+	}
+	v.HandleKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+
+	if v.Query != "one" {
+		t.Errorf("Query = %q, want unchanged %q", v.Query, "one")
+	}
+}
+
+// TestQuickOpenTabNoOpWithNoMatches guards Tab's no-op case when the
+// query matches nothing at all — an empty match set has nothing to
+// complete to.
+func TestQuickOpenTabNoOpWithNoMatches(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "one.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{
+		Shared:  &Shared{Files: openfiles.New(), RootPath: dir, Idx: idx},
+		Query:   "nomatch",
+		Matches: nil,
+	}
+	v.HandleKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+
+	if v.Query != "nomatch" {
+		t.Errorf("Query = %q, want unchanged %q", v.Query, "nomatch")
+	}
+}
+
 // TestQuickOpenSummaryCountsFilesOnly guards quickOpenSummary's total:
 // it counts the background index's non-directory entries regardless of
 // the current query, so it always reads as the full file count the
