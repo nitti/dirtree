@@ -122,25 +122,6 @@ func TestCheckQuitHoldReleaseKeepsHoldWithinGap(t *testing.T) {
 	}
 }
 
-// TestCheckQuitHoldReleaseSurvivesGapLongerThanVisualGap guards the bug
-// fixed by splitting this gesture into two independent thresholds
-// (SPEC.md §5.2): a gap comfortably longer than quitHoldVisualGap (the
-// header's own short show/hide threshold) but still well under the
-// generous quitHoldReleaseGap must NOT reset the underlying hold —
-// otherwise an ordinary terminal's initial auto-repeat delay (commonly
-// this size) would silently restart the whole gesture partway through a
-// single, continuous physical hold, which read as the fade animation
-// replaying from the start rather than merely resuming.
-func TestCheckQuitHoldReleaseSurvivesGapLongerThanVisualGap(t *testing.T) {
-	a := &App{}
-	a.progressQuitHold()
-	a.quitHoldLastKey = time.Now().Add(-(quitHoldVisualGap + 50*time.Millisecond))
-	a.checkQuitHoldRelease()
-	if a.quitHoldStart.IsZero() {
-		t.Fatal("checkQuitHoldRelease reset the hold on a gap longer than quitHoldVisualGap but still well under quitHoldReleaseGap")
-	}
-}
-
 // TestCheckQuitHoldReleaseNoopWhenNotHolding guards against
 // checkQuitHoldRelease doing anything (in particular, touching
 // quitHoldLastKey's stale value from a previous gesture) when no hold

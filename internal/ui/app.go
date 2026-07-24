@@ -53,42 +53,33 @@ const (
 	// deliberate press doesn't feel sluggish.
 	quitHoldDuration = 1 * time.Second
 	// quitHoldReleaseGap is the longest gap allowed between consecutive
-	// `q` key-repeat events before the hold-to-quit gesture's underlying
-	// progress (quitHoldStart, quitConfirmed) is actually reset or, if
-	// already confirmed, before the app actually quits. Terminals deliver
-	// no key-up event, so a held key can only be inferred from a steady
-	// stream of repeat events, and a real terminal's *initial* auto-repeat
-	// delay — the pause before a held key starts auto-repeating at all,
-	// commonly several hundred milliseconds — can by itself produce a gap
-	// this large between the first two events of a genuine, continuous
-	// hold. This threshold has to stay comfortably above that, or an
-	// ordinary hold's own opening gap gets mistaken for a release and the
-	// whole gesture silently restarts partway through — a functional bug
-	// (the advertised "hold for ~1s" stops being true), not merely a
-	// cosmetic one, so it is deliberately generous rather than tuned for
-	// visual snappiness; see quitHoldVisualGap below for the part of this
-	// gesture that actually needs to feel instant. Checked on the
-	// existing resize-poll ticker (resizePollInterval) rather than a
-	// dedicated timer — imprecision on the order of one poll tick is
-	// negligible against a threshold this size.
+	// `q` key-repeat events before the hold-to-quit gesture is considered
+	// released: this is the single source of truth for "is `q` still
+	// down" throughout the gesture, used both to decide whether to reset
+	// quitHoldStart/quitConfirmed (or, once confirmed, whether to
+	// actually quit — see checkQuitHoldRelease) and, in render.go, purely
+	// via quitHoldStart's own zero-vs-non-zero state, whether the
+	// header/title bar shows the quitting variant at all — the two are
+	// deliberately tied to the exact same check rather than split into a
+	// separate, shorter "just for the visual" threshold, after an earlier
+	// attempt at that caused the header to flicker throughout an entire
+	// genuine hold on any terminal whose real auto-repeat interval turned
+	// out to be slower than the guessed visual-only threshold. Terminals
+	// deliver no key-up event, so a held key can only be inferred from a
+	// steady stream of repeat events, and a real terminal's own auto-repeat
+	// timing — both the initial delay before a held key starts repeating
+	// at all, and the steady interval between repeats after that — varies
+	// enough across terminals/OSes that this threshold is kept generous
+	// rather than tuned for snappiness: too short, and an ordinary hold's
+	// own repeat cadence gets mistaken for a release, which either
+	// flickers the header (if that mistake is visual-only) or silently
+	// resets the gesture's elapsed-time progress (if it also touches
+	// quitHoldStart) — both are worse than a release taking up to this
+	// long to visibly register. Checked on the existing resize-poll ticker
+	// (resizePollInterval) rather than a dedicated timer — imprecision on
+	// the order of one poll tick is negligible against a threshold this
+	// size.
 	quitHoldReleaseGap = 600 * time.Millisecond
-	// quitHoldVisualGap is a separate, much shorter threshold controlling
-	// only whether the header/title bar's hold-to-quit variant is drawn
-	// this frame (SPEC.md §5.2) — it never touches quitHoldStart or
-	// quitConfirmed, so it can be kept short purely for responsiveness
-	// (comfortably above a typical terminal's steady repeat interval,
-	// ~20-50ms, so an ordinary hold's own cadence never flickers it)
-	// without risking the functional restart bug quitHoldReleaseGap's own
-	// generosity exists to avoid: showing/hiding the header is a pure,
-	// stateless function of "how recently did a `q` event arrive," so a
-	// brief gap before the second auto-repeat event can, at worst, hide
-	// the header for a frame or two before it reappears already correctly
-	// mid-fade — the underlying timer never restarted, so the total
-	// physical hold needed to actually quit is unaffected. Re-evaluated
-	// on every draw, which already happens on every key event and at
-	// least once per resize-poll tick even with no new key events, so a
-	// real release is reflected within roughly this gap.
-	quitHoldVisualGap = 80 * time.Millisecond
 )
 
 // App holds all interactive state for a running session.
@@ -148,11 +139,11 @@ type App struct {
 
 	// quitHoldStart is when the currently-in-progress hold-to-quit
 	// gesture (SPEC.md §5.2) began holding `q`, zero when no hold is in
-	// progress — this is the timeline quitHoldReleaseGap (generous) is
-	// allowed to reset; render.go reads quitHoldLastKey directly, against
-	// the separate, much shorter quitHoldVisualGap, to decide whether to
-	// draw the header/title bar's attention-grabbing quitting variant,
-	// entirely independent of whether this timeline has actually reset.
+	// progress — render.go reads this directly (zero vs. non-zero) to
+	// decide whether to draw the header/title bar's attention-grabbing
+	// quitting variant, the same state checkQuitHoldRelease itself resets
+	// via quitHoldReleaseGap, so the header is visible for exactly as
+	// long as the app believes `q` is down.
 	// quitHoldLastKey is the most recent `q` key-repeat event's time.
 	// quitConfirmed is set once the hold has been held for the full
 	// quitHoldDuration: the app doesn't quit the instant that happens,
@@ -370,10 +361,10 @@ func (a *App) Run() error {
 			// re-triggering progressQuitHold well within
 			// quitHoldReleaseGap of each other, so this only ever
 			// fires the reset (or, once confirmed, the actual quit)
-			// once the stream of repeats actually stops. The header's
-			// own show/hide is checked independently, every draw, at
-			// the much shorter quitHoldVisualGap — this tick is what
-			// supplies that redraw when no key event is doing so.
+			// once the stream of repeats actually stops. This is also
+			// what redraws the header/title bar (which tracks
+			// quitHoldStart directly) promptly after a release, even
+			// with no new key event to trigger a draw otherwise.
 			a.checkQuitHoldRelease()
 			// Also catches the background index (re)build finishing
 			// while quick open is open with an unchanged query, so
@@ -526,10 +517,10 @@ func (a *App) resetQuitHold() {
 // longer down. Once the gesture is confirmed (held the full
 // quitHoldDuration), a detected release is what actually quits — see
 // quitConfirmed's doc comment for why this is deferred rather than
-// quitting the instant quitHoldDuration elapses. This is independent of
-// the header/title bar's own show/hide decision (render.go), which uses
-// the much shorter quitHoldVisualGap and never touches the state this
-// function reads or resets.
+// quitting the instant quitHoldDuration elapses. The header/title bar's
+// own show/hide (render.go) reads quitHoldStart directly rather than
+// duplicating this check, so it's always in sync with whatever this
+// function decides.
 func (a *App) checkQuitHoldRelease() {
 	if a.quitHoldStart.IsZero() {
 		return

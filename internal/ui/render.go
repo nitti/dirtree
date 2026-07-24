@@ -203,17 +203,18 @@ func (a *App) menuBarText(w int, entries []canvas.LegendEntry) string {
 // (not just "switch files") is dimmed instead, rather than leaving
 // four keys visibly advertised that this key press won't do anything.
 func (a *App) drawPreviewHeader(w int) {
-	// The quitting variant's show/hide is a pure function of recency
-	// (quitHoldVisualGap), entirely independent of quitHoldStart's own
-	// reset/confirm state machine (SPEC.md §5.2) — this is what lets the
-	// header appear and disappear almost instantly on press/release
-	// without risking the functional bug a shorter quitHoldReleaseGap
-	// would cause (an ordinary auto-repeat gap silently restarting the
-	// whole gesture, see that constant's doc comment): a brief gap before
-	// the second `q` event can, at worst, hide the header for a frame or
-	// two, and it reappears already correctly mid-fade rather than
-	// restarting, since the underlying timeline was never touched.
-	if !a.quitHoldStart.IsZero() && time.Since(a.quitHoldLastKey) < quitHoldVisualGap {
+	// The quitting variant shows for exactly as long as quitHoldStart is
+	// non-zero (SPEC.md §5.2) — the same "is `q` still down" state
+	// checkQuitHoldRelease itself maintains via quitHoldReleaseGap, not a
+	// separate, shorter threshold computed independently here. An earlier
+	// attempt at a shorter, visual-only recency check made the header
+	// flicker throughout an entire genuine hold whenever the terminal's
+	// real auto-repeat interval happened to exceed that guessed
+	// threshold; tying the header to the exact same state the functional
+	// release check maintains means the header is visible for precisely
+	// as long as the app itself believes the key is down, no more, no
+	// less, regardless of any particular terminal's repeat timing.
+	if !a.quitHoldStart.IsZero() {
 		a.drawQuitHoldHeader(w)
 		return
 	}
