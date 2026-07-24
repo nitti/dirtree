@@ -335,7 +335,7 @@ func TestPreviewLegendOrder(t *testing.T) {
 		"[o] quick open",
 		"[b] browse",
 		"[s] search",
-		"[hold q] quit",
+		"[HOLD q] quit",
 	}
 	if len(previewLegend) != len(want) {
 		t.Fatalf("previewLegend has %d entries, want %d", len(previewLegend), len(want))
