@@ -3,7 +3,9 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -11,6 +13,22 @@ import (
 	"github.com/nitti/dirtree/internal/ui/canvas"
 	"github.com/nitti/dirtree/internal/ui/views"
 )
+
+// rowText renders sim's row y as a plain string, blank cells included,
+// for substring assertions against a drawn header/legend row.
+func rowText(sim tcell.SimulationScreen, y, w int) string {
+	cells, width, _ := sim.GetContents()
+	var b strings.Builder
+	for x := 0; x < w && x < width; x++ {
+		c := cells[y*width+x]
+		if len(c.Runes) > 0 {
+			b.WriteRune(c.Runes[0])
+		} else {
+			b.WriteRune(' ')
+		}
+	}
+	return b.String()
+}
 
 // TestLegendTier1FitsMinTerminalWidth guards SPEC.md §6.4's minimum
 // terminal size against §5.2's legend tiering: previewLegend's
@@ -102,6 +120,61 @@ func TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestDrawQuitHoldHeaderFadesLeftToRight guards the hold-to-quit
+// gesture's header/title bar variant (SPEC.md §5.2): at the start of
+// the hold nothing has faded yet, partway through the hold the row's
+// left edge has faded while quitHoldMessage's right-anchored text
+// still stands, and by the end of quitHoldDuration the entire row has
+// faded, all in canvas.StyleHeaderQuit rather than the normal header
+// style.
+func TestDrawQuitHoldHeaderFadesLeftToRight(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 5
+	sim.SetSize(w, h)
+
+	a := &App{rootPath: "/root", shared: &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)}}
+
+	blankRow := func() bool {
+		return strings.TrimSpace(rowText(sim, 0, w)) == ""
+	}
+
+	a.quitHoldStart = time.Now()
+	a.shared.Canvas.Clear()
+	a.drawPreviewHeader(w)
+	sim.Show()
+	for x := range w {
+		if style := cellStyle(sim, x, 0); style != canvas.StyleHeaderQuit {
+			t.Errorf("hold start: column %d has style %v, want StyleHeaderQuit", x, style)
+		}
+	}
+	if blankRow() {
+		t.Fatal("hold start: row is entirely blank, want the quitting message visible")
+	}
+
+	a.quitHoldStart = time.Now().Add(-quitHoldDuration / 2)
+	a.shared.Canvas.Clear()
+	a.drawPreviewHeader(w)
+	sim.Show()
+	row := rowText(sim, 0, w)
+	if row[0] != ' ' {
+		t.Errorf("hold midpoint: column 0 = %q, want faded (blank)", row[0])
+	}
+	if !strings.Contains(row, quitHoldMessage) {
+		t.Errorf("hold midpoint: row %q missing right-anchored %q", row, quitHoldMessage)
+	}
+
+	a.quitHoldStart = time.Now().Add(-quitHoldDuration)
+	a.shared.Canvas.Clear()
+	a.drawPreviewHeader(w)
+	sim.Show()
+	if !blankRow() {
+		t.Errorf("hold complete: row %q, want fully faded (blank)", rowText(sim, 0, w))
+	}
+}
+
 // TestPreviewLegendOrder pins previewLegend's left-to-right order: open
 // files, quick open, browse, search, quit — survivors of narrow-terminal
 // priority dropping keep their original order (§5.2), so this order is
@@ -113,7 +186,7 @@ func TestPreviewLegendOrder(t *testing.T) {
 		"[o] quick open",
 		"[b] browse",
 		"[s] search",
-		"[q] quit",
+		"[hold q] quit",
 	}
 	if len(previewLegend) != len(want) {
 		t.Fatalf("previewLegend has %d entries, want %d", len(previewLegend), len(want))
