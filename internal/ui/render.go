@@ -203,13 +203,17 @@ func (a *App) menuBarText(w int, entries []canvas.LegendEntry) string {
 // (not just "switch files") is dimmed instead, rather than leaving
 // four keys visibly advertised that this key press won't do anything.
 func (a *App) drawPreviewHeader(w int) {
-	// The quitting variant is shown the instant `q` is first pressed
-	// (SPEC.md §5.2) — responsiveness is the explicit priority for this
-	// gesture, even at the cost of a possible brief flicker on a
-	// slow-auto-repeating terminal (see quitHoldReleaseGap's doc comment
-	// for that tradeoff) rather than a delay before the header ever
-	// appears.
-	if !a.quitHoldStart.IsZero() {
+	// The quitting variant's show/hide is a pure function of recency
+	// (quitHoldVisualGap), entirely independent of quitHoldStart's own
+	// reset/confirm state machine (SPEC.md §5.2) — this is what lets the
+	// header appear and disappear almost instantly on press/release
+	// without risking the functional bug a shorter quitHoldReleaseGap
+	// would cause (an ordinary auto-repeat gap silently restarting the
+	// whole gesture, see that constant's doc comment): a brief gap before
+	// the second `q` event can, at worst, hide the header for a frame or
+	// two, and it reappears already correctly mid-fade rather than
+	// restarting, since the underlying timeline was never touched.
+	if !a.quitHoldStart.IsZero() && time.Since(a.quitHoldLastKey) < quitHoldVisualGap {
 		a.drawQuitHoldHeader(w)
 		return
 	}

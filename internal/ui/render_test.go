@@ -126,6 +126,7 @@ func TestDrawQuitHoldHeaderFadesLeftToRight(t *testing.T) {
 	}
 
 	a.quitHoldStart = time.Now()
+	a.quitHoldLastKey = time.Now()
 	a.shared.Canvas.Clear()
 	a.drawPreviewHeader(w)
 	sim.Show()
@@ -139,6 +140,7 @@ func TestDrawQuitHoldHeaderFadesLeftToRight(t *testing.T) {
 	}
 
 	a.quitHoldStart = time.Now().Add(-quitHoldDuration / 2)
+	a.quitHoldLastKey = time.Now()
 	a.shared.Canvas.Clear()
 	a.drawPreviewHeader(w)
 	sim.Show()
@@ -151,6 +153,7 @@ func TestDrawQuitHoldHeaderFadesLeftToRight(t *testing.T) {
 	}
 
 	a.quitHoldStart = time.Now().Add(-quitHoldDuration)
+	a.quitHoldLastKey = time.Now()
 	a.shared.Canvas.Clear()
 	a.drawPreviewHeader(w)
 	sim.Show()
@@ -174,9 +177,10 @@ func TestDrawPreviewHeaderShowsQuitVariantOnFirstQEvent(t *testing.T) {
 	sim.SetSize(w, h)
 
 	a := &App{
-		rootPath:      "/root",
-		shared:        &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)},
-		quitHoldStart: time.Now(),
+		rootPath:        "/root",
+		shared:          &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)},
+		quitHoldStart:   time.Now(),
+		quitHoldLastKey: time.Now(),
 	}
 	a.drawPreviewHeader(w)
 	sim.Show()
@@ -185,6 +189,45 @@ func TestDrawPreviewHeaderShowsQuitVariantOnFirstQEvent(t *testing.T) {
 		if style := cellStyle(sim, x, 0); style != canvas.StyleHeaderQuit {
 			t.Fatalf("column %d has style %v after a single `q` event, want StyleHeaderQuit shown immediately", x, style)
 		}
+	}
+}
+
+// TestDrawPreviewHeaderHidesQuitVariantAfterVisualGapWithoutResettingHold
+// guards the two-tier design this gesture relies on (SPEC.md §5.2): once
+// quitHoldVisualGap has passed since the last `q` event, the header
+// stops rendering the quitting variant even though the underlying hold
+// (quitHoldStart) has NOT been reset — proving the header's own
+// short-and-snappy show/hide is independent of the much more
+// conservative quitHoldReleaseGap that actually cancels or confirms the
+// gesture. This is what prevents the bug an earlier, single-shared-gap
+// design had: an ordinary auto-repeat gap silently restarting the whole
+// hold, which looked like the fade animation replaying from the start
+// mid-hold rather than just resuming.
+func TestDrawPreviewHeaderHidesQuitVariantAfterVisualGapWithoutResettingHold(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 5
+	sim.SetSize(w, h)
+
+	holdStart := time.Now().Add(-100 * time.Millisecond)
+	a := &App{
+		rootPath:        "/root",
+		shared:          &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)},
+		quitHoldStart:   holdStart,
+		quitHoldLastKey: time.Now().Add(-(quitHoldVisualGap + time.Millisecond)),
+	}
+	a.drawPreviewHeader(w)
+	sim.Show()
+
+	for x := range w {
+		if style := cellStyle(sim, x, 0); style == canvas.StyleHeaderQuit {
+			t.Fatalf("column %d still shows StyleHeaderQuit after quitHoldVisualGap elapsed with no new `q` event", x)
+		}
+	}
+	if a.quitHoldStart != holdStart {
+		t.Fatal("drawPreviewHeader must never itself modify quitHoldStart — only checkQuitHoldRelease may reset the hold")
 	}
 }
 
