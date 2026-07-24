@@ -37,11 +37,18 @@ var (
 	// "switch files" while no file is open) without removing it from
 	// the legend or dropping its keybinding hint — the entry is still
 	// legible, just visually deprioritized against the rest of the row.
-	StyleHeaderDim   = StyleHeader.Dim(true)
-	StyleFileTitle   = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
-	StyleError       = tcell.StyleDefault.Foreground(tcell.ColorRed)
-	StyleBadge       = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
-	StyleFindMatch   = tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
+	StyleHeaderDim = StyleHeader.Dim(true)
+	StyleFileTitle = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
+	StyleError     = tcell.StyleDefault.Foreground(tcell.ColorRed)
+	StyleBadge     = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
+	StyleFindMatch = tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
+	// StyleFindCurrent marks in-file find's active match (§2.4), and
+	// doubles as the "this query unambiguously identifies exactly one
+	// row" highlight for quick open (§4.2) and jump to file (§4.3) —
+	// both are the same underlying idea (the one row a search-like query
+	// currently resolves to), distinct from both plain StyleSelected
+	// (cursor position, with no implication the query alone singled it
+	// out) and StyleFindMatch (one of several matches, not the sole one).
 	StyleFindCurrent = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack).Bold(true)
 	// StyleCopyModeTitle replaces StyleFileTitle whenever copy mode
 	// (SPEC.md §2.1) is active, so the file title bar itself makes copy
@@ -54,6 +61,14 @@ var (
 	// unmistakable at a glance rather than blending into the rest of the
 	// overlay.
 	StyleSearchInput = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
+	// StyleQueryGhost is StyleSearchInput with the dim attribute applied,
+	// used for the autocompleted "remainder of the path" ghost text a
+	// query row shows immediately after what the user actually typed,
+	// once that text unambiguously identifies a single match (quick
+	// open, SPEC.md §4.2; jump to file, §4.3) — same background as the
+	// query text it trails, dimmed so it reads as a suggestion rather
+	// than something already entered.
+	StyleQueryGhost = StyleSearchInput.Dim(true)
 	// StyleFlash briefly replaces a just-opened file row's normal style,
 	// as an on-open confirmation distinct from StyleSelected (cursor
 	// position) and from the lasting "●" already-open indicator every

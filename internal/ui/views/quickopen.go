@@ -1,6 +1,7 @@
 package views
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -218,7 +219,20 @@ func (v *QuickOpen) Draw(w, h int) {
 		legend = canvas.HideKeysLegend
 	}
 	v.Canvas.DrawHeaderMode(w, "QUICK OPEN", legend)
-	v.Canvas.DrawText(0, 1, w, "> "+v.Query, canvas.StyleSearchInput)
+	prompt := "> " + v.Query
+	queryRow := prompt
+	if v.Matches != nil {
+		if text, ok := canvas.FitPair(w, queryRow, quickOpenSummary(v.Idx, len(v.Matches))); ok {
+			queryRow = text
+		}
+	}
+	v.Canvas.DrawText(0, 1, w, queryRow, canvas.StyleSearchInput)
+	if ghost := v.queryGhostSuffix(); ghost != "" {
+		x := len([]rune(prompt))
+		if x < w {
+			v.Canvas.DrawText(x, 1, min(len([]rune(ghost)), w-x), ghost, canvas.StyleQueryGhost)
+		}
+	}
 	v.drawList(w, h)
 }
 
@@ -226,6 +240,44 @@ func (v *QuickOpen) Draw(w, h int) {
 // overlay (§5.4) to mirror.
 func (v *QuickOpen) CurrentLegend() []canvas.LegendEntry {
 	return quickOpenLegend
+}
+
+// queryGhostSuffix returns the ghost-text autocomplete suffix for the
+// query row (SPEC.md §4.2): the literal remainder of the sole match's
+// path once v.Query unambiguously identifies exactly one file *and* is
+// a literal prefix of that file's path — quick open's glob/substring
+// matching rule (internal/match.Matches) means a unique match's query
+// is often not a prefix of anything at all (e.g. "match" uniquely
+// matching "internal/match/match.go" starts mid-path), and
+// match.Remainder deliberately declines to invent a remainder in that
+// case rather than autocompleting to a continuation the user didn't
+// actually type the start of.
+func (v *QuickOpen) queryGhostSuffix() string {
+	if len(v.Matches) != 1 {
+		return ""
+	}
+	suffix, ok := match.Remainder(v.Query, v.Matches[0].RelPath(v.RootPath))
+	if !ok {
+		return ""
+	}
+	return suffix
+}
+
+// quickOpenSummary renders a "N of N files" right-hand summary for the
+// query input row (SPEC.md §4.2), where the first N is how many of the
+// background index's files (§4.1, directories excluded) currently
+// match the query — the same len(v.Matches) drawList already paginates
+// through — and the second is the index's total file count regardless
+// of query.
+func quickOpenSummary(idx *index.Index, shown int) string {
+	entries, _ := idx.Snapshot()
+	total := 0
+	for _, e := range entries {
+		if !e.IsDir {
+			total++
+		}
+	}
+	return fmt.Sprintf("%d of %d files", shown, total)
 }
 
 // drawList renders quick open's flat, root-relative match list (SPEC.md
@@ -275,6 +327,13 @@ func (v *QuickOpen) drawList(w, h int) {
 			switch {
 			case errored && time.Since(v.ErrorFlashStart) < canvas.FlashDuration:
 				style = canvas.StyleFlashError
+			case len(v.Matches) == 1:
+				// The query unambiguously identifies this one file
+				// (§4.2) — distinct from plain cursor-position
+				// StyleSelected, which i == v.Selected would otherwise
+				// also match here (Selected is always 0, the sole
+				// match, once len(Matches) == 1).
+				style = canvas.StyleFindCurrent
 			case i == v.Selected:
 				style = canvas.StyleSelected
 			}

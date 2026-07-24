@@ -282,7 +282,7 @@ func streamBuildingVisible(elapsed, sinceDone time.Duration, done bool, threshol
 func (v *Preview) drawContent(x0, y0, w, h int) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
-		msg := "no files open — press b to browse, o to quick-open, s to search contents"
+		msg := "no files open — press o to quick open, b to browse, s to search contents"
 		row := y0 + max(h/2, 1)
 		v.Canvas.DrawText(x0, row, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
 		return
