@@ -27,3 +27,26 @@ func TestLegendTier1FitsMinTerminalWidth(t *testing.T) {
 		t.Errorf("previewLegend's priority-1 text is %d runes, exceeding MinTerminalWidth (%d): %q", n, canvas.MinTerminalWidth, tier1)
 	}
 }
+
+// TestPreviewLegendOrder pins previewLegend's left-to-right order: open
+// files, quick open, browse, search, quit — survivors of narrow-terminal
+// priority dropping keep their original order (§5.2), so this order is
+// itself part of the legend's observable behavior, not just a cosmetic
+// detail of how the var literal happens to be written.
+func TestPreviewLegendOrder(t *testing.T) {
+	want := []string{
+		"[tab] switch files",
+		"[o] quick open",
+		"[b] browse",
+		"[s] search",
+		"[q] quit",
+	}
+	if len(previewLegend) != len(want) {
+		t.Fatalf("previewLegend has %d entries, want %d", len(previewLegend), len(want))
+	}
+	for i, w := range want {
+		if got := previewLegend[i].Text; got != w {
+			t.Errorf("previewLegend[%d] = %q, want %q", i, got, w)
+		}
+	}
+}
