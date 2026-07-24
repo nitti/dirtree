@@ -42,18 +42,37 @@ func cellStyle(sim tcell.SimulationScreen, x, y int) tcell.Style {
 	return cells[y*width+x].Style
 }
 
+// findSpan returns the rune-index span [start, start+len(target)) of
+// target's first occurrence within text, failing the test if it's not
+// found — a shared helper for tests asserting a style overlay lands on
+// a specific substring of a header row's fitted legend text.
+func findSpan(t *testing.T, text, target string) (start, end int) {
+	t.Helper()
+	runes, targetRunes := []rune(text), []rune(target)
+	for i := 0; i+len(targetRunes) <= len(runes); i++ {
+		if string(runes[i:i+len(targetRunes)]) == target {
+			return i, i + len(targetRunes)
+		}
+	}
+	t.Fatalf("test setup: %q not found in %q", target, text)
+	return 0, 0
+}
+
 // TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty guards the "switch
 // files" legend entry's dim-when-empty behavior: with no open files,
 // its own columns render in canvas.StyleHeaderDim while the rest of
-// the row stays canvas.StyleHeader; with at least one file open, the
-// entire row (including that entry) renders in the plain
-// canvas.StyleHeader, matching the row's behavior before this feature.
+// the legend stays canvas.StyleHeader (aside from the root label,
+// bolded, and "hold" within the quit entry, also bolded — both
+// unrelated to this feature and covered by their own tests); with at
+// least one file open, the entire legend (including that entry)
+// renders in the plain canvas.StyleHeader, matching the row's behavior
+// before this feature.
 func TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty(t *testing.T) {
 	sim := tcell.NewSimulationScreen("")
 	if err := sim.Init(); err != nil {
 		t.Fatal(err)
 	}
-	w, h := 60, 5
+	w, h := 90, 5
 	sim.SetSize(w, h)
 
 	a := &App{rootPath: "/root", shared: &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)}}
@@ -62,26 +81,20 @@ func TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty(t *testing.T) {
 	sim.Show()
 
 	text := canvas.LegendText(w, a.rootLabel(), previewLegend)
-	runes := []rune(text)
-	target := []rune(switchFilesLegendText)
-	idx := -1
-	for i := 0; i+len(target) <= len(runes); i++ {
-		if string(runes[i:i+len(target)]) == switchFilesLegendText {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		t.Fatalf("test setup: %q not found in fitted legend %q", switchFilesLegendText, text)
-	}
+	leftStart, leftEnd := findSpan(t, text, a.rootLabel())
+	holdStart, holdEnd := findSpan(t, text, quitHoldWord)
+	targetStart, targetEnd := findSpan(t, text, switchFilesLegendText)
 	for x := range w {
 		style := cellStyle(sim, x, 0)
-		inTarget := x >= idx && x < idx+len(target)
 		switch {
-		case inTarget && style != canvas.StyleHeaderDim:
+		case x >= leftStart && x < leftEnd && style != canvas.StyleHeaderMode:
+			t.Errorf("empty list: column %d (inside root label) has style %v, want StyleHeaderMode", x, style)
+		case x >= holdStart && x < holdEnd && style != canvas.StyleHeaderMode:
+			t.Errorf("empty list: column %d (inside %q) has style %v, want StyleHeaderMode", x, quitHoldWord, style)
+		case x >= targetStart && x < targetEnd && style != canvas.StyleHeaderDim:
 			t.Errorf("empty list: column %d (inside %q) has style %v, want StyleHeaderDim", x, switchFilesLegendText, style)
-		case !inTarget && style != canvas.StyleHeader:
-			t.Errorf("empty list: column %d (outside %q) has style %v, want StyleHeader", x, switchFilesLegendText, style)
+		case (x < leftStart || x >= leftEnd) && (x < holdStart || x >= holdEnd) && (x < targetStart || x >= targetEnd) && style != canvas.StyleHeader:
+			t.Errorf("empty list: column %d has style %v, want StyleHeader", x, style)
 		}
 	}
 
@@ -98,8 +111,20 @@ func TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty(t *testing.T) {
 	sim.Show()
 
 	for x := range w {
-		if style := cellStyle(sim, x, 0); style != canvas.StyleHeader {
-			t.Errorf("non-empty list: column %d has style %v, want plain StyleHeader (nothing dimmed)", x, style)
+		style := cellStyle(sim, x, 0)
+		switch {
+		case x >= leftStart && x < leftEnd:
+			if style != canvas.StyleHeaderMode {
+				t.Errorf("non-empty list: column %d (inside root label) has style %v, want StyleHeaderMode", x, style)
+			}
+		case x >= holdStart && x < holdEnd:
+			if style != canvas.StyleHeaderMode {
+				t.Errorf("non-empty list: column %d (inside %q) has style %v, want StyleHeaderMode", x, quitHoldWord, style)
+			}
+		default:
+			if style != canvas.StyleHeader {
+				t.Errorf("non-empty list: column %d has style %v, want plain StyleHeader (nothing dimmed)", x, style)
+			}
 		}
 	}
 }
@@ -219,8 +244,8 @@ func TestDrawPreviewHeaderDimsWholeLegendWhenOpenFilesOverlayActive(t *testing.T
 	for x := range w {
 		style := cellStyle(sim, x, 0)
 		switch {
-		case x < len(left) && style != canvas.StyleHeader:
-			t.Errorf("column %d (root label) has style %v, want StyleHeader", x, style)
+		case x < len(left) && style != canvas.StyleHeaderMode:
+			t.Errorf("column %d (root label) has style %v, want StyleHeaderMode", x, style)
 		case x >= len(left) && style != canvas.StyleHeaderDim:
 			t.Errorf("column %d (legend) has style %v, want StyleHeaderDim while open-files overlay is active", x, style)
 		}

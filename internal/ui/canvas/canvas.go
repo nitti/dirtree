@@ -373,17 +373,19 @@ func (c *Canvas) DrawHeader(w int, text string) {
 	c.DrawText(0, 0, w, text, StyleHeader)
 }
 
-// DrawHeaderDimmed draws the header/title bar exactly like DrawHeader,
-// then re-draws dimText in StyleHeaderDim if it appears in the fitted
-// legend text — it may not, having been dropped for width per
-// LegendFit's own priority order, in which case this is a no-op beyond
-// the base draw. Generalizes DrawHeaderMode's "compose once, overlay a
-// styled sub-span" pattern from a fixed column-0 span to an arbitrary
-// legend entry whose position shifts with which other entries survive
-// dropping and how the row right-aligns.
+// DrawHeaderDimmed draws the header/title bar like DrawHeaderMode (left
+// bolded, if it survived LegendFit's own width-driven dropping), then
+// re-draws dimText in StyleHeaderDim if it appears in the fitted legend
+// text — it may not, having been dropped for width per LegendFit's own
+// priority order, in which case this is a no-op beyond the base draw.
+// Generalizes DrawHeaderMode's "compose once, overlay a styled
+// sub-span" pattern to a second, independent overlay span.
 func (c *Canvas) DrawHeaderDimmed(w int, left string, entries []LegendEntry, dimText string) {
-	text := LegendText(w, left, entries)
+	text, leftIncluded := LegendFit(w, left, entries)
 	c.DrawText(0, 0, w, text, StyleHeader)
+	if leftIncluded {
+		c.DrawText(0, 0, len([]rune(left)), left, StyleHeaderMode)
+	}
 	runes, dim := []rune(text), []rune(dimText)
 	for i := 0; i+len(dim) <= len(runes); i++ {
 		if string(runes[i:i+len(dim)]) == dimText {
@@ -393,21 +395,22 @@ func (c *Canvas) DrawHeaderDimmed(w int, left string, entries []LegendEntry, dim
 	}
 }
 
-// DrawHeaderAllDimmed draws the header/title bar like DrawHeader, but
-// renders its entire legend (everything to the right of left) in
-// StyleHeaderDim, leaving left itself in the normal header style — used
-// when none of a header's own legend entries are actually invokable in
-// the current context (e.g. the primary preview view's title bar,
-// still drawn underneath the open-files-list overlay, SPEC.md §2.3,
-// which owns every key while it's active), as opposed to
-// DrawHeaderDimmed's single-entry dimming for the narrower case where
-// only one entry is inert.
+// DrawHeaderAllDimmed draws the header/title bar like DrawHeaderMode
+// (left bolded, if it survived LegendFit's own width-driven dropping),
+// but renders its entire legend (everything to the right of left) in
+// StyleHeaderDim — used when none of a header's own legend entries are
+// actually invokable in the current context (e.g. the primary preview
+// view's title bar, still drawn underneath the open-files-list
+// overlay, SPEC.md §2.3, which owns every key while it's active), as
+// opposed to DrawHeaderDimmed's single-entry dimming for the narrower
+// case where only one entry is inert.
 func (c *Canvas) DrawHeaderAllDimmed(w int, left string, entries []LegendEntry) {
 	text, leftIncluded := LegendFit(w, left, entries)
 	c.DrawText(0, 0, w, text, StyleHeader)
 	start := 0
 	if leftIncluded {
 		start = len([]rune(left))
+		c.DrawText(0, 0, start, left, StyleHeaderMode)
 	}
 	runes := []rune(text)
 	if start < len(runes) {
@@ -415,12 +418,13 @@ func (c *Canvas) DrawHeaderAllDimmed(w int, left string, entries []LegendEntry) 
 	}
 }
 
-// DrawHeaderMode renders the header/title bar with label (a bold,
-// all-caps mode name, e.g. "BROWSE" or "SEARCH") standing in for the
-// tree root path on the left, and legend right-aligned, using the same
-// fit/drop rule LegendText uses elsewhere — label is dropped once legend
-// can't buy back enough room some other way, exactly like the root path
-// is. Only label itself is bold; legend keeps the normal header weight.
+// DrawHeaderMode renders the header/title bar with label — either a
+// bold, all-caps mode name (e.g. "BROWSE" or "SEARCH") or, in the
+// primary preview view, the bolded tree root path — standing in on the
+// left, and legend right-aligned, using the same fit/drop rule
+// LegendText uses elsewhere — label is dropped once legend can't buy
+// back enough room some other way. Only label itself is bold; legend
+// keeps the normal header weight.
 func (c *Canvas) DrawHeaderMode(w int, label string, entries []LegendEntry) {
 	text, included := LegendFit(w, label, entries)
 	c.DrawText(0, 0, w, text, StyleHeader)

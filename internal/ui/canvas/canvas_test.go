@@ -100,21 +100,23 @@ func cellStyle(sim tcell.SimulationScreen, x, y int) tcell.Style {
 
 // TestDrawHeaderDimmedStylesOnlyTheMatchedEntry guards
 // DrawHeaderDimmed's "compose once, overlay a styled sub-span"
-// behavior: dimText's own columns get StyleHeaderDim while every other
-// column on the row keeps the plain StyleHeader, regardless of where
-// in the fitted (right-aligned) legend dimText's substring happens to
-// land.
+// behavior: left's own columns get StyleHeaderMode (bolded, the same
+// treatment DrawHeaderMode gives its own label), dimText's own columns
+// get StyleHeaderDim, and every other column on the row keeps the
+// plain StyleHeader, regardless of where in the fitted
+// (right-aligned) legend dimText's substring happens to land.
 func TestDrawHeaderDimmedStylesOnlyTheMatchedEntry(t *testing.T) {
 	w, h := 40, 5
 	c, sim := newTestCanvas(t, w, h)
+	left := "root"
 	entries := []LegendEntry{
 		{Text: "[tab] switch files", Priority: 1},
 		{Text: "[q] quit", Priority: 1},
 	}
-	c.DrawHeaderDimmed(w, "root", entries, "[tab] switch files")
+	c.DrawHeaderDimmed(w, left, entries, "[tab] switch files")
 	sim.Show()
 
-	text := LegendText(w, "root", entries)
+	text := LegendText(w, left, entries)
 	runes := []rune(text)
 	target := []rune("[tab] switch files")
 	start := strings.Index(string(runes), "[tab] switch files")
@@ -125,12 +127,15 @@ func TestDrawHeaderDimmedStylesOnlyTheMatchedEntry(t *testing.T) {
 	// string here, so it doubles as the rune offset DrawText itself uses.
 	for x := range w {
 		style := cellStyle(sim, x, 0)
+		inLeft := x < len(left)
 		inTarget := x >= start && x < start+len(target)
 		switch {
+		case inLeft && style != StyleHeaderMode:
+			t.Errorf("column %d (inside left) has style %v, want StyleHeaderMode", x, style)
 		case inTarget && style != StyleHeaderDim:
 			t.Errorf("column %d (inside dimText) has style %v, want StyleHeaderDim", x, style)
-		case !inTarget && style != StyleHeader:
-			t.Errorf("column %d (outside dimText) has style %v, want StyleHeader", x, style)
+		case !inLeft && !inTarget && style != StyleHeader:
+			t.Errorf("column %d (outside left/dimText) has style %v, want StyleHeader", x, style)
 		}
 	}
 }
@@ -158,9 +163,8 @@ func TestDrawHeaderDimmedNoopsWhenDimTextIsDropped(t *testing.T) {
 	}
 }
 
-// TestKeepUpToPriority checks the tier-filtering building block directly.
 // TestDrawHeaderAllDimmedStylesEverythingAfterLeft guards
-// DrawHeaderAllDimmed's "left stays plain, everything after it dims"
+// DrawHeaderAllDimmed's "left is bolded, everything after it dims"
 // behavior when left survives LegendFit's own priority dropping and is
 // included in the fitted text.
 func TestDrawHeaderAllDimmedStylesEverythingAfterLeft(t *testing.T) {
@@ -177,8 +181,8 @@ func TestDrawHeaderAllDimmedStylesEverythingAfterLeft(t *testing.T) {
 	for x := range w {
 		style := cellStyle(sim, x, 0)
 		switch {
-		case x < len(left) && style != StyleHeader:
-			t.Errorf("column %d (inside left) has style %v, want StyleHeader", x, style)
+		case x < len(left) && style != StyleHeaderMode:
+			t.Errorf("column %d (inside left) has style %v, want StyleHeaderMode", x, style)
 		case x >= len(left) && style != StyleHeaderDim:
 			t.Errorf("column %d (after left) has style %v, want StyleHeaderDim", x, style)
 		}
