@@ -384,6 +384,51 @@ func TestDrawFileTitleBarShowsSingularLineCount(t *testing.T) {
 	}
 }
 
+// TestDrawFileTitleBarBoldsPath guards the file title bar's own
+// root-relative path rendering bolded, distinct from the plain-weight
+// line-count prefix ahead of it: "N lines" stays normal weight while
+// "three.txt" itself bolds.
+func TestDrawFileTitleBarBoldsPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "three.txt")
+	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim), RootPath: dir}}
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	waitEntryReady(t, files.DisplayedEntry())
+
+	v.Draw(0, 0, w, h, true)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	start := strings.Index(row, "three.txt")
+	if start < 0 {
+		t.Fatalf("test setup: %q not found in title row %q", "three.txt", row)
+	}
+	for x := range start {
+		if _, _, attr := cellStyle(sim, x, 0).Decompose(); attr&tcell.AttrBold != 0 {
+			t.Errorf("column %d (before path) is bold, want not bold", x)
+		}
+	}
+	for x := start; x < start+len("three.txt"); x++ {
+		if _, _, attr := cellStyle(sim, x, 0).Decompose(); attr&tcell.AttrBold == 0 {
+			t.Errorf("column %d (inside path) not bold, want bold", x)
+		}
+	}
+}
+
 // waitEntryReady blocks until e's content is ready to render (its
 // background stream pass has finished and, for TierHighlighted, been
 // synced into Lines/Segs) — the real app never opens the goto-line
