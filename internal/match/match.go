@@ -35,3 +35,27 @@ func PrefixMatches(query, candidate string) bool {
 	}
 	return strings.HasPrefix(strings.ToLower(candidate), strings.ToLower(query))
 }
+
+// Remainder reports the part of candidate left over after query,
+// case-insensitively, when query is a literal prefix of candidate —
+// the ghost-text autocomplete rule shared by jump to file (SPEC.md
+// §4.3, where every match is already a leaf-name prefix match by
+// construction) and quick open (SPEC.md §4.2, whose glob/substring
+// rule means a unique match's query is often *not* a prefix of its
+// path at all, e.g. "match" uniquely matching "internal/match/match.go"
+// starts mid-path — Remainder deliberately reports ok=false rather than
+// inventing a "remainder from wherever it matched" for that case, so a
+// caller only ever autocompletes the literal, unambiguous continuation
+// of what the user actually typed). Rune-based throughout so ghost text
+// is never cut mid-rune for non-ASCII names. An empty query is
+// trivially a prefix of anything, ok=true, remainder=candidate.
+func Remainder(query, candidate string) (remainder string, ok bool) {
+	q, c := []rune(query), []rune(candidate)
+	if len(q) > len(c) {
+		return "", false
+	}
+	if !strings.EqualFold(string(c[:len(q)]), query) {
+		return "", false
+	}
+	return string(c[len(q):]), true
+}

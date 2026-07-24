@@ -93,3 +93,102 @@ func TestQuickOpenDrawListShowsOpenIndicator(t *testing.T) {
 		t.Errorf("closed match row = %q, want a blank placeholder in place of the open indicator", closedRow)
 	}
 }
+
+// cellStyle returns the style of the cell at (x, y) after Show.
+func cellStyle(sim tcell.SimulationScreen, x, y int) tcell.Style {
+	cells, width, _ := sim.GetContents()
+	return cells[y*width+x].Style
+}
+
+// TestQuickOpenDrawShowsGhostTextForPrefixMatch guards SPEC.md §4.2's
+// ghost-text autocomplete: once the query unambiguously matches a
+// single file *and* is a literal prefix of that file's path, the
+// remainder renders dimmed immediately after the typed text, and the
+// sole match's row gets the secondary StyleFindCurrent highlight
+// (distinct from plain cursor-position StyleSelected).
+func TestQuickOpenDrawShowsGhostTextForPrefixMatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "one.txt")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{
+		Shared:  &Shared{Files: openfiles.New(), Canvas: canvas.New(sim), RootPath: dir, Idx: idx},
+		Query:   "one",
+		Matches: []index.Entry{{AbsPath: path}},
+	}
+	v.Draw(w, h)
+	sim.Show()
+
+	row := rowText(sim, 1, w)
+	if !strings.HasPrefix(row, "> one.txt") {
+		t.Fatalf("query row = %q, want the ghost text \".txt\" appended after the typed query", row)
+	}
+	promptLen := len([]rune("> one"))
+	if style := cellStyle(sim, promptLen, 1); style != canvas.StyleQueryGhost {
+		t.Errorf("ghost text style = %v, want StyleQueryGhost", style)
+	}
+	if style := cellStyle(sim, 0, 1); style != canvas.StyleSearchInput {
+		t.Errorf("typed-query style = %v, want StyleSearchInput", style)
+	}
+
+	const listTop = 2
+	if style := cellStyle(sim, 0, listTop); style != canvas.StyleFindCurrent {
+		t.Errorf("sole match row style = %v, want StyleFindCurrent", style)
+	}
+}
+
+// TestQuickOpenDrawSuppressesGhostTextForMidPathMatch guards the
+// resolved ambiguity in SPEC.md §4.2: quick open's substring rule can
+// uniquely match a query that isn't a prefix of the matched path at
+// all — ghost text must not appear in that case (nothing correct to
+// autocomplete to), but the secondary highlight still applies, since
+// "unambiguously matches one file" only depends on match count, not on
+// whether ghost text happens to be renderable for it.
+func TestQuickOpenDrawSuppressesGhostTextForMidPathMatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "one.txt")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{
+		// "txt" is a substring match on one.txt but not a prefix of it.
+		Shared:  &Shared{Files: openfiles.New(), Canvas: canvas.New(sim), RootPath: dir, Idx: idx},
+		Query:   "txt",
+		Matches: []index.Entry{{AbsPath: path}},
+	}
+	v.Draw(w, h)
+	sim.Show()
+
+	row := rowText(sim, 1, w)
+	if strings.TrimRight(row, " ") != "> txt" {
+		t.Errorf("query row = %q, want no ghost text appended for a non-prefix match", row)
+	}
+
+	const listTop = 2
+	if style := cellStyle(sim, 0, listTop); style != canvas.StyleFindCurrent {
+		t.Errorf("sole match row style = %v, want StyleFindCurrent even without ghost text", style)
+	}
+}
