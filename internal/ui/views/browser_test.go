@@ -32,6 +32,62 @@ func TestBrowserLegendsTier1FitMinTerminalWidth(t *testing.T) {
 	}
 }
 
+// TestBrowserCurrentLegendReflectsJumpMode guards CurrentLegend's
+// switch (SPEC.md §5.4), which the help overlay relies on: jumpLegend
+// while jump to file is active, browserLegend otherwise.
+func TestBrowserCurrentLegendReflectsJumpMode(t *testing.T) {
+	v := &Browser{}
+	if got := v.CurrentLegend(); &got[0] != &browserLegend[0] {
+		t.Errorf("CurrentLegend() with JumpActive=false = %v, want browserLegend", got)
+	}
+	v.JumpActive = true
+	if got := v.CurrentLegend(); &got[0] != &jumpLegend[0] {
+		t.Errorf("CurrentLegend() with JumpActive=true = %v, want jumpLegend", got)
+	}
+}
+
+// TestBrowserDrawSuppressesHeaderLegendWhenHelpVisible guards SPEC.md
+// §5.4: while the help overlay is showing, the browser's own header
+// keeps its "BROWSE" mode label but its legend collapses to the single
+// canvas.HideKeysLegend entry, in both jump-active and plain-browsing
+// states.
+func TestBrowserDrawSuppressesHeaderLegendWhenHelpVisible(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "one.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := tree.NewRoot(dir, noopIgnorer{})
+	root.LoadChildren(dir, noopIgnorer{})
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	v := &Browser{
+		Shared:   &Shared{Root: root, RootPath: dir, Files: openfiles.New(), Canvas: canvas.New(sim), HelpVisible: true},
+		Selected: root,
+	}
+
+	v.Draw(w, h)
+	sim.Show()
+	row := rowText(sim, 0, w)
+	if !strings.Contains(row, "BROWSE") || !strings.HasSuffix(strings.TrimRight(row, " "), "[?] hide keys") {
+		t.Errorf("browser header = %q, want BROWSE label plus only [?] hide keys", row)
+	}
+
+	v.JumpActive = true
+	v.JumpScope = root
+	v.Draw(w, h)
+	sim.Show()
+	row = rowText(sim, 0, w)
+	if !strings.Contains(row, "BROWSE") || !strings.HasSuffix(strings.TrimRight(row, " "), "[?] hide keys") {
+		t.Errorf("browser header (jump active) = %q, want BROWSE label plus only [?] hide keys", row)
+	}
+}
+
 // TestBrowserJumpDrawShowsGhostTextForSoleMatch guards SPEC.md §4.3's
 // ghost-text autocomplete: jump to file's matching rule (a
 // case-insensitive prefix match on each row's leaf name) means a sole

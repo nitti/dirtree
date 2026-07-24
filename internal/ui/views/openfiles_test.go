@@ -3,6 +3,7 @@ package views
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -93,5 +94,67 @@ func TestOpenFilesRemoveNonLastEntryStaysOnOverlay(t *testing.T) {
 	}
 	if overlay != OverlayOpenFiles {
 		t.Errorf("Overlay = %v, want it to stay OverlayOpenFiles since the list isn't empty", overlay)
+	}
+}
+
+// TestOpenFilesCurrentLegend guards CurrentLegend's own switch (SPEC.md
+// §5.4): just Escape when the list is empty, mirroring Draw's own
+// simplified empty-state box; the full legend otherwise.
+func TestOpenFilesCurrentLegend(t *testing.T) {
+	v := &OpenFiles{Shared: &Shared{Files: openfiles.New()}}
+	got := v.CurrentLegend()
+	if len(got) != 1 || got[0].Text != "[esc] close" {
+		t.Errorf("CurrentLegend() with an empty list = %v, want just [esc] close", got)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "one.txt")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := openfiles.New()
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	v = &OpenFiles{Shared: &Shared{Files: files}}
+	if got, want := v.CurrentLegend(), openFilesLegend(false); len(got) != len(want) {
+		t.Errorf("CurrentLegend() with one file = %v, want openFilesLegend(false) = %v", got, want)
+	}
+}
+
+// TestOpenFilesDrawSuppressesLegendWhenHelpVisible guards SPEC.md
+// §5.4: while the help overlay is showing, the popup's own header row
+// keeps its page counter but drops its keybinding legend.
+func TestOpenFilesDrawSuppressesLegendWhenHelpVisible(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "one.txt")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	shared := &Shared{Files: files, Canvas: canvas.New(sim), HelpVisible: true}
+	v := &OpenFiles{Shared: shared}
+	preview := &Preview{Shared: shared}
+
+	v.Draw(0, 0, w, h, preview)
+	sim.Show()
+
+	row := rowText(sim, 1, w)
+	if !strings.Contains(row, "1–1/1") {
+		t.Fatalf("popup header = %q, want it to still show the page counter", row)
+	}
+	if strings.Contains(row, "[return") || strings.Contains(row, "[x]") {
+		t.Errorf("popup header = %q, want no keybinding legend while HelpVisible", row)
 	}
 }

@@ -24,6 +24,31 @@ func TestSearchLegendTier1FitsMinTerminalWidth(t *testing.T) {
 	}
 }
 
+// TestSearchDrawSuppressesHeaderLegendWhenHelpVisible guards SPEC.md
+// §5.4: while the help overlay is showing, the header keeps its
+// "SEARCH" mode label but its legend collapses to the single
+// canvas.HideKeysLegend entry.
+func TestSearchDrawSuppressesHeaderLegendWhenHelpVisible(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	v := &Search{Shared: &Shared{Files: openfiles.New(), Canvas: canvas.New(sim), HelpVisible: true}}
+	v.Draw(w, h)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	if !strings.Contains(row, "SEARCH") || !strings.HasSuffix(strings.TrimRight(row, " "), "[?] hide keys") {
+		t.Errorf("header = %q, want SEARCH label plus only [?] hide keys", row)
+	}
+	if got := v.CurrentLegend(); &got[0] != &searchLegend[0] {
+		t.Errorf("CurrentLegend() = %v, want searchLegend", got)
+	}
+}
+
 // TestSearchSummaryCountsHitsAndFilesWithHits guards searchSummary's
 // counting rule (SPEC.md §9.2): only files that actually contributed
 // at least one hit count toward either total, so a result present

@@ -27,6 +27,36 @@ func TestQuickOpenLegendTier1FitsMinTerminalWidth(t *testing.T) {
 	}
 }
 
+// TestQuickOpenDrawSuppressesHeaderLegendWhenHelpVisible guards
+// SPEC.md §5.4: while the help overlay is showing, the header keeps
+// its "QUICK OPEN" mode label but its legend collapses to the single
+// canvas.HideKeysLegend entry.
+func TestQuickOpenDrawSuppressesHeaderLegendWhenHelpVisible(t *testing.T) {
+	dir := t.TempDir()
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	idx := index.Start(dir, noopIgnorer{})
+	waitIndexDone(t, idx)
+
+	v := &QuickOpen{Shared: &Shared{Files: openfiles.New(), Canvas: canvas.New(sim), Idx: idx, HelpVisible: true}}
+	v.Draw(w, h)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	if !strings.Contains(row, "QUICK OPEN") || !strings.HasSuffix(strings.TrimRight(row, " "), "[?] hide keys") {
+		t.Errorf("header = %q, want QUICK OPEN label plus only [?] hide keys", row)
+	}
+	if got := v.CurrentLegend(); &got[0] != &quickOpenLegend[0] {
+		t.Errorf("CurrentLegend() = %v, want quickOpenLegend", got)
+	}
+}
+
 // noopIgnorer matches nothing, so index.Start walks a temp dir's files
 // exactly as created.
 type noopIgnorer struct{}

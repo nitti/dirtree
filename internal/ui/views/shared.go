@@ -29,4 +29,10 @@ type Shared struct {
 	BadgeSkip *spinner.MinDurationSkip
 	Overlay   *Overlay
 	Canvas    *canvas.Canvas
+	// HelpVisible is App's own toggle state (the `?` key, SPEC.md §5.4),
+	// mirrored here so every view's own Draw can suppress its title
+	// bar's keybinding legend without a signature change — the help
+	// overlay itself, which lists every currently-live keybinding in one
+	// place, is drawn by App after every view's own Draw call returns.
+	HelpVisible bool
 }
