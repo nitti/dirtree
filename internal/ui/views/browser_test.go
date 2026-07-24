@@ -138,8 +138,81 @@ func TestBrowserJumpDrawShowsGhostTextForSoleMatch(t *testing.T) {
 		t.Errorf("typed-query style = %v, want StyleSearchInput", style)
 	}
 
+	// Root.Flatten() lists the root node itself before its children
+	// (internal/tree/node.go), so the sole child sits one row below
+	// browserTop, not on it.
 	const browserTop = 2
-	if style := cellStyle(sim, 0, browserTop); style != canvas.StyleFindCurrent {
+	if style := cellStyle(sim, 0, browserTop+1); style != canvas.StyleFindCurrent {
 		t.Errorf("sole match row style = %v, want StyleFindCurrent", style)
+	}
+}
+
+// TestBrowserJumpDrawOnlyHighlightsMatchedRow guards against a regression
+// where every visible row got StyleFindCurrent whenever exactly one
+// JumpMatches entry existed, instead of only the matched row itself — the
+// case above never caught it because its tree had just one row total, so
+// "every row" and "the matched row" were indistinguishable.
+func TestBrowserJumpDrawOnlyHighlightsMatchedRow(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"one.txt", "two.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	root := tree.NewRoot(dir, noopIgnorer{})
+	root.LoadChildren(dir, noopIgnorer{})
+	if len(root.Children) != 2 {
+		t.Fatalf("test setup: got %d children, want 2", len(root.Children))
+	}
+	var match, other *tree.Node
+	for _, c := range root.Children {
+		if c.Name == "one.txt" {
+			match = c
+		} else {
+			other = c
+		}
+	}
+	if match == nil || other == nil {
+		t.Fatalf("test setup: expected one.txt and two.txt among children")
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	v := &Browser{
+		Shared:      &Shared{Root: root, RootPath: dir, Files: openfiles.New(), Canvas: canvas.New(sim)},
+		Selected:    match,
+		JumpActive:  true,
+		JumpScope:   root,
+		JumpQuery:   "one",
+		JumpMatches: []*tree.Node{match},
+	}
+	v.Draw(w, h)
+	sim.Show()
+
+	// Root.Flatten() lists the root node itself before its children
+	// (internal/tree/node.go), so children sit one row below browserTop.
+	const browserTop = 2
+	matchRow := browserTop + 1
+	otherRow := browserTop + 2
+	for i, c := range root.Children {
+		if c == other {
+			otherRow = browserTop + 1 + i
+		}
+		if c == match {
+			matchRow = browserTop + 1 + i
+		}
+	}
+
+	if style := cellStyle(sim, 0, matchRow); style != canvas.StyleFindCurrent {
+		t.Errorf("matched row style = %v, want StyleFindCurrent", style)
+	}
+	if style := cellStyle(sim, 0, otherRow); style == canvas.StyleFindCurrent {
+		t.Errorf("non-matched row style = %v, want anything but StyleFindCurrent", style)
 	}
 }

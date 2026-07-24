@@ -436,7 +436,7 @@ func (v *Browser) drawList(x0, y0, w, h int) {
 		// permanently masked by reverse-video and never actually visible.
 		case nPath == v.FlashPath && time.Since(v.FlashStart) < canvas.FlashDuration:
 			style = canvas.StyleFlash
-		case v.JumpActive && len(v.JumpMatches) == 1:
+		case v.JumpActive && len(v.JumpMatches) == 1 && n == v.JumpMatches[0]:
 			// JumpQuery unambiguously identifies this one row (§4.3) —
 			// distinct from plain cursor-position StyleSelected, which
 			// n == v.Selected would otherwise also match here
