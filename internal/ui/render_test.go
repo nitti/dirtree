@@ -159,6 +159,35 @@ func TestDrawQuitHoldHeaderFadesLeftToRight(t *testing.T) {
 	}
 }
 
+// TestDrawPreviewHeaderShowsQuitVariantOnFirstQEvent guards the
+// responsiveness priority for this gesture (SPEC.md §5.2): the header
+// shows the quitting variant immediately on the very first `q` event,
+// not only once a second one arrives — a deliberate tradeoff of a
+// possible brief flicker on a slow-auto-repeating terminal in exchange
+// for the header never lagging behind an actual key press.
+func TestDrawPreviewHeaderShowsQuitVariantOnFirstQEvent(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 5
+	sim.SetSize(w, h)
+
+	a := &App{
+		rootPath:      "/root",
+		shared:        &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)},
+		quitHoldStart: time.Now(),
+	}
+	a.drawPreviewHeader(w)
+	sim.Show()
+
+	for x := range w {
+		if style := cellStyle(sim, x, 0); style != canvas.StyleHeaderQuit {
+			t.Fatalf("column %d has style %v after a single `q` event, want StyleHeaderQuit shown immediately", x, style)
+		}
+	}
+}
+
 // TestDrawPreviewHeaderShowsHideKeysWhenHelpVisible guards SPEC.md
 // §5.4: while the help overlay is open, the main title bar's own
 // legend collapses to the single canvas.HideKeysLegend entry — this

@@ -203,6 +203,12 @@ func (a *App) menuBarText(w int, entries []canvas.LegendEntry) string {
 // (not just "switch files") is dimmed instead, rather than leaving
 // four keys visibly advertised that this key press won't do anything.
 func (a *App) drawPreviewHeader(w int) {
+	// The quitting variant is shown the instant `q` is first pressed
+	// (SPEC.md §5.2) — responsiveness is the explicit priority for this
+	// gesture, even at the cost of a possible brief flicker on a
+	// slow-auto-repeating terminal (see quitHoldReleaseGap's doc comment
+	// for that tradeoff) rather than a delay before the header ever
+	// appears.
 	if !a.quitHoldStart.IsZero() {
 		a.drawQuitHoldHeader(w)
 		return
