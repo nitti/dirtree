@@ -67,7 +67,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - Each entry's scroll/goto-line state is independent: advancing scroll on one open entry does not affect any other entry's stored scroll position.
 - Removing a non-displayed entry via the open-files-list overlay's `x` action leaves the displayed entry and its state unaffected; only the list shrinks.
 - Removing the displayed entry via `x` promotes the adjacent surviving entry (next in list order, or previous if the removed entry was last) to displayed, restoring that entry's own stored scroll state (not resetting it).
-- Removing the last remaining entry via `x` results in no displayed entry (list is empty) and the overlay auto-closes to the primary preview view's empty state.
+- Removing the last remaining entry via `x` results in no displayed entry (list is empty) and the overlay auto-closes to the primary preview view's empty state, without auto-opening the browser (`TestOpenFilesRemoveLastEntryReturnsToEmptyPreview`, `internal/ui/views/openfiles_test.go`); removing an entry that leaves others open leaves the overlay itself open (`TestOpenFilesRemoveNonLastEntryStaysOnOverlay`, same file).
 - The open-files-list overlay's own selection index is clamped to a valid remaining index after an `x` removal (never left pointing past the end of the shrunken list).
 - Escape from the open-files-list overlay does not change which entry is displayed, but does not undo any `x` removals already performed during that overlay session.
 - Shift-Down on a non-last entry swaps it with its immediate successor and moves overlay selection to follow it to its new position.

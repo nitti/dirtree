@@ -89,10 +89,8 @@ func (v *OpenFiles) HandleKey(ev *tcell.EventKey) {
 			v.Selected = v.Files.Remove(v.Selected)
 			if len(v.Files.Entries) == 0 {
 				// SPEC.md §2.3: emptying the list auto-closes the
-				// overlay to the primary preview view's empty state,
-				// which in turn auto-opens the browser exactly as it
-				// does on startup (§1).
-				*v.Overlay = OverlayBrowser
+				// overlay to the primary preview view's empty state.
+				*v.Overlay = OverlayNone
 			}
 		}
 	}
