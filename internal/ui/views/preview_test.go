@@ -93,6 +93,35 @@ func TestPreviewLegendsTier1FitMinTerminalWidth(t *testing.T) {
 // TestDrawPreviewShowsGotoLegend verifies the goto-line prompt row
 // renders a keybinding legend (SPEC.md §5.2) alongside the "goto
 // line: " input.
+// TestDrawContentEmptyStateHintMatchesLegendOrder guards SPEC.md §2.1's
+// empty-state hint: with no displayed entry, it names quick open,
+// browse, then search — the same left-to-right order previewLegend
+// (internal/ui/render.go) uses — rather than an order that drifted out
+// of sync with the header legend the user actually sees above it.
+func TestDrawContentEmptyStateHintMatchesLegendOrder(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 90, 10
+	sim.SetSize(w, h)
+
+	v := &Preview{Shared: &Shared{Files: openfiles.New(), Canvas: canvas.New(sim)}}
+	v.drawContent(0, 0, w, h)
+	sim.Show()
+
+	row := strings.TrimSpace(rowText(sim, h/2, w))
+	oIdx := strings.Index(row, "o to quick open")
+	bIdx := strings.Index(row, "b to browse")
+	sIdx := strings.Index(row, "s to search")
+	if oIdx < 0 || bIdx < 0 || sIdx < 0 {
+		t.Fatalf("empty-state hint = %q, missing one of the three mode hints", row)
+	}
+	if oIdx >= bIdx || bIdx >= sIdx {
+		t.Errorf("empty-state hint = %q, want quick-open before browse before search", row)
+	}
+}
+
 func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
