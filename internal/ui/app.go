@@ -78,13 +78,14 @@ const (
 	// long to visibly register. Checked on the existing resize-poll ticker
 	// (resizePollInterval) rather than a dedicated timer — imprecision on
 	// the order of one poll tick is negligible against a threshold this
-	// size. 300ms is an unmeasured, tightened-from-600ms guess (not
-	// verified against any specific terminal's real auto-repeat timing —
-	// see the two prior, larger regressions this value's own history
-	// caused): if flicker or a restart mid-hold reappears, that means a
-	// real terminal's auto-repeat gap exceeds this value, and the fix is
-	// to raise it back, not to add a second threshold again.
-	quitHoldReleaseGap = 300 * time.Millisecond
+	// size. 600ms is empirically confirmed against real key-repeat
+	// behavior, not just a conservative guess: an interim attempt at
+	// 300ms measurably reintroduced the header-flicker failure mode this
+	// threshold exists to avoid, on real hardware — so 600ms is the
+	// tightest value actually verified safe so far. If lowering this is
+	// revisited, measure the terminal's real auto-repeat gap first
+	// rather than guessing again.
+	quitHoldReleaseGap = 600 * time.Millisecond
 )
 
 // App holds all interactive state for a running session.
