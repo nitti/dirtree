@@ -52,24 +52,32 @@ const (
 	// can't discard the session's open-files state, short enough that a
 	// deliberate press doesn't feel sluggish.
 	quitHoldDuration = 1 * time.Second
-	// quitHoldReleaseGapInitial is the release-gap threshold used before
-	// a steady `q` key-repeat cadence has been established (i.e. only
-	// one `q` event seen so far in the current hold): terminals deliver
-	// no key-up event, so a held key can only be inferred from a steady
-	// stream of repeat events, and this early on there's no way to tell
-	// "still holding, first OS auto-repeat just hasn't fired yet" apart
-	// from "already released" — so the threshold is set generously above
-	// a typical OS's slow initial-repeat delay to avoid a false release.
+	// quitHoldReleaseGapInitial is the release-gap threshold used until a
+	// steady `q` key-repeat cadence is actually known (see
+	// App.quitHoldReleaseThreshold): terminals deliver no key-up event,
+	// so a held key can only be inferred from a steady stream of repeat
+	// events, and early in a hold there's no way to tell "still holding,
+	// first/second OS auto-repeat just hasn't fired yet" apart from
+	// "already released" — so the threshold is set generously above a
+	// typical OS's slow initial-repeat delay to avoid a false release.
 	quitHoldReleaseGapInitial = 600 * time.Millisecond
-	// quitHoldReleaseGapSteady is the release-gap threshold used once a
-	// steady repeat cadence is already established (at least one repeat
-	// already observed this hold, so the terminal's actual repeat
-	// interval — typically 30-50ms — is known to be far shorter than the
-	// initial-delay case above): a much tighter threshold so releasing
-	// partway through a hold is reflected on screen within a frame or
-	// two, rather than waiting out the same generous window needed to
-	// disambiguate the very first event.
-	quitHoldReleaseGapSteady = 150 * time.Millisecond
+	// quitHoldReleaseMultiplier, quitHoldReleaseGapFloor, and
+	// quitHoldReleaseGapCeiling shape the *adaptive* release-gap
+	// threshold used once a steady repeat cadence is known — see
+	// App.quitHoldReleaseThreshold. The multiplier is applied to the most
+	// recently observed inter-repeat interval rather than a fixed guess,
+	// since real terminals/OSes vary widely in their auto-repeat rate:
+	// a fixed threshold generous enough for a slow-repeating terminal
+	// feels sluggish on a fast one, and a fixed threshold tight enough to
+	// feel instant on a fast one falsely fires mid-hold on a slow one.
+	// The floor guards against an anomalously tiny single interval
+	// (e.g. two events that happened to land unusually close together)
+	// swinging the threshold down to something that would false-trigger
+	// on perfectly ordinary jitter; the ceiling guards symmetrically
+	// against an anomalously large one.
+	quitHoldReleaseMultiplier = 2.0
+	quitHoldReleaseGapFloor   = 40 * time.Millisecond
+	quitHoldReleaseGapCeiling = 250 * time.Millisecond
 )
 
 // App holds all interactive state for a running session.
@@ -135,9 +143,12 @@ type App struct {
 	// used by checkQuitHoldRelease to infer a release from a gap in the
 	// repeat stream, since terminals deliver no key-up event.
 	// quitHoldRepeats counts `q` events seen so far in the current hold,
-	// so checkQuitHoldRelease can tell an established repeat cadence
-	// (tight release-gap threshold) from just the first event (generous
-	// threshold, to survive a slow initial OS repeat delay).
+	// so quitHoldReleaseThreshold can tell an established repeat cadence
+	// (tight, adaptive release-gap threshold) from just the first couple
+	// of events (generous fixed threshold, to survive a slow initial OS
+	// repeat delay). quitHoldLastInterval is the gap between the two most
+	// recent `q` events, the basis for that adaptive threshold once the
+	// cadence is established.
 	// quitConfirmed is set once the hold has been held for the full
 	// quitHoldDuration: the app doesn't quit the instant that happens,
 	// only once a release is subsequently detected (or, resetQuitHold is
@@ -145,10 +156,18 @@ type App struct {
 	// events still in flight from the terminal through the app's own
 	// event loop instead of letting them leak into the shell once the
 	// process actually exits and the terminal returns to normal mode.
-	quitHoldStart   time.Time
-	quitHoldLastKey time.Time
-	quitHoldRepeats int
-	quitConfirmed   bool
+	// quitHoldTimer fires exactly quitHoldReleaseThreshold() after the
+	// most recent `q` event (reset on every subsequent one, by
+	// rescheduleQuitHoldTimer) — Run's event loop selects on its channel
+	// so a release registers the instant the threshold elapses, rather
+	// than being discovered on whatever's left of the next coarse
+	// resize-poll tick.
+	quitHoldStart        time.Time
+	quitHoldLastKey      time.Time
+	quitHoldLastInterval time.Duration
+	quitHoldRepeats      int
+	quitConfirmed        bool
+	quitHoldTimer        *time.Timer
 
 	quit bool
 }
@@ -322,6 +341,17 @@ func (a *App) Run() error {
 
 	a.draw()
 	for !a.quit {
+		// quitHoldTimerC is nil (a permanently-blocking select case)
+		// whenever no hold-to-quit gesture is in progress; once one
+		// starts, quitHoldTimer fires exactly quitHoldReleaseThreshold()
+		// after the most recent `q` event (reset by every subsequent
+		// one), so a release registers the instant that threshold
+		// elapses rather than being discovered on whatever's left of the
+		// next coarse resize-poll tick (SPEC.md §5.2).
+		var quitHoldTimerC <-chan time.Time
+		if a.quitHoldTimer != nil {
+			quitHoldTimerC = a.quitHoldTimer.C
+		}
 		select {
 		case ev := <-events:
 			switch e := ev.(type) {
@@ -348,15 +378,15 @@ func (a *App) Run() error {
 		case out := <-a.Search.Done:
 			a.Search.ApplyOutcome(out)
 			a.draw()
-		case <-ticker.C:
-			// Catches a released `q` even when no further key event
-			// arrives to notice it directly (SPEC.md §5.2's
-			// hold-to-quit gesture): a genuinely held key keeps
-			// re-triggering progressQuitHold well within the current
-			// release-gap threshold of each other, so this only ever
-			// fires (a reset, or — once confirmed — the actual quit)
-			// once the stream of repeats actually stops.
+		case <-quitHoldTimerC:
+			// The hold-to-quit gesture's release-gap threshold (SPEC.md
+			// §5.2) has elapsed since the last `q` event with no
+			// further one arriving to reschedule this timer — a
+			// release, detected the instant it's inferable rather than
+			// on the next resize-poll tick.
 			a.checkQuitHoldRelease()
+			a.draw()
+		case <-ticker.C:
 			// Also catches the background index (re)build finishing
 			// while quick open is open with an unchanged query, so
 			// matches don't go stale until the next keystroke.
@@ -479,18 +509,24 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 // quitHoldDuration. Confirmation alone doesn't quit — see quitConfirmed's
 // doc comment and checkQuitHoldRelease — so this keeps being called (and
 // keeps bumping quitHoldLastKey) for `q` events that arrive after
-// confirmation too.
+// confirmation too. Also (re)schedules quitHoldTimer, so a release is
+// detected the instant the current release-gap threshold elapses rather
+// than on the next resize-poll tick.
 func (a *App) progressQuitHold() {
 	now := time.Now()
 	if a.quitHoldStart.IsZero() {
 		a.quitHoldStart = now
 		a.quitHoldRepeats = 0
+		a.quitHoldLastInterval = 0
+	} else {
+		a.quitHoldLastInterval = now.Sub(a.quitHoldLastKey)
 	}
 	a.quitHoldLastKey = now
 	a.quitHoldRepeats++
 	if !a.quitConfirmed && now.Sub(a.quitHoldStart) >= quitHoldDuration {
 		a.quitConfirmed = true
 	}
+	a.rescheduleQuitHoldTimer()
 }
 
 // resetQuitHold cancels an in-progress, not-yet-confirmed hold-to-quit
@@ -499,31 +535,74 @@ func (a *App) progressQuitHold() {
 // before reaching quitHoldDuration.
 func (a *App) resetQuitHold() {
 	a.quitHoldStart = time.Time{}
+	a.quitHoldLastInterval = 0
 	a.quitHoldRepeats = 0
 	a.quitConfirmed = false
+	if a.quitHoldTimer != nil {
+		a.quitHoldTimer.Stop()
+	}
+}
+
+// rescheduleQuitHoldTimer (re)arms quitHoldTimer to fire exactly
+// quitHoldReleaseThreshold() from now — called after every `q` event
+// that keeps a hold going, so the timer always reflects the threshold
+// as of the most recent event.
+func (a *App) rescheduleQuitHoldTimer() {
+	gap := a.quitHoldReleaseThreshold()
+	if a.quitHoldTimer == nil {
+		a.quitHoldTimer = time.NewTimer(gap)
+		return
+	}
+	if !a.quitHoldTimer.Stop() {
+		select {
+		case <-a.quitHoldTimer.C:
+		default:
+		}
+	}
+	a.quitHoldTimer.Reset(gap)
+}
+
+// quitHoldReleaseThreshold returns the release-gap threshold currently
+// in effect for the hold-to-quit gesture (SPEC.md §5.2): the fixed,
+// generous quitHoldReleaseGapInitial until a steady repeat cadence is
+// actually known — the interval between the *first* and *second* `q`
+// event reflects the OS's initial-repeat delay, not its steady repeat
+// rate, so it isn't a trustworthy baseline yet; only the interval
+// between the second and third event onward is. From the third event
+// on, the threshold adapts to quitHoldReleaseMultiplier times the most
+// recently observed inter-repeat interval (quitHoldLastInterval),
+// clamped to [quitHoldReleaseGapFloor, quitHoldReleaseGapCeiling] — this
+// is what makes a release register within roughly one repeat interval
+// on a fast-auto-repeating terminal, without falsely triggering mid-hold
+// on a slower one, rather than living or dying by a single fixed guess.
+func (a *App) quitHoldReleaseThreshold() time.Duration {
+	if a.quitHoldRepeats < 3 {
+		return quitHoldReleaseGapInitial
+	}
+	gap := time.Duration(float64(a.quitHoldLastInterval) * quitHoldReleaseMultiplier)
+	if gap < quitHoldReleaseGapFloor {
+		return quitHoldReleaseGapFloor
+	}
+	if gap > quitHoldReleaseGapCeiling {
+		return quitHoldReleaseGapCeiling
+	}
+	return gap
 }
 
 // checkQuitHoldRelease infers whether an in-progress hold-to-quit
 // gesture (SPEC.md §5.2) has been released: terminals deliver no
 // key-up event, so a held key is inferred from a steady stream of
-// repeat events, and too long a gap since the last one means the key
-// is no longer down. The gap threshold tightens once a steady repeat
-// cadence is established (quitHoldRepeats >= 2), so releasing partway
-// through a hold is reflected on screen quickly rather than after the
-// same generous window needed to disambiguate the very first event.
-// Once the gesture is confirmed (held the full quitHoldDuration), a
-// detected release is what actually quits — see quitConfirmed's doc
-// comment for why this is deferred rather than quitting the instant
-// quitHoldDuration elapses.
+// repeat events, and too long a gap since the last one (per
+// quitHoldReleaseThreshold) means the key is no longer down. Once the
+// gesture is confirmed (held the full quitHoldDuration), a detected
+// release is what actually quits — see quitConfirmed's doc comment for
+// why this is deferred rather than quitting the instant quitHoldDuration
+// elapses.
 func (a *App) checkQuitHoldRelease() {
 	if a.quitHoldStart.IsZero() {
 		return
 	}
-	gap := quitHoldReleaseGapInitial
-	if a.quitHoldRepeats >= 2 {
-		gap = quitHoldReleaseGapSteady
-	}
-	if time.Since(a.quitHoldLastKey) > gap {
+	if time.Since(a.quitHoldLastKey) >= a.quitHoldReleaseThreshold() {
 		if a.quitConfirmed {
 			a.quit = true
 			return
