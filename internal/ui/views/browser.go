@@ -6,6 +6,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/nitti/dirtree/internal/match"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/tree"
@@ -191,6 +192,26 @@ func (v *Browser) recomputeJumpMatches() {
 	v.JumpMatches = tree.JumpMatches(v.JumpScope, v.JumpQuery)
 }
 
+// jumpGhostSuffix returns jump to file's ghost-text autocomplete
+// suffix (SPEC.md §4.3): the remainder of the sole match's leaf name
+// after JumpQuery, once the query unambiguously identifies exactly one
+// visible row. Jump to file's matching rule (match.PrefixMatches, via
+// tree.JumpMatches) already guarantees JumpQuery is a literal
+// case-insensitive prefix of the match's Name by construction, so
+// match.Remainder always succeeds here — reused anyway so both this
+// and quick open's own ghost text (§4.2) share one implementation of
+// "the literal continuation of what was typed."
+func (v *Browser) jumpGhostSuffix() string {
+	if len(v.JumpMatches) != 1 {
+		return ""
+	}
+	suffix, ok := match.Remainder(v.JumpQuery, v.JumpMatches[0].Name)
+	if !ok {
+		return ""
+	}
+	return suffix
+}
+
 // handleJumpKey implements jump-to-file typing mode's input handling
 // (SPEC.md §4.3): every printable rune is query input, Tab/Shift-Tab (or
 // Down/Up) cycle among current matches, and Return/Escape are the only
@@ -326,7 +347,14 @@ func (v *Browser) Draw(w, h int) {
 		// the live query so committing a segment doesn't read as losing
 		// what was typed.
 		v.Canvas.DrawHeaderMode(w, "BROWSE", jumpLegend)
-		v.Canvas.DrawText(0, 1, w, "> "+v.JumpDisclosed+v.JumpQuery, canvas.StyleSearchInput)
+		prompt := "> " + v.JumpDisclosed + v.JumpQuery
+		v.Canvas.DrawText(0, 1, w, prompt, canvas.StyleSearchInput)
+		if ghost := v.jumpGhostSuffix(); ghost != "" {
+			x := len([]rune(prompt))
+			if x < w {
+				v.Canvas.DrawText(x, 1, w-x, ghost, canvas.StyleQueryGhost)
+			}
+		}
 		browserTop = 2
 	} else {
 		v.Canvas.DrawHeaderMode(w, "BROWSE", browserLegend)
@@ -388,6 +416,13 @@ func (v *Browser) drawList(x0, y0, w, h int) {
 		// permanently masked by reverse-video and never actually visible.
 		case nPath == v.FlashPath && time.Since(v.FlashStart) < canvas.FlashDuration:
 			style = canvas.StyleFlash
+		case v.JumpActive && len(v.JumpMatches) == 1:
+			// JumpQuery unambiguously identifies this one row (§4.3) —
+			// distinct from plain cursor-position StyleSelected, which
+			// n == v.Selected would otherwise also match here
+			// (handleJumpKey always assigns the sole match to
+			// Selected).
+			style = canvas.StyleFindCurrent
 		case n == v.Selected:
 			style = canvas.StyleSelected
 		case isMatch[n]:
