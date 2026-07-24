@@ -203,6 +203,17 @@ func shellAbbreviate(path string) string {
 // rather than leaving four keys visibly advertised that this key press
 // won't do anything.
 func (a *App) drawPreviewHeader(w int) {
+	// The quitting variant shows for exactly as long as quitHoldStart is
+	// non-zero (SPEC.md §5.2) — the same "is `q` still down" state
+	// checkQuitHoldRelease itself maintains via quitHoldReleaseGap, not a
+	// separate, shorter threshold computed independently here. An earlier
+	// attempt at a shorter, visual-only recency check made the header
+	// flicker throughout an entire genuine hold whenever the terminal's
+	// real auto-repeat interval happened to exceed that guessed
+	// threshold; tying the header to the exact same state the functional
+	// release check maintains means the header is visible for precisely
+	// as long as the app itself believes the key is down, no more, no
+	// less, regardless of any particular terminal's repeat timing.
 	if !a.quitHoldStart.IsZero() {
 		a.drawQuitHoldHeader(w)
 		return

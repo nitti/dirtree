@@ -53,13 +53,38 @@ const (
 	// deliberate press doesn't feel sluggish.
 	quitHoldDuration = 1 * time.Second
 	// quitHoldReleaseGap is the longest gap allowed between consecutive
-	// `q` key-repeat events before the hold is considered released.
-	// Terminals deliver no key-up event, so a held key can only be
-	// inferred from a steady stream of repeat events; this threshold
-	// tells a genuine release (or a single tap) apart from that stream,
-	// set generously above the resize-poll tick (resizePollInterval)
-	// that drives the release check to absorb a slow initial OS
-	// key-repeat delay without falsely detecting a release.
+	// `q` key-repeat events before the hold-to-quit gesture is considered
+	// released: this is the single source of truth for "is `q` still
+	// down" throughout the gesture, used both to decide whether to reset
+	// quitHoldStart/quitConfirmed (or, once confirmed, whether to
+	// actually quit — see checkQuitHoldRelease) and, in render.go, purely
+	// via quitHoldStart's own zero-vs-non-zero state, whether the
+	// header/title bar shows the quitting variant at all — the two are
+	// deliberately tied to the exact same check rather than split into a
+	// separate, shorter "just for the visual" threshold, after an earlier
+	// attempt at that caused the header to flicker throughout an entire
+	// genuine hold on any terminal whose real auto-repeat interval turned
+	// out to be slower than the guessed visual-only threshold. Terminals
+	// deliver no key-up event, so a held key can only be inferred from a
+	// steady stream of repeat events, and a real terminal's own auto-repeat
+	// timing — both the initial delay before a held key starts repeating
+	// at all, and the steady interval between repeats after that — varies
+	// enough across terminals/OSes that this threshold is kept generous
+	// rather than tuned for snappiness: too short, and an ordinary hold's
+	// own repeat cadence gets mistaken for a release, which either
+	// flickers the header (if that mistake is visual-only) or silently
+	// resets the gesture's elapsed-time progress (if it also touches
+	// quitHoldStart) — both are worse than a release taking up to this
+	// long to visibly register. Checked on the existing resize-poll ticker
+	// (resizePollInterval) rather than a dedicated timer — imprecision on
+	// the order of one poll tick is negligible against a threshold this
+	// size. 600ms is empirically confirmed against real key-repeat
+	// behavior, not just a conservative guess: an interim attempt at
+	// 300ms measurably reintroduced the header-flicker failure mode this
+	// threshold exists to avoid, on real hardware — so 600ms is the
+	// tightest value actually verified safe so far. If lowering this is
+	// revisited, measure the terminal's real auto-repeat gap first
+	// rather than guessing again.
 	quitHoldReleaseGap = 600 * time.Millisecond
 )
 
@@ -120,13 +145,22 @@ type App struct {
 
 	// quitHoldStart is when the currently-in-progress hold-to-quit
 	// gesture (SPEC.md §5.2) began holding `q`, zero when no hold is in
-	// progress — render.go reads it directly to decide whether to draw
-	// the header/title bar's attention-grabbing quitting variant.
-	// quitHoldLastKey is the most recent `q` key-repeat event's time,
-	// used by checkQuitHoldRelease to infer a release from a gap in the
-	// repeat stream, since terminals deliver no key-up event.
+	// progress — render.go reads this directly (zero vs. non-zero) to
+	// decide whether to draw the header/title bar's attention-grabbing
+	// quitting variant, the same state checkQuitHoldRelease itself resets
+	// via quitHoldReleaseGap, so the header is visible for exactly as
+	// long as the app believes `q` is down.
+	// quitHoldLastKey is the most recent `q` key-repeat event's time.
+	// quitConfirmed is set once the hold has been held for the full
+	// quitHoldDuration: the app doesn't quit the instant that happens,
+	// only once a release is subsequently detected (or, resetQuitHold is
+	// never called while this is set) — this drains any `q` key-repeat
+	// events still in flight from the terminal through the app's own
+	// event loop instead of letting them leak into the shell once the
+	// process actually exits and the terminal returns to normal mode.
 	quitHoldStart   time.Time
 	quitHoldLastKey time.Time
+	quitConfirmed   bool
 
 	quit bool
 }
@@ -332,8 +366,11 @@ func (a *App) Run() error {
 			// hold-to-quit gesture): a genuinely held key keeps
 			// re-triggering progressQuitHold well within
 			// quitHoldReleaseGap of each other, so this only ever
-			// fires the reset once the stream of repeats actually
-			// stops.
+			// fires the reset (or, once confirmed, the actual quit)
+			// once the stream of repeats actually stops. This is also
+			// what redraws the header/title bar (which tracks
+			// quitHoldStart directly) promptly after a release, even
+			// with no new key event to trigger a draw otherwise.
 			a.checkQuitHoldRelease()
 			// Also catches the background index (re)build finishing
 			// while quick open is open with an unchanged query, so
@@ -416,6 +453,21 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 			a.Search.LastOpenedEntry = nil
 		}
 	case views.OverlayNone:
+		if a.quitConfirmed {
+			// The hold has already been held for the full duration —
+			// the app is committed to quitting. Keep consuming `q`
+			// key-repeat events (still arriving from the terminal for as
+			// long as the physical key stays down) so checkQuitHoldRelease
+			// can detect the eventual release and actually quit then,
+			// rather than exiting immediately and letting those in-flight
+			// repeats leak into the shell once the terminal returns to
+			// normal mode. Every other key is ignored outright: nothing
+			// should still be actionable mid-quit.
+			if ev.Key() == tcell.KeyRune && ev.Rune() == 'q' {
+				a.progressQuitHold()
+			}
+			return
+		}
 		action := a.Preview.HandleKey(ev)
 		if action == views.ActionQuitKey {
 			a.progressQuitHold()
@@ -438,36 +490,52 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 
 // progressQuitHold records a `q` key-repeat event during the
 // hold-to-quit gesture (SPEC.md §5.2), starting the hold on its first
-// event and quitting once it's been held continuously for
-// quitHoldDuration.
+// event and marking it confirmed once it's been held continuously for
+// quitHoldDuration. Confirmation alone doesn't quit — see quitConfirmed's
+// doc comment and checkQuitHoldRelease — so this keeps being called (and
+// keeps bumping quitHoldLastKey) for `q` events that arrive after
+// confirmation too.
 func (a *App) progressQuitHold() {
 	now := time.Now()
 	if a.quitHoldStart.IsZero() {
 		a.quitHoldStart = now
 	}
 	a.quitHoldLastKey = now
-	if now.Sub(a.quitHoldStart) >= quitHoldDuration {
-		a.quit = true
+	if !a.quitConfirmed && now.Sub(a.quitHoldStart) >= quitHoldDuration {
+		a.quitConfirmed = true
 	}
 }
 
-// resetQuitHold cancels an in-progress hold-to-quit gesture (SPEC.md
-// §5.2) — e.g. because a key other than `q` was pressed, or because
-// checkQuitHoldRelease inferred `q` was released.
+// resetQuitHold cancels an in-progress, not-yet-confirmed hold-to-quit
+// gesture (SPEC.md §5.2) — e.g. because a key other than `q` was
+// pressed, or because checkQuitHoldRelease inferred `q` was released
+// before reaching quitHoldDuration.
 func (a *App) resetQuitHold() {
 	a.quitHoldStart = time.Time{}
+	a.quitConfirmed = false
 }
 
 // checkQuitHoldRelease infers whether an in-progress hold-to-quit
 // gesture (SPEC.md §5.2) has been released: terminals deliver no
 // key-up event, so a held key is inferred from a steady stream of
-// repeat events, and too long a gap since the last one means the key
-// is no longer down.
+// repeat events, and too long a gap since the last one (quitHoldReleaseGap
+// — deliberately generous, see its own doc comment) means the key is no
+// longer down. Once the gesture is confirmed (held the full
+// quitHoldDuration), a detected release is what actually quits — see
+// quitConfirmed's doc comment for why this is deferred rather than
+// quitting the instant quitHoldDuration elapses. The header/title bar's
+// own show/hide (render.go) reads quitHoldStart directly rather than
+// duplicating this check, so it's always in sync with whatever this
+// function decides.
 func (a *App) checkQuitHoldRelease() {
 	if a.quitHoldStart.IsZero() {
 		return
 	}
-	if time.Since(a.quitHoldLastKey) > quitHoldReleaseGap {
+	if time.Since(a.quitHoldLastKey) >= quitHoldReleaseGap {
+		if a.quitConfirmed {
+			a.quit = true
+			return
+		}
 		a.resetQuitHold()
 	}
 }

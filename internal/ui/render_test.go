@@ -151,6 +151,7 @@ func TestDrawQuitHoldHeaderFadesLeftToRight(t *testing.T) {
 	}
 
 	a.quitHoldStart = time.Now()
+	a.quitHoldLastKey = time.Now()
 	a.shared.Canvas.Clear()
 	a.drawPreviewHeader(w)
 	sim.Show()
@@ -164,6 +165,7 @@ func TestDrawQuitHoldHeaderFadesLeftToRight(t *testing.T) {
 	}
 
 	a.quitHoldStart = time.Now().Add(-quitHoldDuration / 2)
+	a.quitHoldLastKey = time.Now()
 	a.shared.Canvas.Clear()
 	a.drawPreviewHeader(w)
 	sim.Show()
@@ -176,11 +178,81 @@ func TestDrawQuitHoldHeaderFadesLeftToRight(t *testing.T) {
 	}
 
 	a.quitHoldStart = time.Now().Add(-quitHoldDuration)
+	a.quitHoldLastKey = time.Now()
 	a.shared.Canvas.Clear()
 	a.drawPreviewHeader(w)
 	sim.Show()
 	if !blankRow() {
 		t.Errorf("hold complete: row %q, want fully faded (blank)", rowText(sim, 0, w))
+	}
+}
+
+// TestDrawPreviewHeaderShowsQuitVariantOnFirstQEvent guards the
+// responsiveness priority for this gesture (SPEC.md §5.2): the header
+// shows the quitting variant immediately on the very first `q` event,
+// not only once a second one arrives — a deliberate tradeoff of a
+// possible brief flicker on a slow-auto-repeating terminal in exchange
+// for the header never lagging behind an actual key press.
+func TestDrawPreviewHeaderShowsQuitVariantOnFirstQEvent(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 5
+	sim.SetSize(w, h)
+
+	a := &App{
+		rootPath:        "/root",
+		shared:          &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)},
+		quitHoldStart:   time.Now(),
+		quitHoldLastKey: time.Now(),
+	}
+	a.drawPreviewHeader(w)
+	sim.Show()
+
+	for x := range w {
+		if style := cellStyle(sim, x, 0); style != canvas.StyleHeaderQuit {
+			t.Fatalf("column %d has style %v after a single `q` event, want StyleHeaderQuit shown immediately", x, style)
+		}
+	}
+}
+
+// TestDrawPreviewHeaderStaysVisibleAcrossOrdinaryRepeatGap guards the
+// fix for a real flicker bug (SPEC.md §5.2): the header's own show/hide
+// tracks quitHoldStart directly, with no separate, shorter recency
+// threshold of its own — an earlier design added one to make the header
+// feel snappier, but it flickered throughout an entire genuine hold on
+// any terminal whose real auto-repeat interval exceeded that guessed
+// threshold, since drawPreviewHeader would hide the header between
+// repeat events on a purely cosmetic timer unrelated to whether the key
+// was actually still down. Simulating a substantial but ordinary gap
+// since the last `q` event (well under quitHoldReleaseGap, so the
+// gesture itself is still considered held) must leave the header shown.
+func TestDrawPreviewHeaderStaysVisibleAcrossOrdinaryRepeatGap(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 5
+	sim.SetSize(w, h)
+
+	a := &App{
+		rootPath: "/root",
+		shared:   &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)},
+		// quitHoldStart is "now" (no fade progress to worry about) —
+		// this test is purely about whether the header shows at all
+		// despite a substantial gap since the last `q` event, not about
+		// fade correctness (covered separately).
+		quitHoldStart:   time.Now(),
+		quitHoldLastKey: time.Now().Add(-(quitHoldReleaseGap / 2)),
+	}
+	a.drawPreviewHeader(w)
+	sim.Show()
+
+	for x := range w {
+		if style := cellStyle(sim, x, 0); style != canvas.StyleHeaderQuit {
+			t.Fatalf("column %d has style %v, want StyleHeaderQuit to stay visible across an ordinary gap between repeat events", x, style)
+		}
 	}
 }
 
