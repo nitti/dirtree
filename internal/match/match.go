@@ -59,3 +59,49 @@ func Remainder(query, candidate string) (remainder string, ok bool) {
 	}
 	return string(c[len(q):]), true
 }
+
+// CommonPrefixCompletion extends query to the longest literal,
+// case-insensitive prefix shared by every one of candidates — quick
+// open's Tab-to-complete rule (SPEC.md §4.2), for narrowing a still-
+// ambiguous query (more than one current match) the same way shell tab
+// completion fills in an unambiguous common continuation without
+// requiring every character to be typed by hand. ok is false, and
+// completed is meaningless, whenever there's nothing useful to do:
+// candidates is empty, query isn't itself a case-insensitive prefix of
+// every candidate (quick open's substring/glob matching, §4.1, can
+// reach a match some other way than at its start, in which case
+// there's no well-defined "common continuation" to extend the typed
+// query with), or the shared prefix is no longer than query already is
+// (nothing new to add). Rune-based throughout so completion is never
+// cut mid-rune for non-ASCII names.
+func CommonPrefixCompletion(query string, candidates []string) (completed string, ok bool) {
+	if len(candidates) == 0 {
+		return "", false
+	}
+	common := []rune(candidates[0])
+	for _, c := range candidates[1:] {
+		common = commonPrefixRunes(common, []rune(c))
+		if len(common) == 0 {
+			break
+		}
+	}
+	q := []rune(query)
+	if len(common) <= len(q) || !strings.EqualFold(string(common[:len(q)]), query) {
+		return "", false
+	}
+	return string(common), true
+}
+
+// commonPrefixRunes returns the longest case-insensitive common prefix
+// of a and b, in a's original casing.
+func commonPrefixRunes(a, b []rune) []rune {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	i := 0
+	for i < n && strings.EqualFold(string(a[i]), string(b[i])) {
+		i++
+	}
+	return a[:i]
+}
