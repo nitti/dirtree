@@ -130,6 +130,66 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 	}
 }
 
+func TestDrawFileTitleBarShowsLineCount(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "three.txt")
+	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim), RootPath: dir}}
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	waitEntryReady(t, files.DisplayedEntry())
+
+	v.Draw(0, 0, w, h, true)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	if !strings.HasPrefix(row, "3 lines  three.txt") {
+		t.Fatalf("title row = %q, want it to start with the file's line count and name", row)
+	}
+}
+
+func TestDrawFileTitleBarShowsSingularLineCount(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "one.txt")
+	if err := os.WriteFile(path, []byte("only line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim), RootPath: dir}}
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	waitEntryReady(t, files.DisplayedEntry())
+
+	v.Draw(0, 0, w, h, true)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	if !strings.HasPrefix(row, "1 line  one.txt") {
+		t.Fatalf("title row = %q, want singular \"1 line\"", row)
+	}
+}
+
 // waitEntryReady blocks until e's content is ready to render (its
 // background stream pass has finished and, for TierHighlighted, been
 // synced into Lines/Segs) — the real app never opens the goto-line

@@ -112,6 +112,13 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	}
 	rel := tree.RelativeDisplayPath(v.RootPath, e.Path)
 
+	lineCount := bestLineCount(e)
+	lineTag := fmt.Sprintf("%d line", lineCount)
+	if lineCount != 1 {
+		lineTag += "s"
+	}
+	rel = lineTag + "  " + rel
+
 	// copyModeTag prefixes rel whenever e is in copy mode, so that state
 	// is always legible in this row regardless of which case below fires
 	// (find status/prompt text otherwise has no room to also mention
