@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -99,6 +100,33 @@ func TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty(t *testing.T) {
 		if style := cellStyle(sim, x, 0); style != canvas.StyleHeader {
 			t.Errorf("non-empty list: column %d has style %v, want plain StyleHeader (nothing dimmed)", x, style)
 		}
+	}
+}
+
+// TestDrawPreviewHeaderShowsHideKeysWhenHelpVisible guards SPEC.md
+// §5.4: while the help overlay is open, the main title bar's own
+// legend collapses to the single canvas.HideKeysLegend entry — this
+// takes precedence over (and bypasses) the dim-when-empty behavior
+// TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty covers, since there's
+// no "switch files" entry left to dim once the legend is replaced.
+func TestDrawPreviewHeaderShowsHideKeysWhenHelpVisible(t *testing.T) {
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 5
+	sim.SetSize(w, h)
+
+	a := &App{rootPath: "/root", shared: &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim), HelpVisible: true}}
+	a.drawPreviewHeader(w)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	if !strings.HasSuffix(strings.TrimRight(row, " "), "[?] hide keys") {
+		t.Errorf("header = %q, want it to end with [?] hide keys", row)
+	}
+	if strings.Contains(row, "switch files") || strings.Contains(row, "browse") {
+		t.Errorf("header = %q, want no other legend entries while HelpVisible", row)
 	}
 }
 

@@ -101,6 +101,48 @@ func (v *Preview) Draw(x0, y0, w, h int, interactive bool) {
 	v.drawContent(x0, y0+titleRows, w, h-titleRows)
 }
 
+// CurrentFileLegend returns the keybinding legend the file title bar
+// is currently showing, mirroring drawFileTitleBar's own state
+// precedence exactly (find prompt, an async plain-text-tier scan, an
+// active find with or without matches, copy mode, else idle) — for the
+// help overlay (§5.4) to reuse. Returns ok=false when there is no
+// displayed entry, or when the title bar is showing a transient state
+// with no keybinding legend of its own (blocked-on-indexing), since
+// there is nothing meaningful to list in either case.
+func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
+	e := v.Files.DisplayedEntry()
+	if e == nil {
+		return nil, false
+	}
+	gotoBlocked := v.GotoBlockedPath == e.Path && gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done())
+	switch {
+	case v.FindPromptOpen:
+		return findPromptLegend, true
+	case gotoBlocked:
+		return nil, false
+	case e.FindScan != nil:
+		return findLegendNoMatches, true
+	case e.FindQuery != "" && len(e.FindMatches) > 0:
+		return findLegend, true
+	case e.FindQuery != "":
+		return findLegendNoMatches, true
+	case e.CopyMode:
+		return fileLegendCopyModeOn, true
+	default:
+		return fileLegend, true
+	}
+}
+
+// GotoPromptLegend returns the goto-line prompt's own legend while
+// it's open, for the help overlay (§5.4) to reuse — it renders on its
+// own bottom row (drawContent), independent of the file title bar.
+func (v *Preview) GotoPromptLegend() (entries []canvas.LegendEntry, ok bool) {
+	if !v.GotoPromptOpen {
+		return nil, false
+	}
+	return gotoLegend, true
+}
+
 // drawFileTitleBar renders the currently-displayed file's own title bar
 // (its root-relative path) in the row above the preview content, when a
 // file is displayed. Returns the number of rows it occupied (0 or 1) so
@@ -130,24 +172,35 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 
 	gotoBlocked := interactive && v.GotoBlockedPath == e.Path && gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done())
 
+	// legend suppresses entries entirely while the help overlay (§5.4)
+	// is showing, so this row's own legend doesn't compete with the
+	// full keybinding reference drawn separately — the left-hand
+	// content (path, find/goto status text) is untouched either way.
+	legend := func(entries []canvas.LegendEntry) []canvas.LegendEntry {
+		if v.HelpVisible {
+			return nil
+		}
+		return entries
+	}
+
 	var text string
 	switch {
 	case interactive && v.FindPromptOpen:
-		text = canvas.LegendText(w, "/"+v.FindInput, findPromptLegend)
+		text = canvas.LegendText(w, "/"+v.FindInput, legend(findPromptLegend))
 	case !interactive:
 		text = left
 	case gotoBlocked:
 		text = canvas.LegendText(w, left, withStatus("still indexing, try again shortly", nil))
 	case e.FindScan != nil:
-		text = canvas.LegendText(w, left, withStatus(findStatusText(e), findLegendNoMatches))
+		text = canvas.LegendText(w, left, withStatus(findStatusText(e), legend(findLegendNoMatches)))
 	case e.FindQuery != "" && len(e.FindMatches) > 0:
-		text = canvas.LegendText(w, left, withStatus(findStatusText(e), findLegend))
+		text = canvas.LegendText(w, left, withStatus(findStatusText(e), legend(findLegend)))
 	case e.FindQuery != "":
-		text = canvas.LegendText(w, left, withStatus(findStatusText(e), findLegendNoMatches))
+		text = canvas.LegendText(w, left, withStatus(findStatusText(e), legend(findLegendNoMatches)))
 	case e.CopyMode:
-		text = canvas.LegendText(w, left, fileLegendCopyModeOn)
+		text = canvas.LegendText(w, left, legend(fileLegendCopyModeOn))
 	default:
-		text = canvas.LegendText(w, rel, v.fileLegendForIdle(e))
+		text = canvas.LegendText(w, rel, legend(v.fileLegendForIdle(e)))
 	}
 
 	style := canvas.StyleFileTitle
@@ -280,7 +333,11 @@ func (v *Preview) drawContent(x0, y0, w, h int) {
 	}
 
 	if v.GotoPromptOpen {
-		v.Canvas.DrawText(x0, y0+h-1, w, canvas.LegendText(w, "goto line: "+v.GotoInput, gotoLegend), canvas.StyleNormal)
+		gotoRowLegend := gotoLegend
+		if v.HelpVisible {
+			gotoRowLegend = nil
+		}
+		v.Canvas.DrawText(x0, y0+h-1, w, canvas.LegendText(w, "goto line: "+v.GotoInput, gotoRowLegend), canvas.StyleNormal)
 	}
 }
 

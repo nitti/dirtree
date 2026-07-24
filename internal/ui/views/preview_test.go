@@ -10,6 +10,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/nitti/dirtree/internal/find"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/ui/canvas"
@@ -127,6 +128,157 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 		if !strings.Contains(row, want) {
 			t.Errorf("goto-line row = %q, missing legend entry %q", row, want)
 		}
+	}
+}
+
+// TestDrawContentSuppressesGotoLegendWhenHelpVisible guards SPEC.md
+// §5.4: while the help overlay is showing, the goto-line prompt row
+// keeps its own left-hand content (the typed digits) but drops its
+// trailing keybinding legend, since the help overlay is the one place
+// that legend now lives.
+func TestDrawContentSuppressesGotoLegendWhenHelpVisible(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim), HelpVisible: true}}
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	waitEntryReady(t, files.DisplayedEntry())
+	v.GotoPromptOpen = true
+	v.GotoInput = "2"
+
+	v.drawContent(0, 0, w, h)
+	sim.Show()
+
+	row := rowText(sim, h-1, w)
+	if !strings.HasPrefix(row, "goto line: 2") {
+		t.Fatalf("goto-line row = %q, want it to still start with the prompt text", row)
+	}
+	if strings.Contains(row, "[return]") || strings.Contains(row, "[esc]") {
+		t.Errorf("goto-line row = %q, want no keybinding legend while HelpVisible", row)
+	}
+}
+
+// TestPreviewCurrentFileLegendPrecedence guards CurrentFileLegend's
+// state precedence (SPEC.md §5.4), which must exactly mirror
+// drawFileTitleBar's own switch so the help overlay never shows a
+// legend the title bar itself isn't actually offering.
+func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	sim.SetSize(60, 10)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	waitEntryReady(t, files.DisplayedEntry())
+	e := files.DisplayedEntry()
+
+	reset := func() {
+		v.FindPromptOpen = false
+		e.CopyMode = false
+		e.FindQuery = ""
+		e.FindMatches = nil
+		e.FindScan = nil
+	}
+
+	t.Run("no displayed entry", func(t *testing.T) {
+		empty := &Preview{Shared: &Shared{Files: openfiles.New(), Canvas: canvas.New(sim)}}
+		if _, ok := empty.CurrentFileLegend(); ok {
+			t.Error("expected ok=false with no displayed entry")
+		}
+	})
+
+	t.Run("idle", func(t *testing.T) {
+		reset()
+		got, ok := v.CurrentFileLegend()
+		if !ok || &got[0] != &fileLegend[0] {
+			t.Errorf("CurrentFileLegend() = (%v, %v), want fileLegend", got, ok)
+		}
+	})
+
+	t.Run("find prompt open", func(t *testing.T) {
+		reset()
+		v.FindPromptOpen = true
+		got, ok := v.CurrentFileLegend()
+		if !ok || &got[0] != &findPromptLegend[0] {
+			t.Errorf("CurrentFileLegend() = (%v, %v), want findPromptLegend", got, ok)
+		}
+	})
+
+	t.Run("find scan running", func(t *testing.T) {
+		reset()
+		e.FindScan = &find.Scan{}
+		got, ok := v.CurrentFileLegend()
+		if !ok || &got[0] != &findLegendNoMatches[0] {
+			t.Errorf("CurrentFileLegend() = (%v, %v), want findLegendNoMatches", got, ok)
+		}
+	})
+
+	t.Run("find query with matches", func(t *testing.T) {
+		reset()
+		e.FindQuery = "one"
+		e.FindMatches = []find.Match{{Line: 0, Col: 0, Len: 3}}
+		got, ok := v.CurrentFileLegend()
+		if !ok || &got[0] != &findLegend[0] {
+			t.Errorf("CurrentFileLegend() = (%v, %v), want findLegend", got, ok)
+		}
+	})
+
+	t.Run("find query no matches", func(t *testing.T) {
+		reset()
+		e.FindQuery = "zzz"
+		got, ok := v.CurrentFileLegend()
+		if !ok || &got[0] != &findLegendNoMatches[0] {
+			t.Errorf("CurrentFileLegend() = (%v, %v), want findLegendNoMatches", got, ok)
+		}
+	})
+
+	t.Run("copy mode", func(t *testing.T) {
+		reset()
+		e.CopyMode = true
+		got, ok := v.CurrentFileLegend()
+		if !ok || &got[0] != &fileLegendCopyModeOn[0] {
+			t.Errorf("CurrentFileLegend() = (%v, %v), want fileLegendCopyModeOn", got, ok)
+		}
+	})
+
+	reset()
+}
+
+// TestPreviewGotoPromptLegend guards GotoPromptLegend's simple on/off
+// gating: ok=false while the prompt is closed, gotoLegend while open.
+func TestPreviewGotoPromptLegend(t *testing.T) {
+	v := &Preview{Shared: &Shared{Files: openfiles.New()}}
+	if _, ok := v.GotoPromptLegend(); ok {
+		t.Error("expected ok=false while GotoPromptOpen is false")
+	}
+	v.GotoPromptOpen = true
+	got, ok := v.GotoPromptLegend()
+	if !ok || &got[0] != &gotoLegend[0] {
+		t.Errorf("GotoPromptLegend() = (%v, %v), want gotoLegend", got, ok)
 	}
 }
 

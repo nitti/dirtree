@@ -325,14 +325,34 @@ func (v *Browser) Draw(w, h int) {
 		// disclosed via slash-to-expand (JumpDisclosed) render ahead of
 		// the live query so committing a segment doesn't read as losing
 		// what was typed.
-		v.Canvas.DrawHeaderMode(w, "BROWSE", jumpLegend)
+		v.Canvas.DrawHeaderMode(w, "BROWSE", v.headerLegend())
 		v.Canvas.DrawText(0, 1, w, "> "+v.JumpDisclosed+v.JumpQuery, canvas.StyleSearchInput)
 		browserTop = 2
 	} else {
-		v.Canvas.DrawHeaderMode(w, "BROWSE", browserLegend)
+		v.Canvas.DrawHeaderMode(w, "BROWSE", v.headerLegend())
 	}
 
 	v.drawList(0, browserTop, w, h-browserTop)
+}
+
+// CurrentLegend returns the browser's own currently-active header
+// legend — jumpLegend while jump to file (§4.3) is active, browserLegend
+// otherwise — for the help overlay (§5.4) to mirror.
+func (v *Browser) CurrentLegend() []canvas.LegendEntry {
+	if v.JumpActive {
+		return jumpLegend
+	}
+	return browserLegend
+}
+
+// headerLegend is what Draw actually renders in the header's legend
+// slot: CurrentLegend, or canvas.HideKeysLegend while the help overlay
+// (§5.4) is showing, so the two don't compete for the same information.
+func (v *Browser) headerLegend() []canvas.LegendEntry {
+	if v.HelpVisible {
+		return canvas.HideKeysLegend
+	}
+	return v.CurrentLegend()
 }
 
 // drawList renders the browser's currently-visible flattened list

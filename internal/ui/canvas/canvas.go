@@ -127,6 +127,14 @@ type LegendEntry struct {
 	Priority int
 }
 
+// HideKeysLegend replaces every main title bar's own legend while the
+// help overlay is showing (SPEC.md §5.4): every view's Draw checks its
+// own Shared.HelpVisible and substitutes this in place of its usual
+// legend, so the full keybinding reference (drawn separately by App)
+// isn't competing with a second, now-redundant copy of the same
+// information split across every title bar.
+var HideKeysLegend = []LegendEntry{{Text: "[?] hide keys", Priority: 1}}
+
 // LegendString joins entries' text left-to-right, in declaration order,
 // with the app's standard two-space separator between legend segments.
 func LegendString(entries []LegendEntry) string {

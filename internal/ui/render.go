@@ -62,6 +62,9 @@ func (a *App) draw() {
 	}
 	a.drawBadge(w, h)
 	a.drawToast(w, h)
+	if a.shared.HelpVisible {
+		a.drawHelp(w, h)
+	}
 
 	a.shared.Canvas.Show()
 }
@@ -191,6 +194,10 @@ func (a *App) menuBarText(w int, entries []canvas.LegendEntry) string {
 // hint doesn't disappear and reappear as files are opened/closed) but
 // reads as visually inert rather than actionable.
 func (a *App) drawPreviewHeader(w int) {
+	if a.shared.HelpVisible {
+		a.shared.Canvas.DrawHeader(w, a.menuBarText(w, canvas.HideKeysLegend))
+		return
+	}
 	if len(a.shared.Files.Entries) == 0 {
 		a.shared.Canvas.DrawHeaderDimmed(w, a.rootLabel(), previewLegend, switchFilesLegendText)
 		return

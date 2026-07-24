@@ -428,13 +428,23 @@ func searchSummary(results []search.FileResult) string {
 	return fmt.Sprintf("%d %s across %d %s", hits, hitWord, files, fileWord)
 }
 
+// CurrentLegend returns content search's own header legend, for the
+// help overlay (§5.4) to mirror.
+func (v *Search) CurrentLegend() []canvas.LegendEntry {
+	return searchLegend
+}
+
 // Draw renders the content search overlay (SPEC.md §9.2): a header row
 // (title plus keybinding legend), the query input on its own row
 // directly below, and a two-level list — one row per matching file,
 // disclosing (unless collapsed) its own matching-line rows below it —
 // or a placeholder while there's nothing to show yet.
 func (v *Search) Draw(w, h int) {
-	v.Canvas.DrawHeaderMode(w, "SEARCH", searchLegend)
+	legend := searchLegend
+	if v.HelpVisible {
+		legend = canvas.HideKeysLegend
+	}
+	v.Canvas.DrawHeaderMode(w, "SEARCH", legend)
 	prompt := "> "
 	if v.Regex {
 		prompt = "[regex] > "

@@ -213,9 +213,19 @@ func (v *QuickOpen) performOpen() {
 // its own row directly below (the same input-row convention content
 // search uses, §9.2), and the flat match list.
 func (v *QuickOpen) Draw(w, h int) {
-	v.Canvas.DrawHeaderMode(w, "QUICK OPEN", quickOpenLegend)
+	legend := quickOpenLegend
+	if v.HelpVisible {
+		legend = canvas.HideKeysLegend
+	}
+	v.Canvas.DrawHeaderMode(w, "QUICK OPEN", legend)
 	v.Canvas.DrawText(0, 1, w, "> "+v.Query, canvas.StyleSearchInput)
 	v.drawList(w, h)
+}
+
+// CurrentLegend returns quick open's own header legend, for the help
+// overlay (§5.4) to mirror.
+func (v *QuickOpen) CurrentLegend() []canvas.LegendEntry {
+	return quickOpenLegend
 }
 
 // drawList renders quick open's flat, root-relative match list (SPEC.md

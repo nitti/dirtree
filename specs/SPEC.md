@@ -280,6 +280,15 @@ Any future animation must be designed against the same principles rather than as
 - **Anchored, directional motion.** Motion reads as happening at a fixed screen position (e.g. §5.2's fade-out disappearing left-to-right while its right edge stays anchored where the spinner was) rather than shifting other content; an animation must never itself trigger a layout recompute.
 - **Subtle, not flashy.** Default to the least motion and visual intensity that still communicates the state change — rapid blinking, saturated color flashes, or jarring transitions are distracting in a dense text UI, not more noticeable in a useful way. This applies even where an animation exists specifically to be noticed (e.g. the corner badge): §5.2's contrast treatment — a background that reads as visually distinct from surrounding rows — is what makes it noticeable, not intensity, saturation, or motion; color alone should also be avoided as the sole distinguishing signal, since terminal color support and themes vary.
 
+### 5.4 Help overlay
+
+`?` toggles a small reference popup listing every keybinding currently live, so nothing has to be memorized or hunted for across a title bar's own narrow-terminal-tiered legend. It is a passive HUD, not a modal overlay: it never owns input, has no state of its own beyond on/off, and doesn't change how any key behaves other than `?` itself. `?` is otherwise unused throughout the app and is the conventional "show help" binding in terminal UIs generally (vim, `less`, `htop`).
+
+- **Availability**: `?` toggles the overlay from any context *except* one where every printable character, including `?` itself, is live query/find text input — quick open (§4.2), content search (§9.1), jump to file (§4.3), and in-file find's prompt (§2.4). `?` is also one of quick open's glob-wildcard characters (§4.1), so it must remain typeable there specifically, not just in contexts where it happens to have no other meaning. In every other context (the primary preview view idle or with the goto-line prompt open, the browser outside jump mode, the open-files-list overlay), `?` toggles the overlay and has no other effect.
+- **Position and style**: a small bordered popup, title `keys` embedded in its top border the same way the open-files-list overlay's own popup embeds its title (§2.3), anchored flush to the screen's upper-right corner, positioned immediately below whatever title bar row(s) the current context occupies (so it never overlaps them) rather than at a fixed row. Sized to its own content, clamped so it never grows wider or taller than the terminal allows.
+- **Content**: every keybinding legend entry currently live, one per line, left-aligned, formatted exactly as it appears in its own title bar (e.g. `[tab] switch files`) — not reformatted or abbreviated. Entries are grouped by which title bar they belong to and ordered exactly as that title bar shows them: the main (topmost) title bar's entries first, then any secondary title bar's (the primary preview view's file title bar and/or goto-line prompt row, the open-files-list popup's own header) immediately after, separated by one blank line between groups. This mirrors whatever's actually on screen, recomputed fresh every frame the same way the rest of the UI's layout is (§6.2) — it is never a snapshot of the context it was opened from, so switching views or overlays while it's open updates its contents live without needing to be reopened.
+- **Suppressing duplicated legends while open**: since the overlay already lists every keybinding in one place, every title bar's own legend is hidden while it's open — the title bar's left-hand content (root path, mode label, file path, query text) is untouched, only the legend/keybinding portion disappears. The one exception is the main (topmost) title bar, which instead shows a single-entry legend, `[?] hide keys`, so the way to close the overlay is always visible regardless of which view or overlay is currently active.
+
 ## 6. System behaviors
 
 These apply across every view/overlay above rather than belonging to any one of them.
@@ -353,6 +362,7 @@ No key input is processed against whatever view/overlay is underneath while this
 | `o` | preview | open quick open overlay |
 | `s` | preview | open content search overlay |
 | `q` | preview, no overlay active | quit |
+| `?` | anywhere except live query/find text input (§5.4) | toggle the help overlay |
 | (typing digits) | goto-line prompt | append to query |
 | Backspace | goto-line prompt | remove last query character |
 | Ctrl+U | goto-line prompt | clear the entire query |
