@@ -349,7 +349,7 @@ func TestDrawFileTitleBarShowsLineCount(t *testing.T) {
 	sim.Show()
 
 	row := rowText(sim, 0, w)
-	if !strings.HasPrefix(row, "3L  three.txt") {
+	if !strings.HasPrefix(row, "3L three.txt") {
 		t.Fatalf("title row = %q, want it to start with the file's line count and name", row)
 	}
 }
@@ -379,8 +379,53 @@ func TestDrawFileTitleBarShowsSingularLineCount(t *testing.T) {
 	sim.Show()
 
 	row := rowText(sim, 0, w)
-	if !strings.HasPrefix(row, "1L  one.txt") {
+	if !strings.HasPrefix(row, "1L one.txt") {
 		t.Fatalf("title row = %q, want \"1L\"", row)
+	}
+}
+
+// TestDrawFileTitleBarPathAlignsWithContent guards the file title bar's
+// path against drifting out of column alignment with the preview
+// content below it: both start at x0+gutterWidth(e), so a viewer's eye
+// can track a single vertical line from the path straight down into the
+// code.
+func TestDrawFileTitleBarPathAlignsWithContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "three.txt")
+	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 10
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim), RootPath: dir}}
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	e := files.DisplayedEntry()
+	waitEntryReady(t, e)
+
+	v.Draw(0, 0, w, h, true)
+	sim.Show()
+
+	titleRow := rowText(sim, 0, w)
+	pathStart := strings.Index(titleRow, "three.txt")
+	if pathStart < 0 {
+		t.Fatalf("test setup: %q not found in title row %q", "three.txt", titleRow)
+	}
+	contentRow := rowText(sim, 1, w)
+	contentStart := strings.Index(contentRow, "one")
+	if contentStart < 0 {
+		t.Fatalf("test setup: %q not found in content row %q", "one", contentRow)
+	}
+	if pathStart != contentStart {
+		t.Fatalf("path starts at column %d, content starts at column %d, want equal (gutterWidth=%d)", pathStart, contentStart, gutterWidth(e))
 	}
 }
 

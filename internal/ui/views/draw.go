@@ -157,7 +157,11 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 
 	lineCount := bestLineCount(e)
 	lineTag := fmt.Sprintf("%dL", lineCount)
-	rel = lineTag + "  " + rel
+	// One space, not two: unlike the gutter's own numField+"  " (draw-
+	// Content, below), lineTag already carries a trailing "L" in place of
+	// the gutter's second padding column, so a single space here lines
+	// the path up with content starting at x0+gutterWidth(e).
+	rel = lineTag + " " + rel
 
 	// copyModeTag prefixes rel whenever e is in copy mode, so that state
 	// is always legible in this row regardless of which case below fires
