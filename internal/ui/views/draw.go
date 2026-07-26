@@ -156,10 +156,7 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	rel := path
 
 	lineCount := bestLineCount(e)
-	lineTag := fmt.Sprintf("%d line", lineCount)
-	if lineCount != 1 {
-		lineTag += "s"
-	}
+	lineTag := fmt.Sprintf("%dL", lineCount)
 	rel = lineTag + "  " + rel
 
 	// copyModeTag prefixes rel whenever e is in copy mode, so that state
