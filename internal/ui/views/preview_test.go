@@ -349,7 +349,7 @@ func TestDrawFileTitleBarShowsLineCount(t *testing.T) {
 	sim.Show()
 
 	row := rowText(sim, 0, w)
-	if !strings.HasPrefix(row, "3 lines  three.txt") {
+	if !strings.HasPrefix(row, "3L  three.txt") {
 		t.Fatalf("title row = %q, want it to start with the file's line count and name", row)
 	}
 }
@@ -379,14 +379,14 @@ func TestDrawFileTitleBarShowsSingularLineCount(t *testing.T) {
 	sim.Show()
 
 	row := rowText(sim, 0, w)
-	if !strings.HasPrefix(row, "1 line  one.txt") {
-		t.Fatalf("title row = %q, want singular \"1 line\"", row)
+	if !strings.HasPrefix(row, "1L  one.txt") {
+		t.Fatalf("title row = %q, want \"1L\"", row)
 	}
 }
 
 // TestDrawFileTitleBarBoldsPath guards the file title bar's own
 // root-relative path rendering bolded, distinct from the plain-weight
-// line-count prefix ahead of it: "N lines" stays normal weight while
+// line-count prefix ahead of it: "NL" stays normal weight while
 // "three.txt" itself bolds.
 func TestDrawFileTitleBarBoldsPath(t *testing.T) {
 	dir := t.TempDir()
