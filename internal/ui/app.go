@@ -88,6 +88,12 @@ const (
 	quitHoldReleaseGap = 600 * time.Millisecond
 )
 
+// cursorStyleInherit is passed to Screen.SetCursorStyle in Run to opt
+// out of tcell's per-frame DECSCUSR cursor-style assertion — see its
+// call site for why. -1 is deliberately outside tcell's own
+// CursorStyle enum (0-6); any value it doesn't recognize does the job.
+const cursorStyleInherit = tcell.CursorStyle(-1)
+
 // App holds all interactive state for a running session.
 type App struct {
 	rootPath string
@@ -302,6 +308,19 @@ func (a *App) Run() error {
 	defer screen.Fini()
 	screen.SetStyle(tcell.StyleDefault)
 	screen.EnablePaste()
+	// tcell asserts an explicit "blinking block" DECSCUSR cursor style
+	// (tcell.CursorStyleDefault) on every single frame it draws — sent
+	// this often (every redraw, including the 100ms resize-poll
+	// ticker's idle ones), it resets the terminal's own blink timer
+	// before a cycle ever completes, so the cursor visually never
+	// blinks, and it silently overrides whatever cursor style/blink
+	// policy the user's terminal or shell had already configured.
+	// Passing a CursorStyle tcell doesn't recognize disables this
+	// entirely: per Screen.SetCursorStyle's own doc comment, an
+	// unsupported style "will have no effect," so the cursor's shape
+	// and blink state are never touched by this app at all — whatever
+	// the terminal/shell already had in place stays exactly as is.
+	screen.SetCursorStyle(cursorStyleInherit)
 
 	a.shared.Canvas = canvas.New(screen)
 
