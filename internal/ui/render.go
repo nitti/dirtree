@@ -55,6 +55,7 @@ func (a *App) draw() {
 
 	if w < canvas.MinTerminalWidth || h < canvas.MinTerminalHeight {
 		a.drawTooSmall(w, h)
+		a.shared.Canvas.HideCursor()
 		a.shared.Canvas.Show()
 		return
 	}
@@ -78,8 +79,62 @@ func (a *App) draw() {
 	if a.shared.HelpVisible {
 		a.drawHelp(w, h)
 	}
+	a.updateCursor(w, h)
 
 	a.shared.Canvas.Show()
+}
+
+// updateCursor places the terminal's own cursor at the caret of
+// whichever text-entry field currently owns keystrokes — quick open,
+// content search, jump-to-file, in-file find, or goto-line — mirroring
+// textInputActive's own notion of which contexts those are, or hides it
+// otherwise. Terminals don't infer a caret from where DrawText last
+// wrote; without this, the cursor is left wherever the terminal itself
+// last parked it (often the top-left corner) even while a field is
+// actively receiving keystrokes.
+func (a *App) updateCursor(w, h int) {
+	x, y, ok := a.cursorPos(h)
+	if !ok {
+		a.shared.Canvas.HideCursor()
+		return
+	}
+	if x >= w {
+		x = w - 1
+	}
+	if y >= h {
+		y = h - 1
+	}
+	a.shared.Canvas.ShowCursor(x, y)
+}
+
+// cursorPos returns the caret position for the currently-active
+// text-entry field (see updateCursor), mirroring each view's own Draw
+// layout for that field's input row exactly, so the cursor always lands
+// just past the last typed character. ok is false when no text-entry
+// field is active.
+func (a *App) cursorPos(h int) (x, y int, ok bool) {
+	switch a.overlay {
+	case views.OverlayQuickOpen:
+		return len([]rune("> " + a.QuickOpen.Query)), 1, true
+	case views.OverlaySearch:
+		prompt := "> "
+		if a.Search.Regex {
+			prompt = "[regex] > "
+		}
+		return len([]rune(prompt + a.Search.Query)), 1, true
+	case views.OverlayBrowser:
+		if a.Browser.JumpActive {
+			return len([]rune("> " + a.Browser.JumpDisclosed + a.Browser.JumpQuery)), 1, true
+		}
+	case views.OverlayNone:
+		switch {
+		case a.Preview.FindPromptOpen:
+			return len([]rune("/" + a.Preview.FindInput)), 1, true
+		case a.Preview.GotoPromptOpen:
+			return len([]rune("goto line: " + a.Preview.GotoInput)), h - 1, true
+		}
+	}
+	return 0, 0, false
 }
 
 // drawTooSmall renders the too-small screen (SPEC.md §6.4), which
