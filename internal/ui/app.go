@@ -88,12 +88,6 @@ const (
 	quitHoldReleaseGap = 600 * time.Millisecond
 )
 
-// cursorStyleInherit is passed to Screen.SetCursorStyle in Run to opt
-// out of tcell's per-frame DECSCUSR cursor-style assertion — see its
-// call site for why. -1 is deliberately outside tcell's own
-// CursorStyle enum (0-6); any value it doesn't recognize does the job.
-const cursorStyleInherit = tcell.CursorStyle(-1)
-
 // App holds all interactive state for a running session.
 type App struct {
 	rootPath string
@@ -308,19 +302,6 @@ func (a *App) Run() error {
 	defer screen.Fini()
 	screen.SetStyle(tcell.StyleDefault)
 	screen.EnablePaste()
-	// tcell asserts an explicit "blinking block" DECSCUSR cursor style
-	// (tcell.CursorStyleDefault) on every single frame it draws — sent
-	// this often (every redraw, including the 100ms resize-poll
-	// ticker's idle ones), it resets the terminal's own blink timer
-	// before a cycle ever completes, so the cursor visually never
-	// blinks, and it silently overrides whatever cursor style/blink
-	// policy the user's terminal or shell had already configured.
-	// Passing a CursorStyle tcell doesn't recognize disables this
-	// entirely: per Screen.SetCursorStyle's own doc comment, an
-	// unsupported style "will have no effect," so the cursor's shape
-	// and blink state are never touched by this app at all — whatever
-	// the terminal/shell already had in place stays exactly as is.
-	screen.SetCursorStyle(cursorStyleInherit)
 
 	a.shared.Canvas = canvas.New(screen)
 
@@ -351,19 +332,7 @@ func (a *App) Run() error {
 		watchEvents = a.watcher.Events
 	}
 
-	// redraw wraps a.draw() and remembers the terminal size it drew at,
-	// for the ticker case below to detect a resize even when the
-	// terminal itself hasn't delivered one (see the ticker's own
-	// comment). Every draw, not just the ticker's, must funnel through
-	// this so that tracked size never goes stale relative to what was
-	// actually last drawn.
-	lastW, lastH := screen.Size()
-	redraw := func() {
-		lastW, lastH = screen.Size()
-		a.draw()
-	}
-
-	redraw()
+	a.draw()
 	for !a.quit {
 		select {
 		case ev := <-events:
@@ -381,16 +350,16 @@ func (a *App) Run() error {
 					a.handleKey(e)
 				}
 			}
-			redraw()
+			a.draw()
 		case <-watchEvents:
 			a.handleFSChange()
 			if a.overlay == views.OverlayQuickOpen {
 				a.QuickOpen.RefreshMatches()
 			}
-			redraw()
+			a.draw()
 		case out := <-a.Search.Done:
 			a.Search.ApplyOutcome(out)
-			redraw()
+			a.draw()
 		case <-ticker.C:
 			// Catches a released `q` even when no further key event
 			// arrives to notice it directly (SPEC.md §5.2's
@@ -418,91 +387,10 @@ func (a *App) Run() error {
 					a.Search.RecomputeSearch()
 				}
 			}
-			// Redrawing on every tick regardless — the ticker fires at
-			// resizePollInterval (100ms), far faster than any terminal's
-			// own cursor-blink cycle — repositions the terminal cursor
-			// on every single frame (tcell's Show() unconditionally
-			// re-issues it), which resets that cycle before it ever
-			// completes and makes the cursor appear to never blink. So
-			// this only actually redraws when there's a concrete reason
-			// to: the terminal was resized without delivering an event
-			// (this ticker's whole reason to exist, see its comment
-			// above) or something is genuinely still animating
-			// (periodicRedrawNeeded) — otherwise the frame on screen is
-			// already correct and redrawing it would only exist to
-			// needlessly re-plant the cursor.
-			if w, h := screen.Size(); w != lastW || h != lastH || a.periodicRedrawNeeded() {
-				redraw()
-			}
+			a.draw()
 		}
 	}
 	return nil
-}
-
-// periodicRedrawNeeded reports whether anything time-based is still
-// visibly animating — a spinner, a fading toast/badge, or a brief
-// post-action flash — and so still needs the ticker's periodic redraw
-// (see its call site) even though no discrete input event has arrived.
-// Mirrors, rather than shares, each view's own "is this still
-// animating" checks (badge/toast decision helpers are reused directly
-// since they're already pure functions of elapsed time; per-view flash
-// fields are checked inline the same way each view's own Draw does)
-// since there's no single shared place those live — this is read-only
-// and never mutates any of it.
-func (a *App) periodicRedrawNeeded() bool {
-	if !a.quitHoldStart.IsZero() {
-		return true
-	}
-	if a.toastMessage != "" {
-		return true
-	}
-	sinceDone, done := a.idx.SinceDone()
-	if _, _, ok := spinner.BadgeDecision(
-		a.idx.Elapsed(), sinceDone, done, spinner.DebugAlwaysShow, a.badgeSkip,
-		spinnerThreshold, spinnerMinDisplayDuration, toastDisplayDuration, toastFadeDuration,
-		spinnerFPS, completionMessage,
-	); ok {
-		return true
-	}
-	switch a.overlay {
-	case views.OverlayBrowser:
-		for _, t := range a.Browser.ErrorFlashes {
-			if time.Since(t) < canvas.FlashDuration {
-				return true
-			}
-		}
-		if a.Browser.FlashPath != "" && time.Since(a.Browser.FlashStart) < canvas.FlashDuration {
-			return true
-		}
-	case views.OverlayQuickOpen:
-		if _, done := a.idx.Snapshot(); !done {
-			return true
-		}
-		if a.QuickOpen.ErrorPath != "" && time.Since(a.QuickOpen.ErrorFlashStart) < canvas.FlashDuration {
-			return true
-		}
-	case views.OverlaySearch:
-		if a.Search.Cancel != nil {
-			return true
-		}
-		if _, done := a.idx.Snapshot(); !done && a.Search.Query != "" {
-			return true
-		}
-		if a.Search.ErrorPath != "" && time.Since(a.Search.ErrorFlashStart) < canvas.FlashDuration {
-			return true
-		}
-		if a.Search.FlashPath != "" && time.Since(a.Search.FlashStart) < canvas.FlashDuration {
-			return true
-		}
-	case views.OverlayNone:
-		if e := a.files.DisplayedEntry(); e != nil && e.FindScan != nil {
-			return true
-		}
-		if a.Preview.GotoBlockedPath != "" && time.Since(a.Preview.GotoBlockedFlashStart) < canvas.FlashDuration {
-			return true
-		}
-	}
-	return false
 }
 
 // helpToggleKey is the sole key that opens/closes the help overlay
