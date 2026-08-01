@@ -310,6 +310,20 @@ func (c *Canvas) Show() {
 	c.Screen.Show()
 }
 
+// ShowCursor places the terminal's own cursor at (x, y), the caret
+// position of whichever text-entry field currently owns keystrokes
+// (quick open, search, jump-to-file, in-file find, goto-line) — takes
+// effect on the next Show(), the same as any other draw call.
+func (c *Canvas) ShowCursor(x, y int) {
+	c.Screen.ShowCursor(x, y)
+}
+
+// HideCursor hides the terminal's own cursor, the default whenever no
+// text-entry field is active.
+func (c *Canvas) HideCursor() {
+	c.Screen.HideCursor()
+}
+
 // SetContent places a single rune at (x, y) with no combining
 // characters — no caller here ever needs them.
 func (c *Canvas) SetContent(x, y int, r rune, style tcell.Style) {
