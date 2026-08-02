@@ -491,6 +491,23 @@ func (c *Canvas) DrawQuittingDim(x0, y0, w, h int) {
 	}
 }
 
+// FlashRow briefly reverses a single already-drawn row's video (fg/bg
+// swapped per cell, via the same Reverse attribute StyleSelected already
+// uses for cursor-position highlighting) — used for the scroll-edge
+// "bump" flash (SPEC.md §2.1) when Up/Down/Page Up/Page Down is pressed
+// while already at the top or bottom of the document. Reads back
+// whatever the caller already drew via Get, the same technique
+// DrawQuittingDim uses, so a highlighted row's per-token syntax colors
+// still show through (swapped, not replaced) rather than being flattened
+// to one flat highlight color.
+func (c *Canvas) FlashRow(x0, y, w int) {
+	for x := x0; x < x0+w; x++ {
+		str, style, _ := c.Screen.Get(x, y)
+		r, _ := utf8.DecodeRuneInString(str)
+		c.Screen.SetContent(x, y, r, nil, style.Reverse(true))
+	}
+}
+
 // DrawCornerBadge draws text right-anchored on the bottom row, the
 // shared anchor point both the indexing badge and the error toast fade
 // out from (SPEC.md §5.3's "anchored, directional motion").

@@ -1,6 +1,8 @@
 package views
 
 import (
+	"time"
+
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/nitti/dirtree/internal/openfiles"
@@ -65,13 +67,36 @@ func (v *Preview) scroll(delta int) {
 	}
 	width := v.computedWidth()
 	if e.Tier == preview.TierPlainText {
-		target := clamp(currentTopLine(e)+delta, 1, bestLineCount(e))
+		cur := currentTopLine(e)
+		target := clamp(cur+delta, 1, bestLineCount(e))
+		if target == cur {
+			v.bumpEdge(e, delta)
+		}
 		v.ensureWindow(e, width, target)
 		v.setScrollToLine(e, target)
 		return
 	}
 	v.ensureWrapped(e, width)
+	old := e.Scroll
 	e.Scroll = clamp(e.Scroll+delta, 0, v.maxScroll(e, v.viewportHeight()))
+	if e.Scroll == old {
+		v.bumpEdge(e, delta)
+	}
+}
+
+// bumpEdge records a scroll attempt (from scroll, above) that pushed
+// further than e's content allows, in the direction delta indicates:
+// negative means already at the top, positive means already at the
+// bottom. A no-op for delta == 0, which scroll never actually passes.
+func (v *Preview) bumpEdge(e *openfiles.Entry, delta int) {
+	switch {
+	case delta < 0:
+		v.TopBumpPath = e.Path
+		v.TopBumpFlashStart = time.Now()
+	case delta > 0:
+		v.BottomBumpPath = e.Path
+		v.BottomBumpFlashStart = time.Now()
+	}
 }
 
 // gotoLine jumps the currently-displayed entry's scroll to the source
