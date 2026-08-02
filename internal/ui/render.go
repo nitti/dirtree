@@ -73,6 +73,9 @@ func (a *App) draw() {
 	default:
 		a.drawPreviewHeader(w)
 		a.Preview.Draw(0, 1, w, h-1, true)
+		if !a.quitHoldStart.IsZero() {
+			a.shared.Canvas.DrawQuittingDim(0, 1, w, h-1)
+		}
 	}
 	a.drawBadge(w, h)
 	a.drawToast(w, h)
