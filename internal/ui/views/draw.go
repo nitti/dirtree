@@ -335,6 +335,10 @@ func (v *Preview) drawContent(x0, y0, w, h int) {
 	}
 	digits := gw - 2
 
+	topFlash := e.Path == v.TopBumpPath && time.Since(v.TopBumpFlashStart) < canvas.FlashDuration
+	bottomFlash := e.Path == v.BottomBumpPath && time.Since(v.BottomBumpFlashStart) < canvas.FlashDuration
+	lastDrawnY := -1
+
 	for row := range viewportHeight {
 		y := y0 + row
 		i := e.Scroll + row
@@ -350,6 +354,17 @@ func (v *Preview) drawContent(x0, y0, w, h int) {
 			v.Canvas.DrawText(x0, y, gw, numField+"  ", canvas.StyleNormal)
 		}
 		v.drawSegments(x0+gw, y, contentWidth, dr.Segments, findHighlightsForRow(e, dr), e.CopyMode)
+		lastDrawnY = y
+	}
+	if topFlash {
+		v.Canvas.FlashRow(x0, y0, w)
+	}
+	if bottomFlash && lastDrawnY >= 0 && lastDrawnY != y0 {
+		// lastDrawnY == y0 means the document is short enough that its
+		// only visible row is both the top and bottom edge; skip so a
+		// simultaneous top+bottom flash doesn't reverse the same row
+		// twice and cancel itself back out.
+		v.Canvas.FlashRow(x0, lastDrawnY, w)
 	}
 
 	if v.GotoPromptOpen {

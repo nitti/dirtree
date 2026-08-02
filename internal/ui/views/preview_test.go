@@ -560,6 +560,111 @@ func TestTierPlainTextScrollMovesBySourceLine(t *testing.T) {
 	}
 }
 
+// TestScrollBumpsAtRestEdges guards the scroll-edge "bump" cue (SPEC.md
+// §2.1): scrolling further in a direction that's already fully clamped
+// records a flash for that edge, but ordinary in-bounds scrolling — and
+// the scroll that merely reaches an edge for the first time, rather than
+// pushing past an already-at-rest one — does not.
+func TestScrollBumpsAtRestEdges(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "many.txt")
+	var content strings.Builder
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&content, "line %d\n", i)
+	}
+	if err := os.WriteFile(path, []byte(content.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files := openfiles.New()
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	e := files.DisplayedEntry()
+	waitEntryReady(t, e)
+	v := newTestPreview(files, 60, 5)
+	v.drawContent(0, 0, 60, 5)
+
+	v.scroll(-1) // already at the top: pushing further up bumps
+	if v.TopBumpPath != e.Path {
+		t.Fatalf("expected top bump after scrolling up from the top, got TopBumpPath=%q", v.TopBumpPath)
+	}
+	if v.BottomBumpPath != "" {
+		t.Fatalf("expected no bottom bump yet, got BottomBumpPath=%q", v.BottomBumpPath)
+	}
+
+	v.TopBumpPath = ""
+	v.scroll(1) // ordinary downward scroll within bounds: no bump
+	if v.TopBumpPath != "" || v.BottomBumpPath != "" {
+		t.Fatalf("expected no bump from an in-bounds scroll, got top=%q bottom=%q", v.TopBumpPath, v.BottomBumpPath)
+	}
+
+	v.scroll(100) // reaches the bottom for the first time: no bump yet
+	if v.BottomBumpPath != "" {
+		t.Fatalf("expected no bottom bump on first reaching the bottom, got BottomBumpPath=%q", v.BottomBumpPath)
+	}
+	v.scroll(1) // pushes past the bottom again: bumps
+	if v.BottomBumpPath != e.Path {
+		t.Fatalf("expected bottom bump after scrolling past the last line, got BottomBumpPath=%q", v.BottomBumpPath)
+	}
+}
+
+// TestScrollBumpsAtRestEdgesForTierPlainText mirrors
+// TestScrollBumpsAtRestEdges for TierPlainText, whose scroll target is
+// source lines rather than display rows (SPEC.md §2.1's TierPlainText
+// carve-out) — the bump condition (target == cur) applies identically
+// either way.
+func TestScrollBumpsAtRestEdgesForTierPlainText(t *testing.T) {
+	files, e := openTierPlainText(t, 20)
+	v := newTestPreview(files, 60, 5)
+	v.drawContent(0, 0, 60, 5)
+
+	v.scroll(-1)
+	if v.TopBumpPath != e.Path {
+		t.Fatalf("expected top bump for TierPlainText already at line 1, got TopBumpPath=%q", v.TopBumpPath)
+	}
+}
+
+// TestDrawContentFlashesEdgeRowOnBump guards the actual visual cue: once
+// a bump is recorded, drawContent reverse-video flashes the
+// corresponding edge row (canvas.FlashRow) for the currently-displayed
+// entry.
+func TestDrawContentFlashesEdgeRowOnBump(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "many.txt")
+	var content strings.Builder
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&content, "line %d\n", i)
+	}
+	if err := os.WriteFile(path, []byte(content.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files := openfiles.New()
+	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	waitEntryReady(t, files.DisplayedEntry())
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 5
+	sim.SetSize(w, h)
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
+
+	v.drawContent(0, 0, w, h)
+	v.scroll(-1) // already at the top: bumps
+	v.drawContent(0, 0, w, h)
+	sim.Show()
+
+	_, _, attr := cellStyle(sim, 0, 0).Decompose()
+	if attr&tcell.AttrReverse == 0 {
+		t.Fatalf("expected the top row to be reverse-video flashed after a top bump")
+	}
+}
+
 func TestTierPlainTextGotoLineJumpsViaWindow(t *testing.T) {
 	files, e := openTierPlainText(t, 50)
 	v := newTestPreview(files, 60, 10)

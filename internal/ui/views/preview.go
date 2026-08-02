@@ -58,6 +58,20 @@ type Preview struct {
 	GotoBlockedPath       string
 	GotoBlockedFlashStart time.Time
 
+	// TopBumpPath/TopBumpFlashStart and BottomBumpPath/BottomBumpFlashStart
+	// track a scroll attempt (Up/Page Up past the first line, or
+	// Down/Page Down past the last) that pushed further than the
+	// currently-displayed entry's content allows (SPEC.md §2.1):
+	// drawContent briefly reverses the corresponding edge row's video as a
+	// "you've hit the end" cue. Same self-expiring time.Time-field pattern
+	// as GotoBlockedPath/GotoBlockedFlashStart above, path-keyed for the
+	// same reason — so switching to a different entry within the flash
+	// window doesn't carry a stale flash over onto it.
+	TopBumpPath          string
+	TopBumpFlashStart    time.Time
+	BottomBumpPath       string
+	BottomBumpFlashStart time.Time
+
 	FindPromptOpen bool
 	FindInput      string
 }
