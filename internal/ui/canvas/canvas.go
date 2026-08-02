@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -467,6 +468,25 @@ func (c *Canvas) DrawHeaderQuitting(w int, message string, hiddenPrefix int) {
 		x := start + i
 		if x >= hiddenPrefix && x < w {
 			c.Screen.SetContent(x, 0, r, nil, StyleHeaderQuit)
+		}
+	}
+}
+
+// DrawQuittingDim dims every already-drawn cell in a rectangle (applying
+// the same StyleDim attribute StyleHeaderDim etc. already use elsewhere)
+// for as long as the hold-to-quit gesture is in progress, the content-area
+// counterpart to the header bar's own row-0 erosion — a plain on/off dim
+// rather than a gradual blend, since no color-interpolation primitive
+// exists anywhere in this codebase and one isn't worth inventing solely
+// for this. Reads back whatever the caller already drew via Get so
+// existing styling (syntax highlighting, the file title bar) dims in
+// place rather than being erased.
+func (c *Canvas) DrawQuittingDim(x0, y0, w, h int) {
+	for y := y0; y < y0+h; y++ {
+		for x := x0; x < x0+w; x++ {
+			str, style, _ := c.Screen.Get(x, y)
+			r, _ := utf8.DecodeRuneInString(str)
+			c.Screen.SetContent(x, y, r, nil, style.Dim(true))
 		}
 	}
 }
