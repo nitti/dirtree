@@ -136,7 +136,12 @@ func TestDrawContentEmptyStateHintMatchesLegendOrder(t *testing.T) {
 	}
 }
 
-func TestDrawPreviewShowsGotoLegend(t *testing.T) {
+// TestDrawFileTitleBarShowsGotoPrompt guards #114's title-bar placement
+// fix: the goto-line prompt now renders in the file title bar (same row
+// as the find prompt) instead of its own row at the bottom of the
+// content area, and shows the file's valid line range alongside the
+// typed input while typing.
+func TestDrawFileTitleBarShowsGotoPrompt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
 	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
@@ -147,7 +152,10 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 	if err := sim.Init(); err != nil {
 		t.Fatal(err)
 	}
-	w, h := 60, 10
+	// Wide enough that "goto line: 2 (1-3)" plus the full legend both
+	// fit without the fit/drop rule (SPEC.md §5.2) dropping the left
+	// side in favor of the legend.
+	w, h := 70, 10
 	sim.SetSize(w, h)
 
 	files := openfiles.New()
@@ -159,26 +167,26 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 	v.GotoPromptOpen = true
 	v.GotoInput = "2"
 
-	v.drawContent(0, 0, w, h)
+	v.drawFileTitleBar(0, 0, w, true)
 	sim.Show()
 
-	row := rowText(sim, h-1, w)
-	if !strings.HasPrefix(row, "goto line: 2") {
-		t.Fatalf("goto-line row = %q, want it to start with the prompt text", row)
+	row := rowText(sim, 0, w)
+	if !strings.HasPrefix(row, "goto line: 2 (1-3)") {
+		t.Fatalf("file title bar row = %q, want it to start with the prompt text and range hint", row)
 	}
 	for _, want := range []string{"[return] jump", "[esc] cancel"} {
 		if !strings.Contains(row, want) {
-			t.Errorf("goto-line row = %q, missing legend entry %q", row, want)
+			t.Errorf("file title bar row = %q, missing legend entry %q", row, want)
 		}
 	}
 }
 
-// TestDrawContentSuppressesGotoLegendWhenHelpVisible guards SPEC.md
-// §5.4: while the help overlay is showing, the goto-line prompt row
-// keeps its own left-hand content (the typed digits) but drops its
-// trailing keybinding legend, since the help overlay is the one place
-// that legend now lives.
-func TestDrawContentSuppressesGotoLegendWhenHelpVisible(t *testing.T) {
+// TestDrawFileTitleBarSuppressesGotoLegendWhenHelpVisible guards
+// SPEC.md §5.4: while the help overlay is showing, the goto prompt
+// keeps its own left-hand content (the typed digits and range hint)
+// but drops its trailing keybinding legend, since the help overlay is
+// the one place that legend now lives.
+func TestDrawFileTitleBarSuppressesGotoLegendWhenHelpVisible(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
 	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
@@ -201,15 +209,15 @@ func TestDrawContentSuppressesGotoLegendWhenHelpVisible(t *testing.T) {
 	v.GotoPromptOpen = true
 	v.GotoInput = "2"
 
-	v.drawContent(0, 0, w, h)
+	v.drawFileTitleBar(0, 0, w, true)
 	sim.Show()
 
-	row := rowText(sim, h-1, w)
-	if !strings.HasPrefix(row, "goto line: 2") {
-		t.Fatalf("goto-line row = %q, want it to still start with the prompt text", row)
+	row := rowText(sim, 0, w)
+	if !strings.HasPrefix(row, "goto line: 2 (1-3)") {
+		t.Fatalf("file title bar row = %q, want it to still start with the prompt text and range hint", row)
 	}
 	if strings.Contains(row, "[return]") || strings.Contains(row, "[esc]") {
-		t.Errorf("goto-line row = %q, want no keybinding legend while HelpVisible", row)
+		t.Errorf("file title bar row = %q, want no keybinding legend while HelpVisible", row)
 	}
 }
 
@@ -239,6 +247,7 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 	e := files.DisplayedEntry()
 
 	reset := func() {
+		v.GotoPromptOpen = false
 		v.FindPromptOpen = false
 		e.CopyMode = false
 		e.FindQuery = ""
@@ -258,6 +267,19 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 		got, ok := v.CurrentFileLegend()
 		if !ok || &got[0] != &fileLegend[0] {
 			t.Errorf("CurrentFileLegend() = (%v, %v), want fileLegend", got, ok)
+		}
+	})
+
+	// #114: the goto prompt now renders in the file title bar (same as
+	// find), so CurrentFileLegend must offer its legend too, taking
+	// precedence over every other title-bar state the same way
+	// drawFileTitleBar's own switch does.
+	t.Run("goto prompt open", func(t *testing.T) {
+		reset()
+		v.GotoPromptOpen = true
+		got, ok := v.CurrentFileLegend()
+		if !ok || &got[0] != &gotoLegend[0] {
+			t.Errorf("CurrentFileLegend() = (%v, %v), want gotoLegend", got, ok)
 		}
 	})
 
@@ -308,20 +330,6 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 	})
 
 	reset()
-}
-
-// TestPreviewGotoPromptLegend guards GotoPromptLegend's simple on/off
-// gating: ok=false while the prompt is closed, gotoLegend while open.
-func TestPreviewGotoPromptLegend(t *testing.T) {
-	v := &Preview{Shared: &Shared{Files: openfiles.New()}}
-	if _, ok := v.GotoPromptLegend(); ok {
-		t.Error("expected ok=false while GotoPromptOpen is false")
-	}
-	v.GotoPromptOpen = true
-	got, ok := v.GotoPromptLegend()
-	if !ok || &got[0] != &gotoLegend[0] {
-		t.Errorf("GotoPromptLegend() = (%v, %v), want gotoLegend", got, ok)
-	}
 }
 
 func TestDrawFileTitleBarShowsLineCount(t *testing.T) {

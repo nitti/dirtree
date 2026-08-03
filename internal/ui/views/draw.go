@@ -91,10 +91,11 @@ var findLegendNoMatches = []canvas.LegendEntry{
 // read-only, accepting neither scrolling nor goto-line — in which case
 // file-specific action keys like goto-line don't apply and their
 // legend is omitted rather than advertising a key that won't do
-// anything right now. The goto-line prompt, when open, occupies the
-// bottom row — reachable only when this is the primary (non-overlaid)
-// view, since no overlay leaves the goto-line key handled while this is
-// showing.
+// anything right now. The goto-line prompt, when open, replaces the
+// title bar's own left/right content the same way the find prompt does
+// (drawFileTitleBar/drawHexFileTitleBar) — reachable only when this is
+// the primary (non-overlaid) view, since no overlay leaves the
+// goto-line key handled while this is showing.
 func (v *Preview) Draw(x0, y0, w, h int, interactive bool) {
 	e := v.Files.DisplayedEntry()
 	v.syncFindScan(e)
@@ -109,12 +110,12 @@ func (v *Preview) Draw(x0, y0, w, h int, interactive bool) {
 
 // CurrentFileLegend returns the keybinding legend the file title bar
 // is currently showing, mirroring drawFileTitleBar's own state
-// precedence exactly (find prompt, an async plain-text-tier scan, an
-// active find with or without matches, copy mode, else idle) — for the
-// help overlay (§5.4) to reuse. Returns ok=false when there is no
-// displayed entry, or when the title bar is showing a transient state
-// with no keybinding legend of its own (blocked-on-indexing), since
-// there is nothing meaningful to list in either case.
+// precedence exactly (goto prompt, find prompt, an async plain-text-
+// tier scan, an active find with or without matches, copy mode, else
+// idle) — for the help overlay (§5.4) to reuse. Returns ok=false when
+// there is no displayed entry, or when the title bar is showing a
+// transient state with no keybinding legend of its own (blocked-on-
+// indexing), since there is nothing meaningful to list in either case.
 func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
@@ -122,6 +123,8 @@ func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
 	}
 	if e.Tier == preview.TierBinary {
 		switch {
+		case v.GotoPromptOpen:
+			return hexGotoLegend, true
 		case v.HexFindPromptOpen:
 			return hexFindPromptLegend, true
 		case e.HexFindScan != nil:
@@ -136,6 +139,8 @@ func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
 	}
 	gotoBlocked := v.GotoBlockedPath == e.Path && gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done())
 	switch {
+	case v.GotoPromptOpen:
+		return gotoLegend, true
 	case v.FindPromptOpen:
 		return findPromptLegend, true
 	case gotoBlocked:
@@ -151,16 +156,6 @@ func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
 	default:
 		return fileLegend, true
 	}
-}
-
-// GotoPromptLegend returns the goto-line prompt's own legend while
-// it's open, for the help overlay (§5.4) to reuse — it renders on its
-// own bottom row (drawContent), independent of the file title bar.
-func (v *Preview) GotoPromptLegend() (entries []canvas.LegendEntry, ok bool) {
-	if !v.GotoPromptOpen {
-		return nil, false
-	}
-	return gotoLegend, true
 }
 
 // drawFileTitleBar renders the currently-displayed file's own title bar
@@ -210,6 +205,9 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 
 	var text string
 	switch {
+	case interactive && v.GotoPromptOpen:
+		fv := textFileView{}
+		text = canvas.LegendText(w, fv.gotoLabel()+v.GotoInput+" ("+fv.gotoRangeHint(e)+")", legend(fv.gotoLegend()))
 	case interactive && v.FindPromptOpen:
 		text = canvas.LegendText(w, "/"+v.FindInput, legend(findPromptLegend))
 	case !interactive:
@@ -353,9 +351,6 @@ func (v *Preview) drawContent(x0, y0, w, h int) {
 	}
 
 	viewportHeight := h
-	if v.GotoPromptOpen {
-		viewportHeight--
-	}
 	digits := gw - 2
 
 	topFlash := e.Path == v.TopBumpPath && time.Since(v.TopBumpFlashStart) < canvas.FlashDuration
@@ -388,14 +383,6 @@ func (v *Preview) drawContent(x0, y0, w, h int) {
 		// simultaneous top+bottom flash doesn't reverse the same row
 		// twice and cancel itself back out.
 		v.Canvas.FlashRow(x0, lastDrawnY, w)
-	}
-
-	if v.GotoPromptOpen {
-		gotoRowLegend := gotoLegend
-		if v.HelpVisible {
-			gotoRowLegend = nil
-		}
-		v.Canvas.DrawText(x0, y0+h-1, w, canvas.LegendText(w, "goto line: "+v.GotoInput, gotoRowLegend), canvas.StyleNormal)
 	}
 }
 

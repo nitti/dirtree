@@ -343,6 +343,47 @@ func TestDrawHexFileTitleBarAlignsPathWithHexGrid(t *testing.T) {
 	}
 }
 
+// TestDrawHexFileTitleBarShowsGotoPrompt guards #114's title-bar
+// placement fix for the hex view: the goto-offset prompt renders in the
+// file title bar (same as hex-find) instead of its own row at the
+// bottom of the content area, and shows the file's valid hex offset
+// range alongside the typed input while typing.
+func TestDrawHexFileTitleBarShowsGotoPrompt(t *testing.T) {
+	dir := t.TempDir()
+	content := append([]byte{0}, make([]byte, 999)...) // size 1000, last valid offset 0x3e7
+	path := writeBinaryFile(t, dir, content)
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 80, 10
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
+	res := files.Open(path, preview.DefaultByteCap)
+	if res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %+v", res)
+	}
+	e := res.Entry
+	v.GotoPromptOpen = true
+	v.GotoInput = "64"
+
+	v.drawHexFileTitleBar(0, 0, w, true, e)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	if !strings.HasPrefix(row, "goto offset: 0x64 (0-3e7)") {
+		t.Fatalf("file title bar row = %q, want it to start with the prompt text and range hint", row)
+	}
+	for _, want := range []string{"[return] jump", "[esc] cancel"} {
+		if !strings.Contains(row, want) {
+			t.Errorf("file title bar row = %q, missing legend entry %q", row, want)
+		}
+	}
+}
+
 // TestHexScrollBumpsAtRestEdges guards the hex view's edge-bump cue
 // (SPEC.md §2.1a), mirroring TestScrollBumpsAtRestEdges (preview_test.go)
 // for the text tiers: scrolling further in a direction that's already

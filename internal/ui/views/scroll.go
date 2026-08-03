@@ -247,9 +247,6 @@ func (v *Preview) viewportHeight() int {
 	if v.Files.DisplayedEntry() != nil {
 		height-- // file title bar row, shown whenever a file is displayed
 	}
-	if v.GotoPromptOpen {
-		height--
-	}
 	return height
 }
 

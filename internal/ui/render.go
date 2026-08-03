@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/toast"
 	"github.com/nitti/dirtree/internal/ui/canvas"
@@ -137,11 +136,7 @@ func (a *App) cursorPos(h int) (x, y int, ok bool) {
 		case a.Preview.HexFindPromptOpen:
 			return len([]rune("/" + a.Preview.HexFindInput)), 1, true
 		case a.Preview.GotoPromptOpen:
-			label := "goto line: "
-			if e := a.Preview.Files.DisplayedEntry(); e != nil && e.Tier == preview.TierBinary {
-				label = "goto offset: 0x"
-			}
-			return len([]rune(label + a.Preview.GotoInput)), h - 1, true
+			return len([]rune(a.Preview.GotoLabel() + a.Preview.GotoInput)), 1, true
 		}
 	}
 	return 0, 0, false

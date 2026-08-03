@@ -172,3 +172,64 @@ func TestHandleGotoPromptKeyRejectsWrongTierDigits(t *testing.T) {
 		t.Fatalf("GotoInput = %q, want %q (hex letter dropped)", v.GotoInput, "12")
 	}
 }
+
+// TestTextFileViewGotoRangeHint and TestHexFileViewGotoRangeHint guard
+// #114's "show the valid range while typing" fix directly against the
+// pure per-tier hint functions, independent of rendering.
+func TestTextFileViewGotoRangeHint(t *testing.T) {
+	cases := []struct {
+		name string
+		e    *openfiles.Entry
+		want string
+	}{
+		{"highlighted tier, 3 lines", &openfiles.Entry{Tier: preview.TierHighlighted, Lines: []string{"a", "b", "c"}}, "1-3"},
+		{"highlighted tier, empty file (floors at 1 line)", &openfiles.Entry{Tier: preview.TierHighlighted}, "1-1"},
+	}
+	for _, c := range cases {
+		if got := (textFileView{}).gotoRangeHint(c.e); got != c.want {
+			t.Errorf("%s: gotoRangeHint() = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestHexFileViewGotoRangeHint(t *testing.T) {
+	cases := []struct {
+		name string
+		size int64
+		want string
+	}{
+		{"1000-byte file", 1000, "0-3e7"},
+		{"1-byte file", 1, "0-0"},
+		{"empty file (floors at 0 rather than going negative)", 0, "0-0"},
+	}
+	for _, c := range cases {
+		e := &openfiles.Entry{Tier: preview.TierBinary, Size: c.size}
+		if got := (hexFileView{}).gotoRangeHint(e); got != c.want {
+			t.Errorf("%s: gotoRangeHint() = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestGotoLabelDispatchesOnTier guards the exported Preview.GotoLabel
+// wrapper (used by internal/ui/render.go's cursor-position logic,
+// outside this package) dispatches through fileViewFor the same way
+// the title bar's own rendering does.
+func TestGotoLabelDispatchesOnTier(t *testing.T) {
+	textEntry := &openfiles.Entry{Tier: preview.TierHighlighted, Lines: []string{"a"}}
+	hexEntry := &openfiles.Entry{Tier: preview.TierBinary, Size: 10}
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files}}
+
+	files.Entries = []*openfiles.Entry{textEntry}
+	files.Displayed = 0
+	if got, want := v.GotoLabel(), "goto line: "; got != want {
+		t.Errorf("GotoLabel() with text entry = %q, want %q", got, want)
+	}
+
+	files.Entries = []*openfiles.Entry{hexEntry}
+	files.Displayed = 0
+	if got, want := v.GotoLabel(), "goto offset: 0x"; got != want {
+		t.Errorf("GotoLabel() with hex entry = %q, want %q", got, want)
+	}
+}

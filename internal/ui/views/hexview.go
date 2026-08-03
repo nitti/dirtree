@@ -494,6 +494,9 @@ func (v *Preview) drawHexFileTitleBar(x0, y0, w int, interactive bool, e *openfi
 
 	var text string
 	switch {
+	case interactive && v.GotoPromptOpen:
+		fv := hexFileView{}
+		text = canvas.LegendText(w, fv.gotoLabel()+v.GotoInput+" ("+fv.gotoRangeHint(e)+")", legend(fv.gotoLegend()))
 	case interactive && v.HexFindPromptOpen:
 		text = canvas.LegendText(w, "/"+v.HexFindInput, legend(hexFindPromptLegend))
 	case !interactive:
@@ -618,8 +621,9 @@ func (v *Preview) drawHexRow(x0, y, rowWidth, gutterWidth, bytesPerRow int, rowO
 // and ASCII column for the currently-displayed TierBinary entry's
 // viewport, reading only the bytes actually needed for it (preview.
 // ReadRange) rather than holding the file's content resident. The
-// goto-offset prompt, when open, occupies the bottom row, the same as
-// drawContent's goto-line prompt row.
+// goto-offset prompt, when open, replaces the title bar's own content
+// instead (drawHexFileTitleBar), the same as drawFileTitleBar's
+// goto-line prompt — this rectangle is unaffected by it either way.
 func (v *Preview) drawHexContent(x0, y0, w, h int) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
@@ -629,9 +633,6 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 	n := bytesPerRowFor(w, gw)
 
 	viewportHeight := h
-	if v.GotoPromptOpen {
-		viewportHeight--
-	}
 	if viewportHeight < 0 {
 		viewportHeight = 0
 	}
@@ -666,13 +667,5 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 		// same row twice and cancel itself back out (drawContent, above,
 		// guards the same case for the text tiers).
 		v.Canvas.FlashRow(x0, lastDrawnY, w)
-	}
-
-	if v.GotoPromptOpen {
-		gotoRowLegend := hexGotoLegend
-		if v.HelpVisible {
-			gotoRowLegend = nil
-		}
-		v.Canvas.DrawText(x0, y0+h-1, w, canvas.LegendText(w, "goto offset: 0x"+v.GotoInput, gotoRowLegend), canvas.StyleNormal)
 	}
 }
