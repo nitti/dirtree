@@ -97,9 +97,9 @@ func (v *Preview) scroll(delta int) {
 		return
 	}
 	v.ensureWrapped(e, width)
-	old := e.Scroll
-	e.Scroll = clamp(e.Scroll+delta, 0, v.maxScroll(e, v.viewportHeight()))
-	if e.Scroll == old {
+	old := e.Text.Scroll
+	e.Text.Scroll = clamp(e.Text.Scroll+delta, 0, v.maxScroll(e, v.viewportHeight()))
+	if e.Text.Scroll == old {
 		v.bumpEdge(e, delta)
 	}
 }
@@ -141,30 +141,30 @@ func (v *Preview) ScrollToLine(e *openfiles.Entry, n int) {
 	v.setScrollToLine(e, n)
 }
 
-// setScrollToLine sets e.Scroll to source line n's first display row
+// setScrollToLine sets e.Text.Scroll to source line n's first display row
 // within e's currently-loaded content (the whole file for
 // TierHighlighted, e's current window for TierPlainText — WindowStartLine
 // is always 0 for the former, so this is n-1 there, matching the
 // pre-windowing behavior exactly).
 func (v *Preview) setScrollToLine(e *openfiles.Entry, n int) {
-	if row, ok := e.FirstRow[n-1-e.WindowStartLine]; ok {
-		e.Scroll = clamp(row, 0, v.maxScroll(e, v.viewportHeight()))
+	if row, ok := e.Text.FirstRow[n-1-e.Text.WindowStartLine]; ok {
+		e.Text.Scroll = clamp(row, 0, v.maxScroll(e, v.viewportHeight()))
 	}
 }
 
 func (v *Preview) maxScroll(e *openfiles.Entry, viewportHeight int) int {
-	return max(len(e.Rows)-viewportHeight, 0)
+	return max(len(e.Text.Rows)-viewportHeight, 0)
 }
 
 // currentTopLine returns the 1-based source line currently at the top of
-// e's viewport, derived from e.Scroll's row within e's currently-loaded
+// e's viewport, derived from e.Text.Scroll's row within e's currently-loaded
 // window — used to compute a TierPlainText entry's scroll target in
 // source-line units (§8).
 func currentTopLine(e *openfiles.Entry) int {
-	if e.Rows != nil && e.Scroll >= 0 && e.Scroll < len(e.Rows) {
-		return e.WindowStartLine + e.Rows[e.Scroll].SourceLine + 1
+	if e.Text.Rows != nil && e.Text.Scroll >= 0 && e.Text.Scroll < len(e.Text.Rows) {
+		return e.Text.WindowStartLine + e.Text.Rows[e.Text.Scroll].SourceLine + 1
 	}
-	return e.WindowStartLine + 1
+	return e.Text.WindowStartLine + 1
 }
 
 // bestLineCount returns the best currently-known total line count for e:
@@ -174,9 +174,9 @@ func currentTopLine(e *openfiles.Entry) int {
 // ready, and so isn't scrolled/goto-lined, before then — §4, §8).
 func bestLineCount(e *openfiles.Entry) int {
 	if e.Tier == preview.TierHighlighted {
-		return max(len(e.Lines), 1)
+		return max(len(e.Text.Lines), 1)
 	}
-	_, lineCount, _ := e.Stream.Snapshot()
+	_, lineCount, _ := e.Text.Stream.Snapshot()
 	return max(lineCount, 1)
 }
 
@@ -195,9 +195,9 @@ func bestLineCount(e *openfiles.Entry) int {
 func contentReady(e *openfiles.Entry) bool {
 	if e.Tier == preview.TierHighlighted {
 		e.SyncContent()
-		return e.Lines != nil
+		return e.Text.Lines != nil
 	}
-	return e.Stream != nil && e.Stream.Done()
+	return e.Text.Stream != nil && e.Text.Stream.Done()
 }
 
 // ensureWindow fetches (or reuses) a TierPlainText entry's on-screen
@@ -206,17 +206,17 @@ func contentReady(e *openfiles.Entry) bool {
 // hasn't changed; if only width changed, the existing window is
 // rewrapped without a fresh disk read.
 func (v *Preview) ensureWindow(e *openfiles.Entry, width, targetLine int) {
-	offsets, lineCount, done := e.Stream.Snapshot()
+	offsets, lineCount, done := e.Text.Stream.Snapshot()
 	if !done {
 		return
 	}
 	targetLine = clamp(targetLine, 1, max(lineCount, 1))
-	windowEnd := e.WindowStartLine + len(e.Lines)
-	inWindow := e.Lines != nil && targetLine-1 >= e.WindowStartLine && targetLine-1 < windowEnd
+	windowEnd := e.Text.WindowStartLine + len(e.Text.Lines)
+	inWindow := e.Text.Lines != nil && targetLine-1 >= e.Text.WindowStartLine && targetLine-1 < windowEnd
 	if inWindow {
-		if e.RowsWidth != width {
-			e.Rows, e.FirstRow = preview.BuildDisplayRows(e.Segs, width)
-			e.RowsWidth = width
+		if e.Text.RowsWidth != width {
+			e.Text.Rows, e.Text.FirstRow = preview.BuildDisplayRows(e.Text.Segs, width)
+			e.Text.RowsWidth = width
 		}
 		return
 	}
@@ -234,11 +234,11 @@ func (v *Preview) ensureWindow(e *openfiles.Entry, width, targetLine int) {
 	for i, l := range lines {
 		segs[i] = []preview.Segment{{Text: l, Category: preview.CategoryText}}
 	}
-	e.Lines = lines
-	e.Segs = segs
-	e.WindowStartLine = start
-	e.Rows, e.FirstRow = preview.BuildDisplayRows(e.Segs, width)
-	e.RowsWidth = width
+	e.Text.Lines = lines
+	e.Text.Segs = segs
+	e.Text.WindowStartLine = start
+	e.Text.Rows, e.Text.FirstRow = preview.BuildDisplayRows(e.Text.Segs, width)
+	e.Text.RowsWidth = width
 }
 
 func (v *Preview) viewportHeight() int {
@@ -277,17 +277,17 @@ func (v *Preview) computedWidth() int {
 // minimum width of 4 digits so the large majority of files (which end up
 // under 10,000 lines) never visibly resize their gutter at all.
 func gutterWidth(e *openfiles.Entry) int {
-	if e.CopyMode {
+	if e.Text.CopyMode {
 		return 0
 	}
 	if e.Tier == preview.TierPlainText {
-		_, lineCount, done := e.Stream.Snapshot()
+		_, lineCount, done := e.Text.Stream.Snapshot()
 		if !done && lineCount < 9999 {
 			lineCount = 9999
 		}
 		return canvas.GutterWidth(lineCount)
 	}
-	return canvas.GutterWidth(len(e.Lines))
+	return canvas.GutterWidth(len(e.Text.Lines))
 }
 
 // ensureWrapped recomputes e's wrapped display rows if width has
@@ -304,11 +304,11 @@ func gutterWidth(e *openfiles.Entry) int {
 // wrap point — an inherent limitation of any fixed-width terminal grid,
 // not something copy mode can fully solve either way.
 func (v *Preview) ensureWrapped(e *openfiles.Entry, width int) {
-	if e.RowsWidth == width && e.Rows != nil {
+	if e.Text.RowsWidth == width && e.Text.Rows != nil {
 		return
 	}
-	e.Rows, e.FirstRow = preview.BuildDisplayRows(e.Segs, width)
-	e.RowsWidth = width
+	e.Text.Rows, e.Text.FirstRow = preview.BuildDisplayRows(e.Text.Segs, width)
+	e.Text.RowsWidth = width
 }
 
 func clamp(v, lo, hi int) int {

@@ -127,17 +127,17 @@ func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
 			return hexGotoLegend, true
 		case v.HexFindPromptOpen:
 			return hexFindPromptLegend, true
-		case e.HexFindScan != nil:
+		case e.Hex.HexFindScan != nil:
 			return hexFindLegendNoMatches, true
-		case e.HexFindQuery != "" && len(e.HexFindMatches) > 0:
+		case e.Hex.HexFindQuery != "" && len(e.Hex.HexFindMatches) > 0:
 			return hexFindLegend, true
-		case e.HexFindQuery != "":
+		case e.Hex.HexFindQuery != "":
 			return hexFindLegendNoMatches, true
 		default:
 			return hexFileLegend, true
 		}
 	}
-	gotoBlocked := v.GotoBlockedPath == e.Path && gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done())
+	gotoBlocked := v.GotoBlockedPath == e.Path && gotoLineBlocked(e.Text.Stream != nil, e.Text.Stream != nil && e.Text.Stream.Done())
 	switch {
 	case v.GotoPromptOpen:
 		return gotoLegend, true
@@ -145,13 +145,13 @@ func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
 		return findPromptLegend, true
 	case gotoBlocked:
 		return nil, false
-	case e.FindScan != nil:
+	case e.Text.FindScan != nil:
 		return findLegendNoMatches, true
-	case e.FindQuery != "" && len(e.FindMatches) > 0:
+	case e.Text.FindQuery != "" && len(e.Text.FindMatches) > 0:
 		return findLegend, true
-	case e.FindQuery != "":
+	case e.Text.FindQuery != "":
 		return findLegendNoMatches, true
-	case e.CopyMode:
+	case e.Text.CopyMode:
 		return fileLegendCopyModeOn, true
 	default:
 		return fileLegend, true
@@ -186,11 +186,11 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	// (find status/prompt text otherwise has no room to also mention
 	// it) — the row's own distinct style (below) reinforces this further.
 	left := rel
-	if e.CopyMode {
+	if e.Text.CopyMode {
 		left = "[copy mode] " + rel
 	}
 
-	gotoBlocked := interactive && v.GotoBlockedPath == e.Path && gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done())
+	gotoBlocked := interactive && v.GotoBlockedPath == e.Path && gotoLineBlocked(e.Text.Stream != nil, e.Text.Stream != nil && e.Text.Stream.Done())
 
 	// legend suppresses entries entirely while the help overlay (§5.4)
 	// is showing, so this row's own legend doesn't compete with the
@@ -214,13 +214,13 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 		text = left
 	case gotoBlocked:
 		text = canvas.LegendText(w, left, withStatus("still indexing, try again shortly", nil))
-	case e.FindScan != nil:
+	case e.Text.FindScan != nil:
 		text = canvas.LegendText(w, left, withStatus(findStatusText(e), legend(findLegendNoMatches)))
-	case e.FindQuery != "" && len(e.FindMatches) > 0:
+	case e.Text.FindQuery != "" && len(e.Text.FindMatches) > 0:
 		text = canvas.LegendText(w, left, withStatus(findStatusText(e), legend(findLegend)))
-	case e.FindQuery != "":
+	case e.Text.FindQuery != "":
 		text = canvas.LegendText(w, left, withStatus(findStatusText(e), legend(findLegendNoMatches)))
-	case e.CopyMode:
+	case e.Text.CopyMode:
 		text = canvas.LegendText(w, left, legend(fileLegendCopyModeOn))
 	default:
 		text = canvas.LegendText(w, rel, legend(v.fileLegendForIdle(e)))
@@ -228,7 +228,7 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 
 	style := canvas.StyleFileTitle
 	switch {
-	case e.CopyMode:
+	case e.Text.CopyMode:
 		style = canvas.StyleCopyModeTitle
 	case gotoBlocked && time.Since(v.GotoBlockedFlashStart) < canvas.FlashDuration:
 		style = canvas.StyleFlashError
@@ -263,10 +263,10 @@ func (v *Preview) boldPathInFileTitleBar(x0, y0 int, text, path string, style tc
 // threshold/minimum-display-duration discipline (SPEC.md §5.3) rather
 // than inventing new timing rules for this second indicator.
 func (v *Preview) fileLegendForIdle(e *openfiles.Entry) []canvas.LegendEntry {
-	if e.Stream == nil {
+	if e.Text.Stream == nil {
 		return fileLegend
 	}
-	elapsed, sinceDone, done := e.Stream.Elapsed(), e.Stream.SinceDone(), e.Stream.Done()
+	elapsed, sinceDone, done := e.Text.Stream.Elapsed(), e.Text.Stream.SinceDone(), e.Text.Stream.Done()
 	if !streamBuildingVisible(elapsed, sinceDone, done, canvas.SpinnerThreshold, streamSpinnerMinDisplayDuration) {
 		return fileLegend
 	}
@@ -330,9 +330,9 @@ func (v *Preview) drawContent(x0, y0, w, h int) {
 	}
 	if !contentReady(e) {
 		msg := "building preview…"
-		if e.Stream != nil {
-			elapsed := e.Stream.Elapsed()
-			if spinner.ShouldShow(e.Stream.Done(), elapsed, canvas.SpinnerThreshold) {
+		if e.Text.Stream != nil {
+			elapsed := e.Text.Stream.Elapsed()
+			if spinner.ShouldShow(e.Text.Stream.Done(), elapsed, canvas.SpinnerThreshold) {
 				frame := spinner.Frame(elapsed, canvas.SpinnerFPS, spinner.DefaultFrames)
 				msg = "building preview " + string(frame)
 			}
@@ -359,19 +359,19 @@ func (v *Preview) drawContent(x0, y0, w, h int) {
 
 	for row := range viewportHeight {
 		y := y0 + row
-		i := e.Scroll + row
-		if i >= len(e.Rows) {
+		i := e.Text.Scroll + row
+		if i >= len(e.Text.Rows) {
 			break
 		}
-		dr := e.Rows[i]
+		dr := e.Text.Rows[i]
 		if gw > 0 {
 			numField := strings.Repeat(" ", digits)
 			if dr.HasNumber {
-				numField = fmt.Sprintf("%*d", digits, e.WindowStartLine+dr.SourceLine+1)
+				numField = fmt.Sprintf("%*d", digits, e.Text.WindowStartLine+dr.SourceLine+1)
 			}
 			v.Canvas.DrawText(x0, y, gw, numField+"  ", canvas.StyleNormal)
 		}
-		v.drawSegments(x0+gw, y, contentWidth, dr.Segments, findHighlightsForRow(e, dr), e.CopyMode)
+		v.drawSegments(x0+gw, y, contentWidth, dr.Segments, findHighlightsForRow(e, dr), e.Text.CopyMode)
 		lastDrawnY = y
 	}
 	if topFlash {
@@ -397,18 +397,18 @@ type findHighlight struct {
 
 // findHighlightsForRow returns row's portion of every in-file find
 // match that overlaps it, converting each match's source-line-relative
-// column range (found against e.Lines, independent of wrapping) into
+// column range (found against e.Text.Lines, independent of wrapping) into
 // row-relative columns via the row's ColStart — a match split across
 // two wrapped rows by a mid-token wrap naturally yields one highlight
 // per row it touches.
 func findHighlightsForRow(e *openfiles.Entry, row preview.DisplayRow) []findHighlight {
-	if len(e.FindMatches) == 0 {
+	if len(e.Text.FindMatches) == 0 {
 		return nil
 	}
 	rowLen := preview.SegmentsRuneLen(row.Segments)
 	var out []findHighlight
-	for i, m := range e.FindMatches {
-		if m.Line-e.WindowStartLine != row.SourceLine {
+	for i, m := range e.Text.FindMatches {
+		if m.Line-e.Text.WindowStartLine != row.SourceLine {
 			continue
 		}
 		start := m.Col - row.ColStart
@@ -418,7 +418,7 @@ func findHighlightsForRow(e *openfiles.Entry, row preview.DisplayRow) []findHigh
 		}
 		start = max(start, 0)
 		end = min(end, rowLen)
-		out = append(out, findHighlight{Start: start, End: end, Current: i == e.FindCurrent})
+		out = append(out, findHighlight{Start: start, End: end, Current: i == e.Text.FindCurrent})
 	}
 	return out
 }

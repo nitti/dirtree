@@ -28,17 +28,17 @@ import (
 // unread.
 func (v *Preview) clearFind() {
 	e := v.Files.DisplayedEntry()
-	if e == nil || (e.FindQuery == "" && e.FindScan == nil) {
+	if e == nil || (e.Text.FindQuery == "" && e.Text.FindScan == nil) {
 		return
 	}
-	if e.FindScan != nil {
-		e.FindScan.Cancel()
-		e.FindScan = nil
+	if e.Text.FindScan != nil {
+		e.Text.FindScan.Cancel()
+		e.Text.FindScan = nil
 	}
-	e.FindQuery = ""
-	e.FindMatches = nil
-	e.FindCurrent = -1
-	e.FindWrapNote = ""
+	e.Text.FindQuery = ""
+	e.Text.FindMatches = nil
+	e.Text.FindCurrent = -1
+	e.Text.FindWrapNote = ""
 }
 
 // handleFindPromptKey handles input while the in-file find prompt is
@@ -88,26 +88,26 @@ func (v *Preview) performFind(query string) {
 		return
 	}
 
-	if e.FindScan != nil {
-		e.FindScan.Cancel()
-		e.FindScan = nil
+	if e.Text.FindScan != nil {
+		e.Text.FindScan.Cancel()
+		e.Text.FindScan = nil
 	}
-	e.FindQuery = query
-	e.FindMatches = nil
-	e.FindCurrent = -1
-	e.FindWrapNote = ""
+	e.Text.FindQuery = query
+	e.Text.FindMatches = nil
+	e.Text.FindCurrent = -1
+	e.Text.FindWrapNote = ""
 	if query == "" {
 		return
 	}
 
 	if e.Tier == preview.TierPlainText {
-		e.FindScan = find.StartScan(e.Path, query)
+		e.Text.FindScan = find.StartScan(e.Path, query)
 		return
 	}
 
 	v.ensureWrapped(e, v.computedWidth())
-	e.FindMatches = find.InLines(e.Lines, query)
-	if len(e.FindMatches) == 0 {
+	e.Text.FindMatches = find.InLines(e.Text.Lines, query)
+	if len(e.Text.FindMatches) == 0 {
 		return
 	}
 	v.seedFindCurrent(e)
@@ -122,21 +122,21 @@ func (v *Preview) performFind(query string) {
 func (v *Preview) seedFindCurrent(e *openfiles.Entry) {
 	startLine := currentTopLine(e) - 1
 	idx := 0
-	for i, m := range e.FindMatches {
+	for i, m := range e.Text.FindMatches {
 		if m.Line >= startLine {
 			idx = i
 			break
 		}
 	}
-	if e.FindMatches[idx].Line < startLine {
-		e.FindWrapNote = "wrapped to top"
+	if e.Text.FindMatches[idx].Line < startLine {
+		e.Text.FindWrapNote = "wrapped to top"
 	}
-	e.FindCurrent = idx
+	e.Text.FindCurrent = idx
 	v.scrollToFindMatch(e)
 }
 
 // syncFindScan picks up a finished TierPlainText find scan's result
-// (docs/STREAMING_PREVIEW_DESIGN.md §9): once e.FindScan reports done,
+// (docs/STREAMING_PREVIEW_DESIGN.md §9): once e.Text.FindScan reports done,
 // its matches are copied into FindMatches and the current match is
 // seeded and scrolled to exactly like a synchronous find's result would
 // be, then FindScan is cleared so this only ever runs once per scan. A
@@ -145,15 +145,15 @@ func (v *Preview) seedFindCurrent(e *openfiles.Entry) {
 // match highlighting/status both reflect current state without any
 // caller needing to poll for it explicitly.
 func (v *Preview) syncFindScan(e *openfiles.Entry) {
-	if e == nil || e.FindScan == nil {
+	if e == nil || e.Text == nil || e.Text.FindScan == nil {
 		return
 	}
-	matches, done := e.FindScan.Snapshot()
+	matches, done := e.Text.FindScan.Snapshot()
 	if !done {
 		return
 	}
-	e.FindScan = nil
-	e.FindMatches = matches
+	e.Text.FindScan = nil
+	e.Text.FindMatches = matches
 	if len(matches) == 0 {
 		return
 	}
@@ -167,19 +167,19 @@ func (v *Preview) syncFindScan(e *openfiles.Entry) {
 // there's no displayed entry or it has no matches.
 func (v *Preview) findStep(delta int) {
 	e := v.Files.DisplayedEntry()
-	if e == nil || len(e.FindMatches) == 0 {
+	if e == nil || len(e.Text.FindMatches) == 0 {
 		return
 	}
-	next := tree.MoveSelection(e.FindCurrent, delta, len(e.FindMatches))
+	next := tree.MoveSelection(e.Text.FindCurrent, delta, len(e.Text.FindMatches))
 	switch {
-	case delta > 0 && next < e.FindCurrent:
-		e.FindWrapNote = "wrapped to top"
-	case delta < 0 && next > e.FindCurrent:
-		e.FindWrapNote = "wrapped to bottom"
+	case delta > 0 && next < e.Text.FindCurrent:
+		e.Text.FindWrapNote = "wrapped to top"
+	case delta < 0 && next > e.Text.FindCurrent:
+		e.Text.FindWrapNote = "wrapped to bottom"
 	default:
-		e.FindWrapNote = ""
+		e.Text.FindWrapNote = ""
 	}
-	e.FindCurrent = next
+	e.Text.FindCurrent = next
 	v.scrollToFindMatch(e)
 }
 
@@ -191,10 +191,10 @@ func (v *Preview) findStep(delta int) {
 // (docs/STREAMING_PREVIEW_DESIGN.md §8, §9) — the window is fetched to
 // cover it first, the same way goto-line already does.
 func (v *Preview) scrollToFindMatch(e *openfiles.Entry) {
-	if e.FindCurrent < 0 || e.FindCurrent >= len(e.FindMatches) {
+	if e.Text.FindCurrent < 0 || e.Text.FindCurrent >= len(e.Text.FindMatches) {
 		return
 	}
-	m := e.FindMatches[e.FindCurrent]
+	m := e.Text.FindMatches[e.Text.FindCurrent]
 	if e.Tier == preview.TierPlainText {
 		v.ensureWindow(e, v.computedWidth(), m.Line+1)
 	}
@@ -203,32 +203,32 @@ func (v *Preview) scrollToFindMatch(e *openfiles.Entry) {
 		return
 	}
 	h := v.viewportHeight()
-	if row < e.Scroll {
-		e.Scroll = row
+	if row < e.Text.Scroll {
+		e.Text.Scroll = row
 	}
-	if row >= e.Scroll+h {
-		e.Scroll = row - h + 1
+	if row >= e.Text.Scroll+h {
+		e.Text.Scroll = row - h + 1
 	}
-	e.Scroll = clamp(e.Scroll, 0, v.maxScroll(e, h))
+	e.Text.Scroll = clamp(e.Text.Scroll, 0, v.maxScroll(e, h))
 }
 
-// findMatchRow returns the index into e.Rows of the specific wrapped
+// findMatchRow returns the index into e.Text.Rows of the specific wrapped
 // row m falls in (not just its source line's first row, since a long
 // line's match may land in a continuation row) — ensureWrapped/
 // ensureWindow must already have been called. m.Line is an absolute
-// source line number; e.Rows' SourceLine is relative to e.WindowStartLine
+// source line number; e.Text.Rows' SourceLine is relative to e.Text.WindowStartLine
 // (always 0 for TierHighlighted, so this is a no-op subtraction there).
 // Falls back to the line's first row if m's column can't be located in
 // any of its rows (shouldn't happen for a match found against the same
 // content, but degrades safely rather than losing the jump entirely).
 func findMatchRow(e *openfiles.Entry, m find.Match) int {
-	line := m.Line - e.WindowStartLine
-	start, ok := e.FirstRow[line]
+	line := m.Line - e.Text.WindowStartLine
+	start, ok := e.Text.FirstRow[line]
 	if !ok {
 		return -1
 	}
-	for i := start; i < len(e.Rows); i++ {
-		r := e.Rows[i]
+	for i := start; i < len(e.Text.Rows); i++ {
+		r := e.Text.Rows[i]
 		if r.SourceLine != line {
 			break
 		}
@@ -258,20 +258,20 @@ func withStatus(status string, legend []canvas.LegendEntry) []canvas.LegendEntry
 // transient note when the most recent next/previous step wrapped
 // around either end of the match list.
 func findStatusText(e *openfiles.Entry) string {
-	if e.FindScan != nil {
-		elapsed := e.FindScan.Elapsed()
+	if e.Text.FindScan != nil {
+		elapsed := e.Text.FindScan.Elapsed()
 		if elapsed < canvas.SpinnerThreshold {
-			return "/" + e.FindQuery
+			return "/" + e.Text.FindQuery
 		}
 		frame := spinner.Frame(elapsed, canvas.SpinnerFPS, spinner.DefaultFrames)
-		return fmt.Sprintf("/%s  searching %c", e.FindQuery, frame)
+		return fmt.Sprintf("/%s  searching %c", e.Text.FindQuery, frame)
 	}
-	if len(e.FindMatches) == 0 {
-		return "/" + e.FindQuery + "  no matches"
+	if len(e.Text.FindMatches) == 0 {
+		return "/" + e.Text.FindQuery + "  no matches"
 	}
-	status := fmt.Sprintf("/%s  %d/%d", e.FindQuery, e.FindCurrent+1, len(e.FindMatches))
-	if e.FindWrapNote != "" {
-		status += " (" + e.FindWrapNote + ")"
+	status := fmt.Sprintf("/%s  %d/%d", e.Text.FindQuery, e.Text.FindCurrent+1, len(e.Text.FindMatches))
+	if e.Text.FindWrapNote != "" {
+		status += " (" + e.Text.FindWrapNote + ")"
 	}
 	return status
 }

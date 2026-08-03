@@ -425,7 +425,7 @@ func TestHexScrollBumpsAtRestEdges(t *testing.T) {
 		t.Fatalf("expected no bump from an ordinary in-bounds scroll, got TopBumpPath=%q BottomBumpPath=%q", v.TopBumpPath, v.BottomBumpPath)
 	}
 
-	e.HexOffset = 0
+	e.Hex.HexOffset = 0
 	v.BottomBumpPath = ""
 	v.hexScroll(1000) // scroll far past the bottom: first landing on the last row doesn't bump
 	if v.BottomBumpPath != "" {
@@ -509,23 +509,23 @@ func TestHandleKeyHexNavigation(t *testing.T) {
 	n := v.hexBytesPerRow(e)
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
-	if e.HexOffset != int64(n) {
-		t.Fatalf("after Down, HexOffset = %d, want %d", e.HexOffset, n)
+	if e.Hex.HexOffset != int64(n) {
+		t.Fatalf("after Down, HexOffset = %d, want %d", e.Hex.HexOffset, n)
 	}
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone))
-	if e.HexOffset != 0 {
-		t.Fatalf("after Up, HexOffset = %d, want 0", e.HexOffset)
+	if e.Hex.HexOffset != 0 {
+		t.Fatalf("after Up, HexOffset = %d, want 0", e.Hex.HexOffset)
 	}
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
-	if want := hexMaxOffset(e.Size, n, v.viewportHeight()); e.HexOffset != want {
-		t.Fatalf("after End, HexOffset = %d, want %d", e.HexOffset, want)
+	if want := hexMaxOffset(e.Size, n, v.viewportHeight()); e.Hex.HexOffset != want {
+		t.Fatalf("after End, HexOffset = %d, want %d", e.Hex.HexOffset, want)
 	}
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModNone))
-	if e.HexOffset != 0 {
-		t.Fatalf("after Home, HexOffset = %d, want 0", e.HexOffset)
+	if e.Hex.HexOffset != 0 {
+		t.Fatalf("after Home, HexOffset = %d, want 0", e.Hex.HexOffset)
 	}
 }
 
@@ -567,8 +567,8 @@ func TestHandleKeyHexGotoOffset(t *testing.T) {
 
 	n := v.hexBytesPerRow(e)
 	want := clampHexOffset(0x64, e.Size, n, v.viewportHeight())
-	if e.HexOffset != want {
-		t.Fatalf("HexOffset = %d, want %d", e.HexOffset, want)
+	if e.Hex.HexOffset != want {
+		t.Fatalf("HexOffset = %d, want %d", e.Hex.HexOffset, want)
 	}
 }
 
@@ -607,23 +607,23 @@ func TestHandleKeyHexFindEndToEnd(t *testing.T) {
 	if v.HexFindPromptOpen {
 		t.Fatal("expected hex-find prompt closed after Enter")
 	}
-	if e.HexFindScan == nil {
+	if e.Hex.HexFindScan == nil {
 		t.Fatal("expected a background hex-find scan to have started")
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
-	for e.HexFindScan != nil && time.Now().Before(deadline) {
+	for e.Hex.HexFindScan != nil && time.Now().Before(deadline) {
 		v.syncHexFindScan(e)
 		time.Sleep(time.Millisecond)
 	}
-	if e.HexFindScan != nil {
+	if e.Hex.HexFindScan != nil {
 		t.Fatal("hex-find scan did not finish in time")
 	}
-	if len(e.HexFindMatches) != 1 || e.HexFindMatches[0].Offset != 3 {
-		t.Fatalf("expected one match at offset 3, got %v", e.HexFindMatches)
+	if len(e.Hex.HexFindMatches) != 1 || e.Hex.HexFindMatches[0].Offset != 3 {
+		t.Fatalf("expected one match at offset 3, got %v", e.Hex.HexFindMatches)
 	}
-	if e.HexFindCurrent != 0 {
-		t.Fatalf("expected HexFindCurrent = 0, got %d", e.HexFindCurrent)
+	if e.Hex.HexFindCurrent != 0 {
+		t.Fatalf("expected HexFindCurrent = 0, got %d", e.Hex.HexFindCurrent)
 	}
 }
 

@@ -156,7 +156,7 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 			v.GotoPromptOpen = true
 			v.GotoInput = ""
 		case e != nil:
-			if gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done()) {
+			if gotoLineBlocked(e.Text.Stream != nil, e.Text.Stream != nil && e.Text.Stream.Done()) {
 				v.GotoBlockedPath = e.Path
 				v.GotoBlockedFlashStart = time.Now()
 			} else {
@@ -175,7 +175,7 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 		}
 	case ev.Rune() == 'c':
 		if !isHex && e != nil {
-			e.CopyMode = !e.CopyMode
+			e.Text.CopyMode = !e.Text.CopyMode
 		}
 	case ev.Rune() == 'n':
 		if isHex {

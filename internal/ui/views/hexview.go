@@ -234,9 +234,9 @@ func (v *Preview) hexScroll(deltaRows int) {
 		return
 	}
 	n := v.hexBytesPerRow(e)
-	old := e.HexOffset
-	e.HexOffset = clampHexOffset(e.HexOffset+int64(deltaRows)*int64(n), e.Size, n, v.viewportHeight())
-	if e.HexOffset == old {
+	old := e.Hex.HexOffset
+	e.Hex.HexOffset = clampHexOffset(e.Hex.HexOffset+int64(deltaRows)*int64(n), e.Size, n, v.viewportHeight())
+	if e.Hex.HexOffset == old {
 		v.bumpEdge(e, deltaRows)
 	}
 }
@@ -245,7 +245,7 @@ func (v *Preview) hexScroll(deltaRows int) {
 // Home binding).
 func (v *Preview) hexJumpStart() {
 	if e := v.Files.DisplayedEntry(); e != nil {
-		e.HexOffset = 0
+		e.Hex.HexOffset = 0
 	}
 }
 
@@ -258,7 +258,7 @@ func (v *Preview) hexJumpEnd() {
 	if e == nil {
 		return
 	}
-	e.HexOffset = hexMaxOffset(e.Size, v.hexBytesPerRow(e), v.viewportHeight())
+	e.Hex.HexOffset = hexMaxOffset(e.Size, v.hexBytesPerRow(e), v.viewportHeight())
 }
 
 // parseOffset parses a goto-offset prompt's input (SPEC.md §2.1a) as a
@@ -310,17 +310,17 @@ func (v *Preview) handleHexFindPromptKey(ev *tcell.EventKey) {
 // and no active query or in-progress scan.
 func (v *Preview) clearHexFind() {
 	e := v.Files.DisplayedEntry()
-	if e == nil || (e.HexFindQuery == "" && e.HexFindScan == nil) {
+	if e == nil || (e.Hex.HexFindQuery == "" && e.Hex.HexFindScan == nil) {
 		return
 	}
-	if e.HexFindScan != nil {
-		e.HexFindScan.Cancel()
-		e.HexFindScan = nil
+	if e.Hex.HexFindScan != nil {
+		e.Hex.HexFindScan.Cancel()
+		e.Hex.HexFindScan = nil
 	}
-	e.HexFindQuery = ""
-	e.HexFindMatches = nil
-	e.HexFindCurrent = -1
-	e.HexFindWrapNote = ""
+	e.Hex.HexFindQuery = ""
+	e.Hex.HexFindMatches = nil
+	e.Hex.HexFindCurrent = -1
+	e.Hex.HexFindWrapNote = ""
 }
 
 // performHexFind executes a hex-view find (SPEC.md §2.1a): always a
@@ -335,35 +335,35 @@ func (v *Preview) performHexFind(query string) {
 	if e == nil {
 		return
 	}
-	if e.HexFindScan != nil {
-		e.HexFindScan.Cancel()
-		e.HexFindScan = nil
+	if e.Hex.HexFindScan != nil {
+		e.Hex.HexFindScan.Cancel()
+		e.Hex.HexFindScan = nil
 	}
-	e.HexFindQuery = query
-	e.HexFindMatches = nil
-	e.HexFindCurrent = -1
-	e.HexFindWrapNote = ""
+	e.Hex.HexFindQuery = query
+	e.Hex.HexFindMatches = nil
+	e.Hex.HexFindCurrent = -1
+	e.Hex.HexFindWrapNote = ""
 	if query == "" {
 		return
 	}
-	e.HexFindScan = hexfind.StartScan(e.Path, query)
+	e.Hex.HexFindScan = hexfind.StartScan(e.Path, query)
 }
 
 // syncHexFindScan picks up a finished hex-find scan's result (SPEC.md
-// §2.1a), mirroring syncFindScan (find.go): once e.HexFindScan reports
+// §2.1a), mirroring syncFindScan (find.go): once e.Hex.HexFindScan reports
 // done, its matches are copied into HexFindMatches and the current match
 // is seeded, then HexFindScan is cleared so this only ever runs once per
 // scan. A no-op while no scan is running or it hasn't finished yet.
 func (v *Preview) syncHexFindScan(e *openfiles.Entry) {
-	if e == nil || e.HexFindScan == nil {
+	if e == nil || e.Hex == nil || e.Hex.HexFindScan == nil {
 		return
 	}
-	matches, done := e.HexFindScan.Snapshot()
+	matches, done := e.Hex.HexFindScan.Snapshot()
 	if !done {
 		return
 	}
-	e.HexFindScan = nil
-	e.HexFindMatches = matches
+	e.Hex.HexFindScan = nil
+	e.Hex.HexFindMatches = matches
 	if len(matches) == 0 {
 		return
 	}
@@ -377,16 +377,16 @@ func (v *Preview) syncHexFindScan(e *openfiles.Entry) {
 // seedFindCurrent (find.go).
 func (v *Preview) seedHexFindCurrent(e *openfiles.Entry) {
 	idx := 0
-	for i, m := range e.HexFindMatches {
-		if m.Offset >= e.HexOffset {
+	for i, m := range e.Hex.HexFindMatches {
+		if m.Offset >= e.Hex.HexOffset {
 			idx = i
 			break
 		}
 	}
-	if e.HexFindMatches[idx].Offset < e.HexOffset {
-		e.HexFindWrapNote = "wrapped to top"
+	if e.Hex.HexFindMatches[idx].Offset < e.Hex.HexOffset {
+		e.Hex.HexFindWrapNote = "wrapped to top"
 	}
-	e.HexFindCurrent = idx
+	e.Hex.HexFindCurrent = idx
 	v.scrollToHexFindMatch(e)
 }
 
@@ -396,19 +396,19 @@ func (v *Preview) seedHexFindCurrent(e *openfiles.Entry) {
 // or it has no matches.
 func (v *Preview) hexFindStep(delta int) {
 	e := v.Files.DisplayedEntry()
-	if e == nil || len(e.HexFindMatches) == 0 {
+	if e == nil || len(e.Hex.HexFindMatches) == 0 {
 		return
 	}
-	next := tree.MoveSelection(e.HexFindCurrent, delta, len(e.HexFindMatches))
+	next := tree.MoveSelection(e.Hex.HexFindCurrent, delta, len(e.Hex.HexFindMatches))
 	switch {
-	case delta > 0 && next < e.HexFindCurrent:
-		e.HexFindWrapNote = "wrapped to top"
-	case delta < 0 && next > e.HexFindCurrent:
-		e.HexFindWrapNote = "wrapped to bottom"
+	case delta > 0 && next < e.Hex.HexFindCurrent:
+		e.Hex.HexFindWrapNote = "wrapped to top"
+	case delta < 0 && next > e.Hex.HexFindCurrent:
+		e.Hex.HexFindWrapNote = "wrapped to bottom"
 	default:
-		e.HexFindWrapNote = ""
+		e.Hex.HexFindWrapNote = ""
 	}
-	e.HexFindCurrent = next
+	e.Hex.HexFindCurrent = next
 	v.scrollToHexFindMatch(e)
 }
 
@@ -417,20 +417,20 @@ func (v *Preview) hexFindStep(delta int) {
 // "only scroll if it's not already visible" rule scrollToFindMatch
 // (find.go) uses. A no-op if there is no current match.
 func (v *Preview) scrollToHexFindMatch(e *openfiles.Entry) {
-	if e.HexFindCurrent < 0 || e.HexFindCurrent >= len(e.HexFindMatches) {
+	if e.Hex.HexFindCurrent < 0 || e.Hex.HexFindCurrent >= len(e.Hex.HexFindMatches) {
 		return
 	}
-	m := e.HexFindMatches[e.HexFindCurrent]
+	m := e.Hex.HexFindMatches[e.Hex.HexFindCurrent]
 	n := v.hexBytesPerRow(e)
 	rowStart := m.Offset - m.Offset%int64(n)
 	h := int64(max(v.viewportHeight(), 1))
-	if rowStart < e.HexOffset {
-		e.HexOffset = rowStart
+	if rowStart < e.Hex.HexOffset {
+		e.Hex.HexOffset = rowStart
 	}
-	if rowStart >= e.HexOffset+h*int64(n) {
-		e.HexOffset = rowStart - (h-1)*int64(n)
+	if rowStart >= e.Hex.HexOffset+h*int64(n) {
+		e.Hex.HexOffset = rowStart - (h-1)*int64(n)
 	}
-	e.HexOffset = clampHexOffset(e.HexOffset, e.Size, n, v.viewportHeight())
+	e.Hex.HexOffset = clampHexOffset(e.Hex.HexOffset, e.Size, n, v.viewportHeight())
 }
 
 // hexFindStatusText renders the hex view's find status (SPEC.md
@@ -438,20 +438,20 @@ func (v *Preview) scrollToHexFindMatch(e *openfiles.Entry) {
 // spinner while a scan is in flight, match position/count once one has
 // finished, and the transient wrap note.
 func hexFindStatusText(e *openfiles.Entry) string {
-	if e.HexFindScan != nil {
-		elapsed := e.HexFindScan.Elapsed()
+	if e.Hex.HexFindScan != nil {
+		elapsed := e.Hex.HexFindScan.Elapsed()
 		if elapsed < canvas.SpinnerThreshold {
-			return "/" + e.HexFindQuery
+			return "/" + e.Hex.HexFindQuery
 		}
 		frame := spinner.Frame(elapsed, canvas.SpinnerFPS, spinner.DefaultFrames)
-		return fmt.Sprintf("/%s  searching %c", e.HexFindQuery, frame)
+		return fmt.Sprintf("/%s  searching %c", e.Hex.HexFindQuery, frame)
 	}
-	if len(e.HexFindMatches) == 0 {
-		return "/" + e.HexFindQuery + "  no matches"
+	if len(e.Hex.HexFindMatches) == 0 {
+		return "/" + e.Hex.HexFindQuery + "  no matches"
 	}
-	status := fmt.Sprintf("/%s  %d/%d", e.HexFindQuery, e.HexFindCurrent+1, len(e.HexFindMatches))
-	if e.HexFindWrapNote != "" {
-		status += " (" + e.HexFindWrapNote + ")"
+	status := fmt.Sprintf("/%s  %d/%d", e.Hex.HexFindQuery, e.Hex.HexFindCurrent+1, len(e.Hex.HexFindMatches))
+	if e.Hex.HexFindWrapNote != "" {
+		status += " (" + e.Hex.HexFindWrapNote + ")"
 	}
 	return status
 }
@@ -501,11 +501,11 @@ func (v *Preview) drawHexFileTitleBar(x0, y0, w int, interactive bool, e *openfi
 		text = canvas.LegendText(w, "/"+v.HexFindInput, legend(hexFindPromptLegend))
 	case !interactive:
 		text = left
-	case e.HexFindScan != nil:
+	case e.Hex.HexFindScan != nil:
 		text = canvas.LegendText(w, left, withStatus(hexFindStatusText(e), legend(hexFindLegendNoMatches)))
-	case e.HexFindQuery != "" && len(e.HexFindMatches) > 0:
+	case e.Hex.HexFindQuery != "" && len(e.Hex.HexFindMatches) > 0:
 		text = canvas.LegendText(w, left, withStatus(hexFindStatusText(e), legend(hexFindLegend)))
-	case e.HexFindQuery != "":
+	case e.Hex.HexFindQuery != "":
 		text = canvas.LegendText(w, left, withStatus(hexFindStatusText(e), legend(hexFindLegendNoMatches)))
 	default:
 		text = canvas.LegendText(w, left, legend(hexFileLegend))
@@ -532,17 +532,17 @@ type hexFindHighlight struct {
 // match overlapping the row starting at rowOffset, in row-relative byte
 // indices — mirrors findHighlightsForRow (draw.go).
 func hexFindHighlightsForRow(e *openfiles.Entry, rowOffset int64, rowLen int) []hexFindHighlight {
-	if len(e.HexFindMatches) == 0 {
+	if len(e.Hex.HexFindMatches) == 0 {
 		return nil
 	}
 	var out []hexFindHighlight
-	for i, m := range e.HexFindMatches {
+	for i, m := range e.Hex.HexFindMatches {
 		start := int(m.Offset - rowOffset)
 		end := start + int(m.Len)
 		if end <= 0 || start >= rowLen {
 			continue
 		}
-		out = append(out, hexFindHighlight{Start: max(start, 0), End: min(end, rowLen), Current: i == e.HexFindCurrent})
+		out = append(out, hexFindHighlight{Start: max(start, 0), End: min(end, rowLen), Current: i == e.Hex.HexFindCurrent})
 	}
 	return out
 }
@@ -637,9 +637,9 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 		viewportHeight = 0
 	}
 
-	e.HexOffset = clampHexOffset(e.HexOffset, e.Size, n, viewportHeight)
+	e.Hex.HexOffset = clampHexOffset(e.Hex.HexOffset, e.Size, n, viewportHeight)
 
-	data, err := preview.ReadRange(e.Path, e.HexOffset, viewportHeight*n)
+	data, err := preview.ReadRange(e.Path, e.Hex.HexOffset, viewportHeight*n)
 	if err != nil {
 		data = nil
 	}
@@ -655,7 +655,7 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 		}
 		rowEnd := min(rowStart+n, len(data))
 		y := y0 + row
-		v.drawHexRow(x0, y, w, gw, n, e.HexOffset+int64(rowStart), data[rowStart:rowEnd], e)
+		v.drawHexRow(x0, y, w, gw, n, e.Hex.HexOffset+int64(rowStart), data[rowStart:rowEnd], e)
 		lastDrawnY = y
 	}
 	if topFlash {

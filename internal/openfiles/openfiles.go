@@ -15,9 +15,16 @@ import (
 	"github.com/nitti/dirtree/internal/preview"
 )
 
-// Entry is one open file: its resolved absolute path, loaded preview
-// content, and its own independent scroll/goto-line/in-file-find state
-// (SPEC.md §2.1, §2.2, §2.4).
+// Entry is one open file: its resolved absolute path and its own
+// independent per-tier state (SPEC.md §2.1, §2.2, §2.4). Text and Hex
+// hold that tier-specific state; exactly one is ever non-nil at a
+// time, mirroring the Tier-decides-validity pattern used everywhere
+// else in this codebase (Text non-nil iff Tier != preview.TierBinary,
+// Hex non-nil iff Tier == preview.TierBinary). Open and Reload always
+// allocate a fresh Text or Hex for whichever tier is decided rather
+// than leaving a stale struct from an abandoned tier reachable — a
+// tier flip (Reload) discards the old one entirely rather than
+// carrying any of its fields forward.
 type Entry struct {
 	Path string
 
@@ -27,6 +34,29 @@ type Entry struct {
 	// sticky across the entry's lifetime.
 	Tier preview.Tier
 
+	// ModTime is the file's mtime as of the last successful load or
+	// reload (SPEC.md §6.1a), used by Reload to detect whether the file
+	// has changed on disk since without re-reading its content on every
+	// check.
+	ModTime time.Time
+
+	// Size is the file's byte length as of the last successful
+	// load/reload, sized once at open/reload time (the same Stat call
+	// that sets ModTime) rather than re-stat'd every frame. Meaningful
+	// today only for a preview.TierBinary entry — it sizes the hex
+	// view's offset gutter and bounds HexOffset's top end — but kept
+	// here rather than on HexState since it falls out of the same Stat
+	// call regardless of tier.
+	Size int64
+
+	Text *TextState
+	Hex  *HexState
+}
+
+// TextState is the state of a text-tier (TierHighlighted or
+// TierPlainText) entry: its resident/windowed content, scroll and
+// wrap-cache, in-file find, and copy mode.
+type TextState struct {
 	// Lines/Segs hold this entry's resident content. For a
 	// preview.TierHighlighted entry, this is the whole file, populated
 	// from Stream once its background pass finishes (nil until then).
@@ -48,12 +78,6 @@ type Entry struct {
 	// reflects (SPEC.md §5.2), and, for TierPlainText, what windowed
 	// reads seek through (§8).
 	Stream *preview.StreamIndex
-
-	// ModTime is the file's mtime as of the last successful load or
-	// reload (SPEC.md §6.1a), used by Reload to detect whether the file
-	// has changed on disk since without re-reading its content on every
-	// check.
-	ModTime time.Time
 
 	// Scroll is the entry's display-row scroll offset, preserved across
 	// switches to other entries and restored exactly when this one is
@@ -98,31 +122,30 @@ type Entry struct {
 	// preference that had nothing to do with the file you're switching
 	// to.
 	CopyMode bool
+}
 
-	// Size and HexOffset are meaningful only for a preview.TierBinary
-	// entry (see Tier's doc comment). Size is the file's byte length as
-	// of the last successful load/reload, sized once at open/reload time
-	// rather than re-stat'd every frame; it sizes the hex view's offset
-	// gutter and bounds HexOffset's top end. HexOffset is the byte offset
-	// of the first byte shown in the hex view's viewport — the TierBinary
-	// analog of Scroll's display-row offset for text tiers, kept as a
-	// separate field rather than overloading Scroll since the two count
-	// fundamentally different things (rows vs. bytes) and a tier flip
-	// (Reload) always resets whichever one applied to the old tier.
-	Size      int64
+// HexState is the state of a preview.TierBinary (hex view) entry: its
+// viewport offset and hex-view find state.
+type HexState struct {
+	// HexOffset is the byte offset of the first byte shown in the hex
+	// view's viewport — the TierBinary analog of TextState.Scroll's
+	// display-row offset, kept as a separate field rather than
+	// overloading Scroll since the two count fundamentally different
+	// things (rows vs. bytes), and a tier flip (Reload) always
+	// discards whichever state applied to the old tier anyway.
 	HexOffset int64
 
 	// Hex-view find state (SPEC.md §2.1a), the TierBinary analog of
-	// FindQuery/FindMatches/FindCurrent/FindWrapNote above — kept as its
-	// own separate set of fields rather than shared with them, since
-	// hexfind.Match addresses content by byte offset rather than the
-	// line/rune-column pair find.Match uses, and the two coordinate
-	// systems don't compose. HexFindScan is always used for a TierBinary
-	// entry's find (never left nil the way FindScan is for a
-	// TierHighlighted entry, which searches its resident Lines
-	// synchronously instead): a hex view never holds a file's full byte
-	// content resident regardless of size, so every hex find is a
-	// background scan.
+	// TextState's FindQuery/FindMatches/FindCurrent/FindWrapNote —
+	// kept as its own separate set of fields rather than shared with
+	// them, since hexfind.Match addresses content by byte offset
+	// rather than the line/rune-column pair find.Match uses, and the
+	// two coordinate systems don't compose. HexFindScan is always used
+	// for a TierBinary entry's find (never left nil the way FindScan
+	// is for a TierHighlighted entry, which searches its resident
+	// Lines synchronously instead): a hex view never holds a file's
+	// full byte content resident regardless of size, so every hex find
+	// is a background scan.
 	HexFindQuery    string
 	HexFindMatches  []hexfind.Match
 	HexFindCurrent  int
@@ -234,15 +257,15 @@ func (l *List) DisplayedEntry() *Entry {
 // Lines/Segs rather than assuming Open/Reload populated them
 // synchronously, since that work now happens in the background.
 func (e *Entry) SyncContent() {
-	if e.Tier != preview.TierHighlighted || e.Lines != nil || e.Stream == nil {
+	if e.Tier != preview.TierHighlighted || e.Text.Lines != nil || e.Text.Stream == nil {
 		return
 	}
-	lines, segs := e.Stream.Content()
+	lines, segs := e.Text.Stream.Content()
 	if lines == nil {
 		return
 	}
-	e.Lines = lines
-	e.Segs = segs
+	e.Text.Lines = lines
+	e.Text.Segs = segs
 }
 
 // evictContent frees e's resident Lines/Segs — the memory-heavy
@@ -264,12 +287,12 @@ func (e *Entry) SyncContent() {
 // was already evicted) — nothing to evict, and restarting an
 // already-running or not-yet-started pass would just be wasted work.
 func (e *Entry) evictContent() {
-	if e.Tier != preview.TierHighlighted || e.Lines == nil {
+	if e.Tier != preview.TierHighlighted || e.Text.Lines == nil {
 		return
 	}
-	e.Lines = nil
-	e.Segs = nil
-	e.Stream = preview.StartStream(e.Path, e.Tier)
+	e.Text.Lines = nil
+	e.Text.Segs = nil
+	e.Text.Stream = preview.StartStream(e.Path, e.Tier)
 }
 
 // Open implements SPEC.md §2.2's open semantics for a resolved absolute
@@ -297,7 +320,7 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 		return OpenResult{Outcome: Failed, Message: preview.ErrText(err)}
 	}
 
-	e := &Entry{Path: path, FindCurrent: -1, HexFindCurrent: -1}
+	e := &Entry{Path: path}
 	var size int64
 	if info, err := os.Stat(path); err == nil {
 		e.ModTime = info.ModTime()
@@ -306,9 +329,10 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 	e.Size = size
 	if binary {
 		e.Tier = preview.TierBinary
+		e.Hex = &HexState{HexFindCurrent: -1}
 	} else {
 		e.Tier = preview.TierFor(size)
-		e.Stream = preview.StartStream(path, e.Tier)
+		e.Text = &TextState{FindCurrent: -1, Stream: preview.StartStream(path, e.Tier)}
 	}
 	l.Entries = append(l.Entries, e)
 	l.Displayed = len(l.Entries) - 1
@@ -322,10 +346,13 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 // list position, and displayed status are all untouched, so this never
 // disturbs list order or which entry is currently shown. The wrap
 // cache and any in-file find state are invalidated, since both are
-// derived from content that just changed; Scroll is left as-is and
-// self-clamps the next time the entry is scrolled or displayed, unless
-// the reload also flips the entry's tier (below), in which case Scroll
-// is reset to the top instead.
+// derived from content that just changed; Scroll/HexOffset are left
+// as-is and self-clamp the next time the entry is scrolled or
+// displayed, unless the reload also flips the entry's tier (below), in
+// which case a fresh Text/HexState is allocated and the old one
+// discarded entirely (so the reset to the top falls out naturally,
+// same as a freshly-opened entry never having a stale scroll position
+// to carry forward).
 //
 // The entry's tier (docs/STREAMING_PREVIEW_DESIGN.md §2, §5) is
 // re-decided here from the file's current on-disk size, the same way
@@ -340,12 +367,16 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 // reload for the rest of the session, exactly the unbounded cost the
 // ceiling exists to prevent; a file that shrinks back under the ceiling
 // is symmetrically promoted back to full highlighting. A tier flip
-// resets Scroll to the top: a display-row index means something
-// different under each tier's model (an index into a whole-file wrap
-// cache for TierHighlighted vs. into a small on-screen window for
-// TierPlainText, §8), so there's no meaningful way to carry the old
-// value across the change — it would either point at an arbitrary,
-// unrelated row or fall past the end of a much smaller window.
+// resets Scroll/HexOffset to the top: a display-row index means
+// something different under each tier's model (an index into a
+// whole-file wrap cache for TierHighlighted vs. into a small on-screen
+// window for TierPlainText, §8, vs. a byte offset for TierBinary), so
+// there's no meaningful way to carry the old value across the change —
+// it would either point at an arbitrary, unrelated row or fall past
+// the end of a much smaller window. A tier flip between TierHighlighted
+// and TierPlainText (both still text-tier) also resets CopyMode to
+// false, for the same reason: it's a fresh TextState like any other
+// flip, not a carried-forward one.
 //
 // An entry whose file can no longer be stat'd or read (deleted or
 // permission lost) is left with its last-known content untouched — it
@@ -371,43 +402,51 @@ func (l *List) Reload(capBytes int64) []string {
 		}
 
 		e.Size = info.Size()
+		e.ModTime = info.ModTime()
 		newTier := preview.TierBinary
 		if !binary {
 			newTier = preview.TierFor(info.Size())
 		}
-		if newTier != e.Tier {
-			e.Tier = newTier
-			e.Scroll = 0
-			e.HexOffset = 0
-		}
-		e.Lines = nil
-		e.Segs = nil
-		e.WindowStartLine = 0
-		e.ModTime = info.ModTime()
+		flipped := newTier != e.Tier
+		e.Tier = newTier
+
 		if binary {
-			e.Stream = nil
+			if flipped || e.Hex == nil {
+				e.Hex = &HexState{HexFindCurrent: -1}
+			} else {
+				if e.Hex.HexFindScan != nil {
+					e.Hex.HexFindScan.Cancel()
+				}
+				e.Hex.HexFindQuery = ""
+				e.Hex.HexFindMatches = nil
+				e.Hex.HexFindCurrent = -1
+				e.Hex.HexFindWrapNote = ""
+				e.Hex.HexFindScan = nil
+			}
+			e.Text = nil
 		} else {
-			e.Stream = preview.StartStream(e.Path, e.Tier)
+			stream := preview.StartStream(e.Path, e.Tier)
+			if flipped || e.Text == nil {
+				e.Text = &TextState{FindCurrent: -1}
+			} else {
+				if e.Text.FindScan != nil {
+					e.Text.FindScan.Cancel()
+				}
+				e.Text.Lines = nil
+				e.Text.Segs = nil
+				e.Text.WindowStartLine = 0
+				e.Text.Rows = nil
+				e.Text.FirstRow = nil
+				e.Text.RowsWidth = 0
+				e.Text.FindQuery = ""
+				e.Text.FindMatches = nil
+				e.Text.FindCurrent = -1
+				e.Text.FindWrapNote = ""
+				e.Text.FindScan = nil
+			}
+			e.Text.Stream = stream
+			e.Hex = nil
 		}
-		e.Rows = nil
-		e.FirstRow = nil
-		e.RowsWidth = 0
-		if e.FindScan != nil {
-			e.FindScan.Cancel()
-			e.FindScan = nil
-		}
-		e.FindQuery = ""
-		e.FindMatches = nil
-		e.FindCurrent = -1
-		e.FindWrapNote = ""
-		if e.HexFindScan != nil {
-			e.HexFindScan.Cancel()
-			e.HexFindScan = nil
-		}
-		e.HexFindQuery = ""
-		e.HexFindMatches = nil
-		e.HexFindCurrent = -1
-		e.HexFindWrapNote = ""
 		reloaded = append(reloaded, filepath.Base(e.Path))
 	}
 	return reloaded

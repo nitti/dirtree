@@ -100,13 +100,13 @@ func TestTextFileViewJumpToSetsScrollByLine(t *testing.T) {
 	waitEntryReady(t, res.Entry)
 
 	textFileView{}.jumpTo(v, "20")
-	row, ok := res.Entry.FirstRow[19]
+	row, ok := res.Entry.Text.FirstRow[19]
 	if !ok {
 		t.Fatal("expected line 20's row to be in FirstRow after jumpTo")
 	}
 	want := clamp(row, 0, v.maxScroll(res.Entry, v.viewportHeight()))
-	if res.Entry.Scroll != want {
-		t.Fatalf("after jumpTo(20), Scroll = %d, want %d", res.Entry.Scroll, want)
+	if res.Entry.Text.Scroll != want {
+		t.Fatalf("after jumpTo(20), Scroll = %d, want %d", res.Entry.Text.Scroll, want)
 	}
 	if want == 0 {
 		t.Fatal("test fixture didn't actually exercise a nonzero scroll — widen it")
@@ -134,8 +134,8 @@ func TestHexFileViewJumpToSetsHexOffsetByByte(t *testing.T) {
 	hexFileView{}.jumpTo(v, "64") // hex 64 == decimal 100
 	n := v.hexBytesPerRow(res.Entry)
 	want := clampHexOffset(0x64, res.Entry.Size, n, v.viewportHeight())
-	if res.Entry.HexOffset != want {
-		t.Fatalf("after jumpTo(\"64\"), HexOffset = %d, want %d", res.Entry.HexOffset, want)
+	if res.Entry.Hex.HexOffset != want {
+		t.Fatalf("after jumpTo(\"64\"), HexOffset = %d, want %d", res.Entry.Hex.HexOffset, want)
 	}
 }
 
@@ -182,8 +182,8 @@ func TestTextFileViewGotoRangeHint(t *testing.T) {
 		e    *openfiles.Entry
 		want string
 	}{
-		{"highlighted tier, 3 lines", &openfiles.Entry{Tier: preview.TierHighlighted, Lines: []string{"a", "b", "c"}}, "1-3"},
-		{"highlighted tier, empty file (floors at 1 line)", &openfiles.Entry{Tier: preview.TierHighlighted}, "1-1"},
+		{"highlighted tier, 3 lines", &openfiles.Entry{Tier: preview.TierHighlighted, Text: &openfiles.TextState{Lines: []string{"a", "b", "c"}}}, "1-3"},
+		{"highlighted tier, empty file (floors at 1 line)", &openfiles.Entry{Tier: preview.TierHighlighted, Text: &openfiles.TextState{}}, "1-1"},
 	}
 	for _, c := range cases {
 		if got := (textFileView{}).gotoRangeHint(c.e); got != c.want {
@@ -215,7 +215,7 @@ func TestHexFileViewGotoRangeHint(t *testing.T) {
 // outside this package) dispatches through fileViewFor the same way
 // the title bar's own rendering does.
 func TestGotoLabelDispatchesOnTier(t *testing.T) {
-	textEntry := &openfiles.Entry{Tier: preview.TierHighlighted, Lines: []string{"a"}}
+	textEntry := &openfiles.Entry{Tier: preview.TierHighlighted, Text: &openfiles.TextState{Lines: []string{"a"}}}
 	hexEntry := &openfiles.Entry{Tier: preview.TierBinary, Size: 10}
 
 	files := openfiles.New()

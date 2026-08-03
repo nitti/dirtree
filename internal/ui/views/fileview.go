@@ -91,7 +91,7 @@ func (hexFileView) jumpTo(v *Preview, input string) {
 	if !ok {
 		return
 	}
-	e.HexOffset = clampHexOffset(offset, e.Size, v.hexBytesPerRow(e), v.viewportHeight())
+	e.Hex.HexOffset = clampHexOffset(offset, e.Size, v.hexBytesPerRow(e), v.viewportHeight())
 }
 
 func (textFileView) gotoLabel() string { return "goto line: " }

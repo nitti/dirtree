@@ -249,10 +249,10 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 	reset := func() {
 		v.GotoPromptOpen = false
 		v.FindPromptOpen = false
-		e.CopyMode = false
-		e.FindQuery = ""
-		e.FindMatches = nil
-		e.FindScan = nil
+		e.Text.CopyMode = false
+		e.Text.FindQuery = ""
+		e.Text.FindMatches = nil
+		e.Text.FindScan = nil
 	}
 
 	t.Run("no displayed entry", func(t *testing.T) {
@@ -294,7 +294,7 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 
 	t.Run("find scan running", func(t *testing.T) {
 		reset()
-		e.FindScan = &find.Scan{}
+		e.Text.FindScan = &find.Scan{}
 		got, ok := v.CurrentFileLegend()
 		if !ok || &got[0] != &findLegendNoMatches[0] {
 			t.Errorf("CurrentFileLegend() = (%v, %v), want findLegendNoMatches", got, ok)
@@ -303,8 +303,8 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 
 	t.Run("find query with matches", func(t *testing.T) {
 		reset()
-		e.FindQuery = "one"
-		e.FindMatches = []find.Match{{Line: 0, Col: 0, Len: 3}}
+		e.Text.FindQuery = "one"
+		e.Text.FindMatches = []find.Match{{Line: 0, Col: 0, Len: 3}}
 		got, ok := v.CurrentFileLegend()
 		if !ok || &got[0] != &findLegend[0] {
 			t.Errorf("CurrentFileLegend() = (%v, %v), want findLegend", got, ok)
@@ -313,7 +313,7 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 
 	t.Run("find query no matches", func(t *testing.T) {
 		reset()
-		e.FindQuery = "zzz"
+		e.Text.FindQuery = "zzz"
 		got, ok := v.CurrentFileLegend()
 		if !ok || &got[0] != &findLegendNoMatches[0] {
 			t.Errorf("CurrentFileLegend() = (%v, %v), want findLegendNoMatches", got, ok)
@@ -322,7 +322,7 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 
 	t.Run("copy mode", func(t *testing.T) {
 		reset()
-		e.CopyMode = true
+		e.Text.CopyMode = true
 		got, ok := v.CurrentFileLegend()
 		if !ok || &got[0] != &fileLegendCopyModeOn[0] {
 			t.Errorf("CurrentFileLegend() = (%v, %v), want fileLegendCopyModeOn", got, ok)
@@ -549,11 +549,11 @@ func TestTierPlainTextWindowStartsAtFirstLine(t *testing.T) {
 	v := newTestPreview(files, 60, 10)
 
 	v.drawContent(0, 0, 60, 10)
-	if e.WindowStartLine != 0 {
-		t.Fatalf("expected window to start at line 0, got %d", e.WindowStartLine)
+	if e.Text.WindowStartLine != 0 {
+		t.Fatalf("expected window to start at line 0, got %d", e.Text.WindowStartLine)
 	}
-	if len(e.Lines) == 0 || e.Lines[0] != "line 1" {
-		t.Fatalf("expected window to start with 'line 1', got %v", e.Lines)
+	if len(e.Text.Lines) == 0 || e.Text.Lines[0] != "line 1" {
+		t.Fatalf("expected window to start with 'line 1', got %v", e.Text.Lines)
 	}
 }
 
@@ -681,8 +681,8 @@ func TestTierPlainTextGotoLineJumpsViaWindow(t *testing.T) {
 	if got := currentTopLine(e); got != 7 {
 		t.Fatalf("expected top line 7 after ScrollToLine(7), got %d", got)
 	}
-	if e.Lines[e.Scroll] != "line 7" {
-		t.Fatalf("expected line 7 at the scrolled-to row, got %q", e.Lines[e.Scroll])
+	if e.Text.Lines[e.Text.Scroll] != "line 7" {
+		t.Fatalf("expected line 7 at the scrolled-to row, got %q", e.Text.Lines[e.Text.Scroll])
 	}
 }
 
@@ -704,7 +704,7 @@ func waitFindScanDone(t *testing.T, v *Preview, e *openfiles.Entry) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		v.syncFindScan(e)
-		if e.FindScan == nil {
+		if e.Text.FindScan == nil {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -717,11 +717,11 @@ func TestTierPlainTextFindStartsBackgroundScan(t *testing.T) {
 	v := newTestPreview(files, 60, 10)
 
 	v.performFind("line 7")
-	if e.FindScan == nil {
+	if e.Text.FindScan == nil {
 		t.Fatal("expected performFind to start a background scan for a TierPlainText entry")
 	}
-	if len(e.FindMatches) != 0 || e.FindCurrent != -1 {
-		t.Fatalf("expected no matches yet while the scan is in flight, got FindMatches=%v FindCurrent=%d", e.FindMatches, e.FindCurrent)
+	if len(e.Text.FindMatches) != 0 || e.Text.FindCurrent != -1 {
+		t.Fatalf("expected no matches yet while the scan is in flight, got FindMatches=%v FindCurrent=%d", e.Text.FindMatches, e.Text.FindCurrent)
 	}
 }
 
@@ -732,18 +732,18 @@ func TestTierPlainTextFindScanResultsSyncOnceDone(t *testing.T) {
 	v.performFind("line 7")
 	waitFindScanDone(t, v, e)
 
-	if len(e.FindMatches) != 1 || e.FindMatches[0].Line != 6 {
-		t.Fatalf("expected a single match on source line 6 (the 0-based index of the text \"line 7\"), got %v", e.FindMatches)
+	if len(e.Text.FindMatches) != 1 || e.Text.FindMatches[0].Line != 6 {
+		t.Fatalf("expected a single match on source line 6 (the 0-based index of the text \"line 7\"), got %v", e.Text.FindMatches)
 	}
-	if e.FindCurrent != 0 {
-		t.Fatalf("expected the single match to be current, got %d", e.FindCurrent)
+	if e.Text.FindCurrent != 0 {
+		t.Fatalf("expected the single match to be current, got %d", e.Text.FindCurrent)
 	}
-	matchRow := e.FindMatches[0].Line - e.WindowStartLine
-	if matchRow < 0 || matchRow >= len(e.Lines) || e.Lines[matchRow] != "line 7" {
-		t.Fatalf("expected the match's window-relative row to hold \"line 7\", got %v (row %d)", e.Lines, matchRow)
+	matchRow := e.Text.FindMatches[0].Line - e.Text.WindowStartLine
+	if matchRow < 0 || matchRow >= len(e.Text.Lines) || e.Text.Lines[matchRow] != "line 7" {
+		t.Fatalf("expected the match's window-relative row to hold \"line 7\", got %v (row %d)", e.Text.Lines, matchRow)
 	}
-	if matchRow < e.Scroll || matchRow >= e.Scroll+v.viewportHeight() {
-		t.Fatalf("expected the match's row (%d) to be scrolled into view (Scroll=%d, viewportHeight=%d)", matchRow, e.Scroll, v.viewportHeight())
+	if matchRow < e.Text.Scroll || matchRow >= e.Text.Scroll+v.viewportHeight() {
+		t.Fatalf("expected the match's row (%d) to be scrolled into view (Scroll=%d, viewportHeight=%d)", matchRow, e.Text.Scroll, v.viewportHeight())
 	}
 }
 
@@ -752,12 +752,12 @@ func TestTierPlainTextFindClearCancelsInFlightScan(t *testing.T) {
 	v := newTestPreview(files, 60, 10)
 
 	v.performFind("line 7")
-	if e.FindScan == nil {
+	if e.Text.FindScan == nil {
 		t.Fatal("expected a scan to be in flight")
 	}
 	v.clearFind()
-	if e.FindScan != nil || e.FindQuery != "" {
-		t.Fatalf("expected clearFind to cancel and clear the in-flight scan, got FindScan=%v FindQuery=%q", e.FindScan, e.FindQuery)
+	if e.Text.FindScan != nil || e.Text.FindQuery != "" {
+		t.Fatalf("expected clearFind to cancel and clear the in-flight scan, got FindScan=%v FindQuery=%q", e.Text.FindScan, e.Text.FindQuery)
 	}
 }
 
