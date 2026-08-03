@@ -150,14 +150,20 @@ func clampHexOffset(offset, size int64, bytesPerRow int) int64 {
 	return offset - offset%int64(bytesPerRow)
 }
 
-// formatSize renders a byte count in compact human-readable form
-// (SPEC.md §2.1a's file title bar, e.g. "256K"), the hex view's analog
-// of the text tiers' "NL" line-count tag — a plain integer for a count
-// under 1024, otherwise an integer (rounded, no decimal point) plus a
-// single unit letter, with no trailing "B": the file title bar's own
-// space is tight enough that a compact tag matters more here than the
-// extra precision or the unit spelled out in full would.
-func formatSize(n int64) string {
+// formatSize renders a byte count as precisely as it can within width
+// columns (SPEC.md §2.1a's file title bar) — the hex view's analog of
+// the text tiers' "NL" line-count tag, sized to the gutter (below)
+// rather than to a fixed shape: a plain integer for a count under 1024
+// (bytes are already exact, so there's no more precision to spend width
+// on), otherwise an integer plus a single unit letter, widened with as
+// many decimal places as still fit in width, tried from the most
+// precise down rather than computed digit-by-digit — the simplest way
+// to stay correct across a rounding carry that bumps the integer part's
+// own digit count (e.g. 1023.97 rounding up to "1024.0"). Never wider
+// than width; may be narrower when even one more decimal place would
+// overflow it (or trivially, for the sub-1024 case, once the exact byte
+// count is already shown in full).
+func formatSize(n int64, width int) string {
 	const unit = 1024
 	if n < unit {
 		return fmt.Sprintf("%d", n)
@@ -167,8 +173,15 @@ func formatSize(n int64) string {
 		div *= unit
 		exp++
 	}
-	rounded := (n + div/2) / div
-	return fmt.Sprintf("%d%c", rounded, "KMGTPE"[exp])
+	unitChar := "KMGTPE"[exp]
+	value := float64(n) / float64(div)
+	for decimals := width; decimals >= 0; decimals-- {
+		s := fmt.Sprintf("%.*f%c", decimals, value, unitChar)
+		if len(s) <= width {
+			return s
+		}
+	}
+	return fmt.Sprintf("%.0f%c", value, unitChar)
 }
 
 // hexBytesPerRow returns e's current bytes-per-row, derived from the
@@ -435,19 +448,24 @@ func hexFindStatusText(e *openfiles.Entry) string {
 // not apply to a hex view, SPEC.md §2.1a).
 func (v *Preview) drawHexFileTitleBar(x0, y0, w int, interactive bool, e *openfiles.Entry) int {
 	path := tree.RelativeDisplayPath(v.RootPath, e.Path)
-	// sizeField is padded to gutterWidth-1 columns, so the single space
-	// joining it to path always lands path's own first column at x0+
-	// gutterWidth — the same column the hex-byte grid itself starts at
-	// (drawHexContent) — regardless of how long formatSize's output
-	// happens to be for this particular file's size. This is the hex
-	// view's analog of §2.1's "NL"-tag-plus-single-space alignment trick,
-	// which instead gets this for free since its tag length and its
-	// gutter's digit width are both derived from the same line count;
-	// here the two aren't naturally coupled (hex digit count in the
-	// file's size vs. formatSize's own decimal-with-unit-letter
-	// rendering), so the padding is explicit instead.
+	// sizeField is sized to gutterWidth-1 columns: formatSize spends
+	// that whole budget on precision (as many decimal places as fit)
+	// rather than settling for a fixed shape, so it fills the budget on
+	// its own for most files — the trailing %-*s pad is only a safety
+	// net for whatever's left (the sub-1024-byte case, where there's no
+	// more precision to add, or a rounding carry that costs a column).
+	// Either way, the single space joining it to path always lands
+	// path's own first column at x0+gutterWidth — the same column the
+	// hex-byte grid itself starts at (drawHexContent) — regardless of
+	// the file's size. This is the hex view's analog of §2.1's "NL"-tag-
+	// plus-single-space alignment trick, which instead gets this for
+	// free since its tag length and its gutter's digit width are both
+	// derived from the same line count; here the two aren't naturally
+	// coupled (hex digit count in the file's size vs. formatSize's own
+	// decimal-with-unit-letter rendering), so sizing formatSize's own
+	// output to the budget (and padding whatever's left) takes its place.
 	gw := hexGutterWidth(e.Size)
-	sizeField := fmt.Sprintf("%-*s", gw-1, formatSize(e.Size))
+	sizeField := fmt.Sprintf("%-*s", gw-1, formatSize(e.Size, gw-1))
 	left := sizeField + " " + path
 
 	legend := func(entries []canvas.LegendEntry) []canvas.LegendEntry {

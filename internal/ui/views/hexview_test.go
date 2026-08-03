@@ -201,23 +201,47 @@ func TestParseOffsetHexAndDecimal(t *testing.T) {
 	}
 }
 
-// TestFormatSize guards the file title bar's human-readable size tag
-// (SPEC.md §2.1a).
+// TestFormatSize guards the file title bar's size tag (SPEC.md §2.1a):
+// a plain integer under 1024 bytes (already exact, nothing more precise
+// to show), otherwise an integer plus a single unit letter, spending
+// whatever width is left on decimal precision rather than settling for
+// a fixed shape — never wider than width, and as precise as width
+// allows.
 func TestFormatSize(t *testing.T) {
 	cases := []struct {
-		n    int64
-		want string
+		n     int64
+		width int
+		want  string
 	}{
-		{0, "0"},
-		{1023, "1023"},
-		{1024, "1K"},
-		{1536, "2K"}, // rounded, not truncated: 1536/1024 = 1.5 -> 2
-		{1 << 20, "1M"},
-		{256 * 1024, "256K"},
+		{0, 5, "0"},
+		{1023, 5, "1023"},
+		{1024, 5, "1.00K"},
+		{1024, 6, "1.000K"},
+		{256 * 1024, 5, "256K"}, // no room left for even one decimal place
+		{256 * 1024, 7, "256.00K"},
+		{1 << 20, 5, "1.00M"},
 	}
 	for _, c := range cases {
-		if got := formatSize(c.n); got != c.want {
-			t.Errorf("formatSize(%d) = %q, want %q", c.n, got, c.want)
+		if got := formatSize(c.n, c.width); got != c.want {
+			t.Errorf("formatSize(%d, %d) = %q, want %q", c.n, c.width, got, c.want)
+		}
+	}
+}
+
+// TestFormatSizeNeverExceedsWidth is a property check across a spread
+// of sizes and widths: whatever precision formatSize picks, the result
+// never runs past the width budget it was given (SPEC.md §2.1a's "the
+// size indicator should always be sized to fit within the gutter").
+// Widths below 5 aren't exercised here — hexGutterWidth's own 4-hex-
+// digit floor means drawHexFileTitleBar never actually offers formatSize
+// a budget narrower than that in practice.
+func TestFormatSizeNeverExceedsWidth(t *testing.T) {
+	sizes := []int64{1, 1023, 1024, 1025, 1536, 999_999, 1 << 20, 1 << 30, 1<<40 + 12345}
+	for _, n := range sizes {
+		for width := 5; width <= 16; width++ {
+			if got := formatSize(n, width); len(got) > width {
+				t.Errorf("formatSize(%d, %d) = %q (len %d), exceeds width %d", n, width, got, len(got), width)
+			}
 		}
 	}
 }
