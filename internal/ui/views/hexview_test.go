@@ -15,19 +15,23 @@ import (
 )
 
 // TestBytesPerRowForAdaptsToWidth guards SPEC.md §2.1a's "bytesPerRow is
-// a derived quantity from the available width" rule: it never returns a
-// value whose row wouldn't fit, and narrower widths never return more
-// bytes per row than wider ones (monotonic, not just individually
-// in-bounds).
+// a derived quantity from the available width, always a whole number of
+// groups" rule: it's always a multiple of hexBytesPerGroup, never a
+// value whose row wouldn't fit once at least one group's row does fit at
+// all, and narrower widths never return more bytes per row than wider
+// ones (monotonic, not just individually in-bounds).
 func TestBytesPerRowForAdaptsToWidth(t *testing.T) {
 	gutterWidth := 10
 	prev := 0
 	for _, w := range []int{20, 40, 60, 80, 120, 200} {
 		n := bytesPerRowFor(w, gutterWidth)
-		if n < 1 {
-			t.Fatalf("width %d: bytesPerRowFor returned %d, want >= 1", w, n)
+		if n < hexBytesPerGroup {
+			t.Fatalf("width %d: bytesPerRowFor returned %d, want >= %d", w, n, hexBytesPerGroup)
 		}
-		if hexRowWidth(gutterWidth, n) > w {
+		if n%hexBytesPerGroup != 0 {
+			t.Errorf("width %d: bytesPerRowFor returned %d, not a whole number of %d-byte groups", w, n, hexBytesPerGroup)
+		}
+		if hexRowWidth(gutterWidth, n) > w && n > hexBytesPerGroup {
 			t.Errorf("width %d: bytesPerRowFor returned %d, whose row width %d exceeds it", w, n, hexRowWidth(gutterWidth, n))
 		}
 		if n < prev {
@@ -37,12 +41,33 @@ func TestBytesPerRowForAdaptsToWidth(t *testing.T) {
 	}
 }
 
-// TestBytesPerRowForNeverBelowOne guards the "remains navigable even at
-// a width too narrow to comfortably fit anything" fallback (SPEC.md
-// §2.1a).
-func TestBytesPerRowForNeverBelowOne(t *testing.T) {
-	if got := bytesPerRowFor(1, 10); got != 1 {
-		t.Fatalf("bytesPerRowFor(1, 10) = %d, want 1", got)
+// TestBytesPerRowForNeverBelowOneGroup guards the "remains navigable
+// even at a width too narrow to fit one group comfortably" fallback
+// (SPEC.md §2.1a): it never splits a group, so the floor is one whole
+// group, not one byte.
+func TestBytesPerRowForNeverBelowOneGroup(t *testing.T) {
+	if got := bytesPerRowFor(1, 10); got != hexBytesPerGroup {
+		t.Fatalf("bytesPerRowFor(1, 10) = %d, want %d", got, hexBytesPerGroup)
+	}
+}
+
+// TestHexAsciiWidthAbsorbsLeftoverWidth guards SPEC.md §2.1a's "the
+// ASCII column absorbs whatever width a partial group would have used"
+// rule: the ASCII column is exactly wide enough to make the row use all
+// of width when at least one group's row fits, and never narrower than
+// bytesPerRow itself in the narrow-terminal fallback case.
+func TestHexAsciiWidthAbsorbsLeftoverWidth(t *testing.T) {
+	gutterWidth := 10
+	for _, w := range []int{40, 50, 60, 77, 78, 100, 123} {
+		n := bytesPerRowFor(w, gutterWidth)
+		asciiWidth := hexAsciiWidth(w, gutterWidth, n)
+		if asciiWidth < n {
+			t.Errorf("width %d: hexAsciiWidth = %d, want >= bytesPerRow %d", w, asciiWidth, n)
+		}
+		wantTotal := gutterWidth + 2 + hexBytesWidth(n) + 2 + asciiWidth
+		if hexRowWidth(gutterWidth, n) <= w && wantTotal != w {
+			t.Errorf("width %d: row with widened ASCII column totals %d, want exactly %d", w, wantTotal, w)
+		}
 	}
 }
 

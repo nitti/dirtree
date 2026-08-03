@@ -19,6 +19,15 @@ import (
 // so the search has a fixed starting point.
 const maxHexBytesPerRow = 64
 
+// hexBytesPerGroup is the byte-group size the hex-byte grid's extra
+// inter-group gap (hexBytesWidth) breaks on, and the granularity
+// bytesPerRowFor picks a row's byte count at: a row always holds a whole
+// number of groups, never a partial one — splitting a group across two
+// rows read worse than giving up a little width to the ASCII column
+// instead (drawHexContent), which absorbs whatever width a partial
+// group would have used.
+const hexBytesPerGroup = 8
+
 // hexFileLegend documents the hex view's own file-specific actions
 // (SPEC.md §2.1a), the TierBinary analog of fileLegend (draw.go):
 // goto-offset in place of goto-line, no copy-mode entry, since copy mode
@@ -74,19 +83,36 @@ func hexRowWidth(gutterWidth, n int) int {
 	return gutterWidth + 2 + hexBytesWidth(n) + 2 + n
 }
 
-// bytesPerRowFor returns the largest byte count whose hex-view row fits
-// within width given gutterWidth, recomputed fresh from the available
-// width every time (SPEC.md §2.1a, §6.2) rather than cached — the hex
-// view's analog of text wrapping adapting to a live resize. Never
-// returns less than 1, so a hex view remains navigable even at a width
-// too narrow to comfortably fit anything.
+// bytesPerRowFor returns the largest whole number of hexBytesPerGroup-
+// sized byte groups whose hex-view row fits within width given
+// gutterWidth, recomputed fresh from the available width every time
+// (SPEC.md §2.1a, §6.2) rather than cached — the hex view's analog of
+// text wrapping adapting to a live resize. A row is always a whole
+// number of groups (never a partial one split awkwardly across the
+// grid); any width left over from not fitting one more full group is
+// picked up by the ASCII column instead (drawHexContent), not wasted.
+// Never returns less than one full group, so a hex view remains
+// navigable (if visually cramped) even at a width too narrow to fit one
+// comfortably.
 func bytesPerRowFor(width, gutterWidth int) int {
-	for n := maxHexBytesPerRow; n >= 1; n-- {
+	for n := maxHexBytesPerRow; n > hexBytesPerGroup; n -= hexBytesPerGroup {
 		if hexRowWidth(gutterWidth, n) <= width {
 			return n
 		}
 	}
-	return 1
+	return hexBytesPerGroup
+}
+
+// hexAsciiWidth returns the ASCII column's actual on-screen width for a
+// hex-view row laid out at bytesPerRow bytes/row within the given total
+// width and gutterWidth (SPEC.md §2.1a): bytesPerRow, widened by
+// whatever width bytesPerRowFor's whole-groups-only row didn't use —
+// less than one full group's worth, by construction — rather than
+// leaving it unclaimed. Floored at bytesPerRow itself (no widening) for
+// the narrow-terminal fallback case where even one group's row doesn't
+// fit width at all.
+func hexAsciiWidth(width, gutterWidth, bytesPerRow int) int {
+	return max(bytesPerRow+(width-hexRowWidth(gutterWidth, bytesPerRow)), bytesPerRow)
 }
 
 // hexGutterWidth returns the offset gutter's column width for a file of
@@ -495,8 +521,15 @@ func hexHighlightStyleAt(i int, highlights []hexFindHighlight, base tcell.Style)
 // the hex-byte grid, and the ASCII column (SPEC.md §2.1a), for the
 // bytesPerRow-byte row starting at rowOffset whose actual bytes are
 // data (fewer than bytesPerRow at the file's final, partial row — the
-// remainder renders as blank space in both columns).
-func (v *Preview) drawHexRow(x0, y, gutterWidth, bytesPerRow int, rowOffset int64, data []byte, e *openfiles.Entry) {
+// remainder renders as blank space in both columns). asciiWidth is the
+// ASCII column's actual on-screen width, which may exceed bytesPerRow:
+// bytesPerRowFor only ever returns a whole number of hexBytesPerGroup-
+// sized groups, so a row's hex-byte grid never splits a group across
+// the width budget — whatever width that leaves unclaimed (less than
+// one full group) is instead added to the ASCII column, rendered here
+// as trailing blank space past the row's actual bytes, rather than left
+// as dead space the grid couldn't use anyway.
+func (v *Preview) drawHexRow(x0, y, gutterWidth, bytesPerRow, asciiWidth int, rowOffset int64, data []byte, e *openfiles.Entry) {
 	offsetStr := fmt.Sprintf("%0*x", gutterWidth-2, rowOffset)
 	v.Canvas.DrawText(x0, y, gutterWidth, offsetStr+"  ", canvas.StyleNormal)
 
@@ -517,14 +550,14 @@ func (v *Preview) drawHexRow(x0, y, gutterWidth, bytesPerRow int, rowOffset int6
 		if i < bytesPerRow-1 {
 			v.Canvas.SetContent(hexX+col, y, ' ', canvas.StyleNormal)
 			col++
-			if (i+1)%8 == 0 {
+			if (i+1)%hexBytesPerGroup == 0 {
 				v.Canvas.SetContent(hexX+col, y, ' ', canvas.StyleNormal)
 				col++
 			}
 		}
 	}
 
-	for i := range bytesPerRow {
+	for i := range asciiWidth {
 		x := asciiX + i
 		ch, style := ' ', canvas.StyleNormal
 		if i < len(data) {
@@ -555,6 +588,8 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 	n := bytesPerRowFor(w, gw)
 	e.HexOffset = clampHexOffset(e.HexOffset, e.Size, n)
 
+	asciiWidth := hexAsciiWidth(w, gw, n)
+
 	viewportHeight := h
 	if v.GotoPromptOpen {
 		viewportHeight--
@@ -574,7 +609,7 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 			break
 		}
 		rowEnd := min(rowStart+n, len(data))
-		v.drawHexRow(x0, y0+row, gw, n, e.HexOffset+int64(rowStart), data[rowStart:rowEnd], e)
+		v.drawHexRow(x0, y0+row, gw, n, asciiWidth, e.HexOffset+int64(rowStart), data[rowStart:rowEnd], e)
 	}
 
 	if v.GotoPromptOpen {

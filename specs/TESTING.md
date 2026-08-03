@@ -52,6 +52,7 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - A file whose leading read bytes contain a NUL byte is decided `TierBinary` regardless of size — the binary check takes precedence over the size-based `TierHighlighted`/`TierPlainText` decision (§2.1).
 - Opening a `TierBinary` file populates `Size` from the file's on-disk length and starts no background stream (no line-offset index is needed for a byte-addressed view).
 - `bytesPerRow` derived from a given viewport width returns a value whose row of hex-pairs-plus-ASCII fits within that width, and adapts (recomputed, not cached) when width changes.
+- `bytesPerRow` is always a whole multiple of the 8-byte group size (never a partial group), and the ASCII column's actual on-screen width absorbs whatever width that whole-groups-only row left unclaimed, rather than that width going unused.
 - The hex viewport's offset is clamped to `[0, size)` for a nonzero-size file, and to `0` for an empty file — never negative, never past the last byte.
 - Up/Down move the viewport by exactly one row (`bytesPerRow` bytes); Page Up/Page Down move by one viewport height's worth of rows; both clamp at the same bounds as above rather than under/overflowing.
 - Home/End jump the viewport to offset 0 / to the row containing the file's last byte.
