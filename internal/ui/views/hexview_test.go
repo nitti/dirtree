@@ -89,8 +89,8 @@ func TestDrawHexContentAsciiColumnRightAligned(t *testing.T) {
 		v.Draw(0, 1, w, 9, true)
 		sim.Show()
 
-		mainc, _, _, _ := sim.GetContent(w-1, 2)
-		if mainc == ' ' || mainc == 0 {
+		mainc, _, _ := sim.Get(w-1, 2)
+		if mainc == "" || mainc == " " {
 			t.Errorf("width %d: rightmost cell of the first content row is blank, want the ASCII column flush to the right edge", w)
 		}
 	}
