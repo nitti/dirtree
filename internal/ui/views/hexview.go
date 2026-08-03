@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -132,19 +133,43 @@ func lastRowStart(size int64, bytesPerRow int) int64 {
 	return (size - 1) / int64(bytesPerRow) * int64(bytesPerRow)
 }
 
-// clampHexOffset clamps offset to a valid row-start byte offset for a
-// file of the given size laid out at bytesPerRow bytes per row (SPEC.md
-// §2.1a): never negative, never past the last row, and always itself a
-// multiple of bytesPerRow, since a hex view's viewport always starts at
-// a row boundary.
-func clampHexOffset(offset, size int64, bytesPerRow int) int64 {
+// hexMaxOffset returns the largest top-of-viewport byte offset for a
+// file of the given size, laid out at bytesPerRow bytes/row within a
+// viewportHeight-row-tall viewport: the offset that puts the file's
+// last row at the bottom of a full viewport, rather than leaving most
+// of the screen blank below a lone final row — the hex view's analog
+// of the text tiers' own maxScroll (scroll.go), which keeps a long
+// file's last line flush to the viewport's bottom the same way. Falls
+// back to the last row's own start directly when the file has fewer
+// total rows than the viewport is tall (or the viewport is at most one
+// row), since there's nothing to fill the rest of the screen with
+// either way.
+func hexMaxOffset(size int64, bytesPerRow, viewportHeight int) int64 {
+	last := lastRowStart(size, bytesPerRow)
+	if viewportHeight <= 1 {
+		return last
+	}
+	max := last - int64(viewportHeight-1)*int64(bytesPerRow)
+	if max < 0 {
+		max = 0
+	}
+	return max
+}
+
+// clampHexOffset clamps offset to a valid top-of-viewport byte offset
+// for a file of the given size laid out at bytesPerRow bytes per row
+// within a viewportHeight-row viewport (SPEC.md §2.1a): never negative,
+// never past hexMaxOffset (above), and always itself a multiple of
+// bytesPerRow, since a hex view's viewport always starts at a row
+// boundary.
+func clampHexOffset(offset, size int64, bytesPerRow, viewportHeight int) int64 {
 	if bytesPerRow <= 0 {
 		bytesPerRow = 1
 	}
 	if offset < 0 {
 		offset = 0
 	}
-	if max := lastRowStart(size, bytesPerRow); offset > max {
+	if max := hexMaxOffset(size, bytesPerRow, viewportHeight); offset > max {
 		offset = max
 	}
 	return offset - offset%int64(bytesPerRow)
@@ -194,15 +219,26 @@ func (v *Preview) hexBytesPerRow(e *openfiles.Entry) int {
 }
 
 // hexScroll moves e's hex-view viewport by deltaRows rows (SPEC.md
-// §2.1a), clamped so it never goes negative or past the file's last row.
-// A no-op at the empty state (no displayed entry).
+// §2.1a), clamped so it never goes negative or past the file's last
+// row. A no-op at the empty state (no displayed entry). Mirrors scroll's
+// (scroll.go) own edge-bump behavior: a move that clamps back to
+// exactly where it started (already at the top/bottom) calls bumpEdge,
+// the same path-keyed flash-request mechanism the text tiers use, so
+// Up/Page Up past offset 0 (or Down/Page Down past the last row) gets
+// the same "you've hit the end" cue there — reused as-is rather than
+// duplicated, since it already operates in terms of the entry and a
+// signed delta, neither of which is tier-specific.
 func (v *Preview) hexScroll(deltaRows int) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
 		return
 	}
 	n := v.hexBytesPerRow(e)
-	e.HexOffset = clampHexOffset(e.HexOffset+int64(deltaRows)*int64(n), e.Size, n)
+	old := e.HexOffset
+	e.HexOffset = clampHexOffset(e.HexOffset+int64(deltaRows)*int64(n), e.Size, n, v.viewportHeight())
+	if e.HexOffset == old {
+		v.bumpEdge(e, deltaRows)
+	}
 }
 
 // hexJumpStart jumps e's hex-view viewport to offset 0 (SPEC.md §2.1a's
@@ -213,14 +249,16 @@ func (v *Preview) hexJumpStart() {
 	}
 }
 
-// hexJumpEnd jumps e's hex-view viewport to the row containing the
-// file's last byte (SPEC.md §2.1a's End binding).
+// hexJumpEnd jumps e's hex-view viewport to hexMaxOffset — the file's
+// last row at the bottom of a full viewport, rather than just its own
+// start with the rest of the screen left blank (SPEC.md §2.1a's End
+// binding).
 func (v *Preview) hexJumpEnd() {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
 		return
 	}
-	e.HexOffset = lastRowStart(e.Size, v.hexBytesPerRow(e))
+	e.HexOffset = hexMaxOffset(e.Size, v.hexBytesPerRow(e), v.viewportHeight())
 }
 
 // parseOffset parses a goto-offset prompt's input (SPEC.md §2.1a) as
@@ -260,7 +298,7 @@ func (v *Preview) gotoOffset(input string) {
 	if !ok {
 		return
 	}
-	e.HexOffset = clampHexOffset(offset, e.Size, v.hexBytesPerRow(e))
+	e.HexOffset = clampHexOffset(offset, e.Size, v.hexBytesPerRow(e), v.viewportHeight())
 }
 
 // handleHexFindPromptKey handles input while the hex view's find prompt
@@ -413,7 +451,7 @@ func (v *Preview) scrollToHexFindMatch(e *openfiles.Entry) {
 	if rowStart >= e.HexOffset+h*int64(n) {
 		e.HexOffset = rowStart - (h-1)*int64(n)
 	}
-	e.HexOffset = clampHexOffset(e.HexOffset, e.Size, n)
+	e.HexOffset = clampHexOffset(e.HexOffset, e.Size, n, v.viewportHeight())
 }
 
 // hexFindStatusText renders the hex view's find status (SPEC.md
@@ -610,7 +648,6 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 	}
 	gw := hexGutterWidth(e.Size)
 	n := bytesPerRowFor(w, gw)
-	e.HexOffset = clampHexOffset(e.HexOffset, e.Size, n)
 
 	viewportHeight := h
 	if v.GotoPromptOpen {
@@ -620,10 +657,16 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 		viewportHeight = 0
 	}
 
+	e.HexOffset = clampHexOffset(e.HexOffset, e.Size, n, viewportHeight)
+
 	data, err := preview.ReadRange(e.Path, e.HexOffset, viewportHeight*n)
 	if err != nil {
 		data = nil
 	}
+
+	topFlash := e.Path == v.TopBumpPath && time.Since(v.TopBumpFlashStart) < canvas.FlashDuration
+	bottomFlash := e.Path == v.BottomBumpPath && time.Since(v.BottomBumpFlashStart) < canvas.FlashDuration
+	lastDrawnY := -1
 
 	for row := range viewportHeight {
 		rowStart := row * n
@@ -631,7 +674,19 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 			break
 		}
 		rowEnd := min(rowStart+n, len(data))
-		v.drawHexRow(x0, y0+row, w, gw, n, e.HexOffset+int64(rowStart), data[rowStart:rowEnd], e)
+		y := y0 + row
+		v.drawHexRow(x0, y, w, gw, n, e.HexOffset+int64(rowStart), data[rowStart:rowEnd], e)
+		lastDrawnY = y
+	}
+	if topFlash {
+		v.Canvas.FlashRow(x0, y0, w)
+	}
+	if bottomFlash && lastDrawnY >= 0 && lastDrawnY != y0 {
+		// lastDrawnY == y0 means the whole file fits in one visible row;
+		// skip so a simultaneous top+bottom flash doesn't reverse the
+		// same row twice and cancel itself back out (drawContent, above,
+		// guards the same case for the text tiers).
+		v.Canvas.FlashRow(x0, lastDrawnY, w)
 	}
 
 	if v.GotoPromptOpen {

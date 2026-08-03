@@ -97,12 +97,15 @@ func TestDrawHexContentAsciiColumnRightAligned(t *testing.T) {
 }
 
 // TestClampHexOffsetBounds guards SPEC.md §2.1a's viewport clamping: an
-// offset is clamped to [0, lastRowStart], never negative, never past the
-// file's last row, and always itself a row-boundary multiple of
-// bytesPerRow.
+// offset is clamped to [0, hexMaxOffset], never negative, never past it,
+// and always itself a row-boundary multiple of bytesPerRow. A
+// viewportHeight of 1 makes hexMaxOffset equal to the file's raw last
+// row start (below), isolating this test from the viewport-filling
+// behavior TestHexMaxOffsetFillsViewport covers separately.
 func TestClampHexOffsetBounds(t *testing.T) {
 	const bytesPerRow = 16
 	const size = 100 // last row starts at 96 (bytes 96-99)
+	const viewportHeight = 1
 
 	cases := []struct {
 		name   string
@@ -116,8 +119,8 @@ func TestClampHexOffsetBounds(t *testing.T) {
 		{"exactly last row start", 96, 96},
 	}
 	for _, c := range cases {
-		if got := clampHexOffset(c.offset, size, bytesPerRow); got != c.want {
-			t.Errorf("%s: clampHexOffset(%d, %d, %d) = %d, want %d", c.name, c.offset, size, bytesPerRow, got, c.want)
+		if got := clampHexOffset(c.offset, size, bytesPerRow, viewportHeight); got != c.want {
+			t.Errorf("%s: clampHexOffset(%d, %d, %d, %d) = %d, want %d", c.name, c.offset, size, bytesPerRow, viewportHeight, got, c.want)
 		}
 	}
 }
@@ -126,8 +129,39 @@ func TestClampHexOffsetBounds(t *testing.T) {
 // clamps to offset 0 rather than producing a negative or nonsensical
 // last-row bound.
 func TestClampHexOffsetEmptyFile(t *testing.T) {
-	if got := clampHexOffset(10, 0, 16); got != 0 {
+	if got := clampHexOffset(10, 0, 16, 1); got != 0 {
 		t.Fatalf("clampHexOffset on an empty file = %d, want 0", got)
+	}
+}
+
+// TestHexMaxOffsetFillsViewport guards SPEC.md §2.1a's viewport-filling
+// rule (the hex view's analog of the text tiers' own maxScroll): once a
+// file has more rows than the viewport is tall, the largest valid
+// offset pulls back from the file's raw last row start by enough rows
+// to keep a full viewport of content on screen, with the last row
+// landing at the bottom rather than leaving most of the screen blank
+// beneath a single lone row. A viewport taller than the file's total
+// rows (or exactly one row tall) falls back to the raw last row start
+// directly, since there's nothing to fill the rest of the screen with
+// either way.
+func TestHexMaxOffsetFillsViewport(t *testing.T) {
+	const bytesPerRow = 16
+	const size = 1000 // last row starts at 992 (63 rows total, 0-62)
+
+	cases := []struct {
+		name           string
+		viewportHeight int
+		want           int64
+	}{
+		{"one-row viewport: raw last row start", 1, 992},
+		{"taller than the file has rows: whole file fits, offset 0", 100, 0},
+		{"exactly as tall as the file has rows: whole file fits, offset 0", 63, 0},
+		{"shorter than the file: pulls back to keep the tail flush to the bottom", 10, 992 - 9*bytesPerRow},
+	}
+	for _, c := range cases {
+		if got := hexMaxOffset(size, bytesPerRow, c.viewportHeight); got != c.want {
+			t.Errorf("%s: hexMaxOffset(%d, %d, %d) = %d, want %d", c.name, size, bytesPerRow, c.viewportHeight, got, c.want)
+		}
 	}
 }
 
@@ -291,6 +325,94 @@ func TestDrawHexFileTitleBarAlignsPathWithHexGrid(t *testing.T) {
 	}
 }
 
+// TestHexScrollBumpsAtRestEdges guards the hex view's edge-bump cue
+// (SPEC.md §2.1a), mirroring TestScrollBumpsAtRestEdges (preview_test.go)
+// for the text tiers: scrolling further in a direction that's already
+// fully clamped records a flash for that edge (reusing bumpEdge and the
+// same TopBumpPath/BottomBumpPath fields, since neither is tier-specific),
+// but ordinary in-bounds scrolling — and the scroll that merely reaches
+// an edge for the first time, rather than pushing past an already-at-
+// rest one — does not.
+func TestHexScrollBumpsAtRestEdges(t *testing.T) {
+	dir := t.TempDir()
+	content := append([]byte{0}, make([]byte, 999)...)
+	path := writeBinaryFile(t, dir, content)
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	sim.SetSize(60, 10)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
+	res := files.Open(path, preview.DefaultByteCap)
+	if res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %+v", res)
+	}
+	e := res.Entry
+
+	v.hexScroll(-1) // already at the top: pushing further up bumps
+	if v.TopBumpPath != e.Path {
+		t.Fatalf("expected top bump after scrolling up from the top, got TopBumpPath=%q", v.TopBumpPath)
+	}
+	if v.BottomBumpPath != "" {
+		t.Fatalf("expected no bottom bump yet, got BottomBumpPath=%q", v.BottomBumpPath)
+	}
+
+	v.TopBumpPath = ""
+	v.hexScroll(1) // ordinary downward scroll within bounds: no bump
+	if v.TopBumpPath != "" || v.BottomBumpPath != "" {
+		t.Fatalf("expected no bump from an ordinary in-bounds scroll, got TopBumpPath=%q BottomBumpPath=%q", v.TopBumpPath, v.BottomBumpPath)
+	}
+
+	e.HexOffset = 0
+	v.BottomBumpPath = ""
+	v.hexScroll(1000) // scroll far past the bottom: first landing on the last row doesn't bump
+	if v.BottomBumpPath != "" {
+		t.Fatalf("expected no bottom bump on first reaching the last row, got BottomBumpPath=%q", v.BottomBumpPath)
+	}
+	v.hexScroll(1) // already at the bottom: pushing further down bumps
+	if v.BottomBumpPath != e.Path {
+		t.Fatalf("expected bottom bump after scrolling down from the bottom, got BottomBumpPath=%q", v.BottomBumpPath)
+	}
+}
+
+// TestDrawHexContentFlashesEdgeRowOnBump guards the actual visual cue,
+// mirroring TestDrawContentFlashesEdgeRowOnBump (preview_test.go): once a
+// bump is recorded, drawHexContent reverse-video flashes the
+// corresponding edge row (canvas.FlashRow) for the currently-displayed
+// entry.
+func TestDrawHexContentFlashesEdgeRowOnBump(t *testing.T) {
+	dir := t.TempDir()
+	content := append([]byte{0}, make([]byte, 999)...)
+	path := writeBinaryFile(t, dir, content)
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 60, 5
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
+	res := files.Open(path, preview.DefaultByteCap)
+	if res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %+v", res)
+	}
+
+	v.drawHexContent(0, 0, w, h)
+	v.hexScroll(-1) // already at the top: bumps
+	v.drawHexContent(0, 0, w, h)
+	sim.Show()
+
+	_, _, attr := cellStyle(sim, 0, 0).Decompose()
+	if attr&tcell.AttrReverse == 0 {
+		t.Fatalf("expected the top row to be reverse-video flashed after a top bump")
+	}
+}
+
 func writeBinaryFile(t *testing.T, dir string, content []byte) string {
 	t.Helper()
 	path := filepath.Join(dir, "bin")
@@ -338,7 +460,7 @@ func TestHandleKeyHexNavigation(t *testing.T) {
 	}
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
-	if want := lastRowStart(e.Size, n); e.HexOffset != want {
+	if want := hexMaxOffset(e.Size, n, v.viewportHeight()); e.HexOffset != want {
 		t.Fatalf("after End, HexOffset = %d, want %d", e.HexOffset, want)
 	}
 
@@ -383,7 +505,7 @@ func TestHandleKeyHexGotoOffset(t *testing.T) {
 	}
 
 	n := v.hexBytesPerRow(e)
-	want := clampHexOffset(0x64, e.Size, n)
+	want := clampHexOffset(0x64, e.Size, n, v.viewportHeight())
 	if e.HexOffset != want {
 		t.Fatalf("HexOffset = %d, want %d", e.HexOffset, want)
 	}
