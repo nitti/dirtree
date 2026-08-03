@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+
+	"github.com/nitti/dirtree/internal/preview"
 )
 
 // Action is a one-shot signal Preview.HandleKey returns for the
@@ -74,6 +76,15 @@ type Preview struct {
 
 	FindPromptOpen bool
 	FindInput      string
+
+	// HexFindPromptOpen/HexFindInput are the hex view's own find prompt
+	// state (SPEC.md §2.1a), separate from FindPromptOpen/FindInput above
+	// since the two prompts are reachable from mutually-exclusive tiers
+	// (a displayed entry is never both a text entry and a TierBinary
+	// one) but need independent open/closed state regardless of which
+	// entry happens to be displayed when a key arrives.
+	HexFindPromptOpen bool
+	HexFindInput      string
 }
 
 // HandleKey handles input at the primary preview view when no overlay
@@ -100,6 +111,13 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 		v.handleFindPromptKey(ev)
 		return ActionNone
 	}
+	if v.HexFindPromptOpen {
+		v.handleHexFindPromptKey(ev)
+		return ActionNone
+	}
+
+	e := v.Files.DisplayedEntry()
+	isHex := e != nil && e.Tier == preview.TierBinary
 
 	switch {
 	case ev.Rune() == 'b':
@@ -112,6 +130,18 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 		return ActionOpenSearch
 	case ev.Rune() == 'q':
 		return ActionQuitKey
+	case isHex && ev.Key() == tcell.KeyUp:
+		v.hexScroll(-1)
+	case isHex && ev.Key() == tcell.KeyDown:
+		v.hexScroll(1)
+	case isHex && ev.Key() == tcell.KeyPgUp:
+		v.hexScroll(-v.viewportHeight())
+	case isHex && ev.Key() == tcell.KeyPgDn:
+		v.hexScroll(v.viewportHeight())
+	case isHex && ev.Key() == tcell.KeyHome:
+		v.hexJumpStart()
+	case isHex && ev.Key() == tcell.KeyEnd:
+		v.hexJumpEnd()
 	case ev.Key() == tcell.KeyUp:
 		v.scroll(-1)
 	case ev.Key() == tcell.KeyDown:
@@ -121,7 +151,11 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 	case ev.Key() == tcell.KeyPgDn:
 		v.scroll(v.viewportHeight())
 	case ev.Rune() == 'g':
-		if e := v.Files.DisplayedEntry(); e != nil {
+		switch {
+		case isHex:
+			v.GotoPromptOpen = true
+			v.GotoInput = ""
+		case e != nil:
 			if gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done()) {
 				v.GotoBlockedPath = e.Path
 				v.GotoBlockedFlashStart = time.Now()
@@ -131,20 +165,36 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 			}
 		}
 	case ev.Rune() == '/':
-		if v.Files.DisplayedEntry() != nil {
+		switch {
+		case isHex:
+			v.HexFindPromptOpen = true
+			v.HexFindInput = ""
+		case e != nil:
 			v.FindPromptOpen = true
 			v.FindInput = ""
 		}
 	case ev.Rune() == 'c':
-		if e := v.Files.DisplayedEntry(); e != nil {
+		if !isHex && e != nil {
 			e.CopyMode = !e.CopyMode
 		}
 	case ev.Rune() == 'n':
-		v.findStep(1)
+		if isHex {
+			v.hexFindStep(1)
+		} else {
+			v.findStep(1)
+		}
 	case ev.Rune() == 'N':
-		v.findStep(-1)
+		if isHex {
+			v.hexFindStep(-1)
+		} else {
+			v.findStep(-1)
+		}
 	case ev.Key() == tcell.KeyEscape:
-		v.clearFind()
+		if isHex {
+			v.clearHexFind()
+		} else {
+			v.clearFind()
+		}
 	}
 	return ActionNone
 }

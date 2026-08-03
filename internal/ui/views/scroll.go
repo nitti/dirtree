@@ -25,16 +25,29 @@ const windowLines = 2000
 // move before the window needs refetching again.
 const windowMargin = 200
 
-// handleGotoPromptKey handles input while the goto-line prompt is open
-// (SPEC.md §2.1): only digits, backspace, and Ctrl+U (clear) are
-// accepted, Enter jumps to the entered line, Escape cancels without
-// changing scroll.
+// handleGotoPromptKey handles input while the goto-line/goto-offset
+// prompt is open (SPEC.md §2.1, §2.1a): shared prompt state (GotoInput)
+// for both, since the two are mutually exclusive on which entry is
+// displayed but otherwise identical — a text entry's Enter jumps to a
+// line number (decimal digits only), a TierBinary entry's jumps to a
+// byte offset, always interpreted as hexadecimal (hex digits only —
+// the prompt itself shows a literal "0x" ahead of the typed input,
+// drawHexContent, so there's no decimal/hex ambiguity to resolve and
+// no "0x" for the user to type themselves). Backspace, Ctrl+U (clear),
+// and Escape (cancel without changing the viewport) behave the same
+// either way.
 func (v *Preview) handleGotoPromptKey(ev *tcell.EventKey) {
+	e := v.Files.DisplayedEntry()
+	isHex := e != nil && e.Tier == preview.TierBinary
 	switch {
 	case ev.Key() == tcell.KeyEscape:
 		v.GotoPromptOpen = false
 	case ev.Key() == tcell.KeyEnter:
-		v.gotoLine(v.GotoInput)
+		if isHex {
+			v.gotoOffset(v.GotoInput)
+		} else {
+			v.gotoLine(v.GotoInput)
+		}
 		v.GotoPromptOpen = false
 	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
 		if len(v.GotoInput) > 0 {
@@ -42,9 +55,21 @@ func (v *Preview) handleGotoPromptKey(ev *tcell.EventKey) {
 		}
 	case ev.Key() == tcell.KeyCtrlU:
 		v.GotoInput = ""
-	case ev.Rune() >= '0' && ev.Rune() <= '9':
+	case isHex && isHexOffsetRune(ev.Rune()):
+		v.GotoInput += string(ev.Rune())
+	case !isHex && ev.Rune() >= '0' && ev.Rune() <= '9':
 		v.GotoInput += string(ev.Rune())
 	}
+}
+
+// isHexOffsetRune reports whether r is acceptable input for the
+// goto-offset prompt (SPEC.md §2.1a): only hex digits — the prompt's
+// input is always interpreted as hexadecimal (drawHexContent shows the
+// "0x" ahead of it as a fixed label, not something the user types), so
+// there's nothing else valid to accept here, unlike goto-line's
+// broader "accept while typing, reject on submit" prompts elsewhere.
+func isHexOffsetRune(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 }
 
 // scroll scrolls the currently-displayed entry by delta display rows

@@ -173,6 +173,32 @@ func Load(path string, cap int64) LoadResult {
 	return LoadResult{Lines: lines, Segs: segs}
 }
 
+// ReadRange reads up to n bytes starting at offset from path, returning
+// fewer bytes if the file is shorter than offset+n (down to zero for an
+// offset at or past EOF) — the hex view's own read primitive (SPEC.md
+// §2.1a): unlike ReadCapped/ReadLines/Load, which always read from the
+// start of the file, a hex view only ever needs the byte range covering
+// its current on-screen viewport, regardless of the file's total size,
+// so this seeks directly to offset rather than reading (and discarding)
+// everything before it.
+func ReadRange(path string, offset int64, n int) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, n)
+	read, err := io.ReadFull(f, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, err
+	}
+	return buf[:read], nil
+}
+
 // decodeUTF8Lenient decodes data as UTF-8, replacing invalid sequences
 // with the Unicode replacement character rather than failing.
 func decodeUTF8Lenient(data []byte) string {

@@ -50,21 +50,36 @@ func writeFile(t *testing.T, dir, name string, content []byte) string {
 
 // --- Open-failure detection at open time (TESTING.md "Open-failure
 // detection at open time (§2.2)") ---
+//
+// Opening a binary file no longer fails — it opens as a
+// preview.TierBinary entry (hex view, SPEC.md §2.1a) instead. The actual
+// hex-view rendering/keybindings (issue #112) aren't implemented yet;
+// this covers only the tier/entry data model.
 
-func TestOpenBinaryFileFails(t *testing.T) {
+func TestOpenBinaryFileOpensAsTierBinary(t *testing.T) {
 	dir := t.TempDir()
-	path := writeFile(t, dir, "bin", []byte("abc\x00def"))
+	content := []byte("abc\x00def")
+	path := writeFile(t, dir, "bin", content)
 
 	l := New()
 	res := l.Open(path, preview.DefaultByteCap)
-	if res.Outcome != Failed || res.Message != "binary file, preview not available" {
-		t.Fatalf("expected failed binary result, got %+v", res)
+	if res.Outcome != Opened {
+		t.Fatalf("expected opened result, got %+v", res)
 	}
-	if len(l.Entries) != 0 {
-		t.Fatalf("expected no entry created, got %d", len(l.Entries))
+	if res.Entry.Tier != preview.TierBinary {
+		t.Fatalf("expected TierBinary, got %v", res.Entry.Tier)
 	}
-	if l.Displayed != -1 {
-		t.Fatalf("expected no displayed entry, got %d", l.Displayed)
+	if res.Entry.Size != int64(len(content)) {
+		t.Fatalf("expected Size %d, got %d", len(content), res.Entry.Size)
+	}
+	if res.Entry.Stream != nil {
+		t.Fatalf("expected no background stream for a TierBinary entry, got %+v", res.Entry.Stream)
+	}
+	if len(l.Entries) != 1 {
+		t.Fatalf("expected one entry created, got %d", len(l.Entries))
+	}
+	if l.Displayed != 0 {
+		t.Fatalf("expected the new entry displayed, got %d", l.Displayed)
 	}
 }
 
@@ -82,7 +97,7 @@ func TestOpenNonexistentFileFails(t *testing.T) {
 func TestOpenFailureDoesNotDisturbPreviouslyDisplayedEntry(t *testing.T) {
 	dir := t.TempDir()
 	good := writeFile(t, dir, "good.txt", []byte("hello\n"))
-	bad := writeFile(t, dir, "bad.bin", []byte("x\x00y"))
+	bad := filepath.Join(dir, "nope.txt") // nonexistent, a real open failure
 
 	l := New()
 	l.Open(good, preview.DefaultByteCap)

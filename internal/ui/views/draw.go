@@ -96,8 +96,14 @@ var findLegendNoMatches = []canvas.LegendEntry{
 // view, since no overlay leaves the goto-line key handled while this is
 // showing.
 func (v *Preview) Draw(x0, y0, w, h int, interactive bool) {
-	v.syncFindScan(v.Files.DisplayedEntry())
+	e := v.Files.DisplayedEntry()
+	v.syncFindScan(e)
+	v.syncHexFindScan(e)
 	titleRows := v.drawFileTitleBar(x0, y0, w, interactive)
+	if e != nil && e.Tier == preview.TierBinary {
+		v.drawHexContent(x0, y0+titleRows, w, h-titleRows)
+		return
+	}
 	v.drawContent(x0, y0+titleRows, w, h-titleRows)
 }
 
@@ -113,6 +119,20 @@ func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
 		return nil, false
+	}
+	if e.Tier == preview.TierBinary {
+		switch {
+		case v.HexFindPromptOpen:
+			return hexFindPromptLegend, true
+		case e.HexFindScan != nil:
+			return hexFindLegendNoMatches, true
+		case e.HexFindQuery != "" && len(e.HexFindMatches) > 0:
+			return hexFindLegend, true
+		case e.HexFindQuery != "":
+			return hexFindLegendNoMatches, true
+		default:
+			return hexFileLegend, true
+		}
 	}
 	gotoBlocked := v.GotoBlockedPath == e.Path && gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done())
 	switch {
@@ -151,6 +171,9 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
 		return 0
+	}
+	if e.Tier == preview.TierBinary {
+		return v.drawHexFileTitleBar(x0, y0, w, interactive, e)
 	}
 	path := tree.RelativeDisplayPath(v.RootPath, e.Path)
 	rel := path

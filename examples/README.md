@@ -12,6 +12,7 @@ make -C examples linux     # Linux kernel source, ~80k files, deep nesting
 make -C examples llvm      # LLVM monorepo, larger and deeper than linux
 make -C examples cpython   # CPython source, smaller, quick to fetch
 make -C examples bigfiles  # synthetic large files with known search markers
+make -C examples hexfile   # synthetic binary file for exercising the hex view
 make -C examples all       # everything above
 make -C examples clean     # remove all of data/
 ```
@@ -37,6 +38,14 @@ Real repos, once fetched:
 | `mid_size.txt` (~50MB) | `NEEDLE_MID_SIZE` | an ordinary "big log file"-sized target, marker near the end |
 | `large.txt` (~300MB) | `NEEDLE_LARGE` | large enough that a slow disk/heavy load may trip the per-file scan timeout — confirms the timeout renders as an inline issue rather than a silent truncation |
 | `unreadable.txt` | `NEEDLE_UNREADABLE` | `chmod 000`'d — confirms a permission-denied candidate is listed with its OS error shown inline instead of being silently dropped |
+
+`hexfile`, once generated: `sample.bin` (256KB, a NUL byte at offset 0 so it opens into the hex view, SPEC.md §2.1a, instead of failing to open) with three ASCII markers at known offsets:
+
+| Marker | Offset | What it exercises |
+|---|---|---|
+| `HEXNEEDLE_START` | `0x40` | goto-offset (`g`) and hex-view find (`/`) near the top of the file |
+| `HEXNEEDLE_MID` | `0x20000` | scrolling several screens in (Page Down) before jumping/searching |
+| `HEXNEEDLE_END` | `0x3ffc0` | goto-offset/find near EOF, and the `End` key's jump to the file's last row |
 
 ## Benchmarking
 

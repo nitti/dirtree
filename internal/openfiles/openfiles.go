@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nitti/dirtree/internal/find"
+	"github.com/nitti/dirtree/internal/hexfind"
 	"github.com/nitti/dirtree/internal/preview"
 )
 
@@ -97,6 +98,36 @@ type Entry struct {
 	// preference that had nothing to do with the file you're switching
 	// to.
 	CopyMode bool
+
+	// Size and HexOffset are meaningful only for a preview.TierBinary
+	// entry (see Tier's doc comment). Size is the file's byte length as
+	// of the last successful load/reload, sized once at open/reload time
+	// rather than re-stat'd every frame; it sizes the hex view's offset
+	// gutter and bounds HexOffset's top end. HexOffset is the byte offset
+	// of the first byte shown in the hex view's viewport — the TierBinary
+	// analog of Scroll's display-row offset for text tiers, kept as a
+	// separate field rather than overloading Scroll since the two count
+	// fundamentally different things (rows vs. bytes) and a tier flip
+	// (Reload) always resets whichever one applied to the old tier.
+	Size      int64
+	HexOffset int64
+
+	// Hex-view find state (SPEC.md §2.1a), the TierBinary analog of
+	// FindQuery/FindMatches/FindCurrent/FindWrapNote above — kept as its
+	// own separate set of fields rather than shared with them, since
+	// hexfind.Match addresses content by byte offset rather than the
+	// line/rune-column pair find.Match uses, and the two coordinate
+	// systems don't compose. HexFindScan is always used for a TierBinary
+	// entry's find (never left nil the way FindScan is for a
+	// TierHighlighted entry, which searches its resident Lines
+	// synchronously instead): a hex view never holds a file's full byte
+	// content resident regardless of size, so every hex find is a
+	// background scan.
+	HexFindQuery    string
+	HexFindMatches  []hexfind.Match
+	HexFindCurrent  int
+	HexFindWrapNote string
+	HexFindScan     *hexfind.Scan
 }
 
 // Outcome is the result of an open attempt (SPEC.md §2.2).
@@ -244,9 +275,10 @@ func (e *Entry) evictContent() {
 // Open implements SPEC.md §2.2's open semantics for a resolved absolute
 // path: reuse an existing entry without re-reading or moving it if the
 // path is already open; otherwise check the file (capBytes bounds this
-// check, SPEC.md §2.1) for a read error or binary content — a failed
-// result, with no entry created and the currently-displayed entry (if
-// any) left unchanged — and, if it passes, decide the new entry's tier
+// check, SPEC.md §2.1) for a read error — a failed result, with no entry
+// created and the currently-displayed entry (if any) left unchanged.
+// Binary content is not a failure: it opens as a preview.TierBinary
+// entry (a hex view) instead. Otherwise, decide the new entry's tier
 // from its size (docs/STREAMING_PREVIEW_DESIGN.md §5) and start its
 // background content/index pass (§3, §4) rather than reading/
 // highlighting synchronously here: the entry appears immediately and
@@ -264,18 +296,20 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 	if err != nil {
 		return OpenResult{Outcome: Failed, Message: preview.ErrText(err)}
 	}
-	if binary {
-		return OpenResult{Outcome: Failed, Message: "binary file, preview not available"}
-	}
 
-	e := &Entry{Path: path, FindCurrent: -1}
+	e := &Entry{Path: path, FindCurrent: -1, HexFindCurrent: -1}
 	var size int64
 	if info, err := os.Stat(path); err == nil {
 		e.ModTime = info.ModTime()
 		size = info.Size()
 	}
-	e.Tier = preview.TierFor(size)
-	e.Stream = preview.StartStream(path, e.Tier)
+	e.Size = size
+	if binary {
+		e.Tier = preview.TierBinary
+	} else {
+		e.Tier = preview.TierFor(size)
+		e.Stream = preview.StartStream(path, e.Tier)
+	}
 	l.Entries = append(l.Entries, e)
 	l.Displayed = len(l.Entries) - 1
 	l.touchResident(e)
@@ -313,10 +347,13 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 // value across the change — it would either point at an arbitrary,
 // unrelated row or fall past the end of a much smaller window.
 //
-// An entry whose file can no longer be stat'd or read (deleted,
-// permission lost, now binary) is left with its last-known content
-// untouched — it simply goes stale, per §6.1's existing handling for a
-// currently-open file whose underlying path disappears.
+// An entry whose file can no longer be stat'd or read (deleted or
+// permission lost) is left with its last-known content untouched — it
+// simply goes stale, per §6.1's existing handling for a currently-open
+// file whose underlying path disappears. A file that has become binary
+// is not treated this way: like Open, it re-tiers into preview.TierBinary
+// (a hex view) instead of going stale, the same as any other tier flip
+// below.
 //
 // Returns the base name of each entry that was actually reloaded, in
 // list order (nil if none changed), for callers that want to surface a
@@ -328,18 +365,30 @@ func (l *List) Reload(capBytes int64) []string {
 		if err != nil || info.ModTime().Equal(e.ModTime) {
 			continue
 		}
-		if _, binary, err := preview.ReadCapped(e.Path, capBytes); err != nil || binary {
+		_, binary, err := preview.ReadCapped(e.Path, capBytes)
+		if err != nil {
 			continue
 		}
-		if newTier := preview.TierFor(info.Size()); newTier != e.Tier {
+
+		e.Size = info.Size()
+		newTier := preview.TierBinary
+		if !binary {
+			newTier = preview.TierFor(info.Size())
+		}
+		if newTier != e.Tier {
 			e.Tier = newTier
 			e.Scroll = 0
+			e.HexOffset = 0
 		}
 		e.Lines = nil
 		e.Segs = nil
 		e.WindowStartLine = 0
 		e.ModTime = info.ModTime()
-		e.Stream = preview.StartStream(e.Path, e.Tier)
+		if binary {
+			e.Stream = nil
+		} else {
+			e.Stream = preview.StartStream(e.Path, e.Tier)
+		}
 		e.Rows = nil
 		e.FirstRow = nil
 		e.RowsWidth = 0
@@ -351,6 +400,14 @@ func (l *List) Reload(capBytes int64) []string {
 		e.FindMatches = nil
 		e.FindCurrent = -1
 		e.FindWrapNote = ""
+		if e.HexFindScan != nil {
+			e.HexFindScan.Cancel()
+			e.HexFindScan = nil
+		}
+		e.HexFindQuery = ""
+		e.HexFindMatches = nil
+		e.HexFindCurrent = -1
+		e.HexFindWrapNote = ""
 		reloaded = append(reloaded, filepath.Base(e.Path))
 	}
 	return reloaded

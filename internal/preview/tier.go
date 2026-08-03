@@ -19,6 +19,13 @@ const (
 	// viewport are read on demand, seeking via the background pass's
 	// line-offset index (§2's "Tier B").
 	TierPlainText
+	// TierBinary files are files ReadCapped flagged as binary (a NUL
+	// byte in the leading capped peek). They're never decoded into
+	// lines/runes at all: only the byte range needed for the current
+	// hex-view viewport is read on demand, directly via ReadAt at
+	// row*bytesPerRow — no line-offset index is needed since hex-view
+	// rows are fixed-width by construction rather than line-delimited.
+	TierBinary
 )
 
 // HighlightCeiling is the size (in bytes) at or under which a file is
