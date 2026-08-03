@@ -150,20 +150,25 @@ func clampHexOffset(offset, size int64, bytesPerRow int) int64 {
 	return offset - offset%int64(bytesPerRow)
 }
 
-// formatSize renders a byte count in human-readable form (SPEC.md
-// §2.1a's file title bar, e.g. "4.2 KB"), the hex view's analog of the
-// text tiers' "NL" line-count tag.
+// formatSize renders a byte count in compact human-readable form
+// (SPEC.md §2.1a's file title bar, e.g. "256K"), the hex view's analog
+// of the text tiers' "NL" line-count tag — a plain integer for a count
+// under 1024, otherwise an integer (rounded, no decimal point) plus a
+// single unit letter, with no trailing "B": the file title bar's own
+// space is tight enough that a compact tag matters more here than the
+// extra precision or the unit spelled out in full would.
 func formatSize(n int64) string {
 	const unit = 1024
 	if n < unit {
-		return fmt.Sprintf("%d B", n)
+		return fmt.Sprintf("%d", n)
 	}
 	div, exp := int64(unit), 0
 	for m := n / unit; m >= unit; m /= unit {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+	rounded := (n + div/2) / div
+	return fmt.Sprintf("%d%c", rounded, "KMGTPE"[exp])
 }
 
 // hexBytesPerRow returns e's current bytes-per-row, derived from the
@@ -430,7 +435,20 @@ func hexFindStatusText(e *openfiles.Entry) string {
 // not apply to a hex view, SPEC.md §2.1a).
 func (v *Preview) drawHexFileTitleBar(x0, y0, w int, interactive bool, e *openfiles.Entry) int {
 	path := tree.RelativeDisplayPath(v.RootPath, e.Path)
-	left := formatSize(e.Size) + " " + path
+	// sizeField is padded to gutterWidth-1 columns, so the single space
+	// joining it to path always lands path's own first column at x0+
+	// gutterWidth — the same column the hex-byte grid itself starts at
+	// (drawHexContent) — regardless of how long formatSize's output
+	// happens to be for this particular file's size. This is the hex
+	// view's analog of §2.1's "NL"-tag-plus-single-space alignment trick,
+	// which instead gets this for free since its tag length and its
+	// gutter's digit width are both derived from the same line count;
+	// here the two aren't naturally coupled (hex digit count in the
+	// file's size vs. formatSize's own decimal-with-unit-letter
+	// rendering), so the padding is explicit instead.
+	gw := hexGutterWidth(e.Size)
+	sizeField := fmt.Sprintf("%-*s", gw-1, formatSize(e.Size))
+	left := sizeField + " " + path
 
 	legend := func(entries []canvas.LegendEntry) []canvas.LegendEntry {
 		if v.HelpVisible {

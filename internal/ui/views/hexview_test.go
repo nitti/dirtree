@@ -11,6 +11,7 @@ import (
 
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
+	"github.com/nitti/dirtree/internal/tree"
 	"github.com/nitti/dirtree/internal/ui/canvas"
 )
 
@@ -207,15 +208,61 @@ func TestFormatSize(t *testing.T) {
 		n    int64
 		want string
 	}{
-		{0, "0 B"},
-		{1023, "1023 B"},
-		{1024, "1.0 KB"},
-		{1536, "1.5 KB"},
-		{1 << 20, "1.0 MB"},
+		{0, "0"},
+		{1023, "1023"},
+		{1024, "1K"},
+		{1536, "2K"}, // rounded, not truncated: 1536/1024 = 1.5 -> 2
+		{1 << 20, "1M"},
+		{256 * 1024, "256K"},
 	}
 	for _, c := range cases {
 		if got := formatSize(c.n); got != c.want {
 			t.Errorf("formatSize(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+}
+
+// TestDrawHexFileTitleBarAlignsPathWithHexGrid guards SPEC.md §2.1a's
+// alignment rule: the file title bar's path text lands at the same
+// on-screen column the hex-byte grid itself starts at (x0+gutterWidth),
+// the hex view's analog of §2.1's "NL"-tag-plus-single-space trick —
+// here achieved by explicitly padding the size tag to gutterWidth-1
+// columns, since (unlike the text tiers) the size tag's own length has
+// no natural relationship to the gutter's hex-digit width.
+func TestDrawHexFileTitleBarAlignsPathWithHexGrid(t *testing.T) {
+	dir := t.TempDir()
+	for _, size := range []int{10, 1000, 100_000, 5_000_000} {
+		content := append([]byte{0}, make([]byte, size-1)...)
+		path := writeBinaryFile(t, dir, content)
+
+		sim := tcell.NewSimulationScreen("")
+		if err := sim.Init(); err != nil {
+			t.Fatal(err)
+		}
+		w, h := 80, 10
+		sim.SetSize(w, h)
+
+		files := openfiles.New()
+		v := &Preview{Shared: &Shared{Files: files, RootPath: dir, Canvas: canvas.New(sim)}}
+		res := files.Open(path, preview.DefaultByteCap)
+		if res.Outcome != openfiles.Opened {
+			t.Fatalf("size %d: Open failed: %+v", size, res)
+		}
+		e := res.Entry
+
+		v.Draw(0, 1, w, h-1, true)
+		sim.Show()
+
+		titleRow := rowText(sim, 1, w)
+		relPath := tree.RelativeDisplayPath(dir, path)
+		pathCol := strings.Index(titleRow, relPath)
+		if pathCol < 0 {
+			t.Fatalf("size %d: path %q not found in title bar row %q", size, relPath, titleRow)
+		}
+
+		wantCol := hexGutterWidth(e.Size)
+		if pathCol != wantCol {
+			t.Errorf("size %d: path starts at column %d, want %d (the hex grid's own start column)", size, pathCol, wantCol)
 		}
 	}
 }
