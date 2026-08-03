@@ -208,29 +208,47 @@ func TestHexGutterWidthSizing(t *testing.T) {
 	}
 }
 
-// TestParseOffsetHexAndDecimal guards goto-offset's input parsing
-// (SPEC.md §2.1a): a "0x"-prefixed input parses as hex, anything else as
-// plain decimal, and malformed input is rejected rather than guessed at.
-func TestParseOffsetHexAndDecimal(t *testing.T) {
+// TestParseOffsetAlwaysHex guards goto-offset's input parsing (SPEC.md
+// §2.1a): the input is always interpreted as hexadecimal — there's no
+// decimal fallback and no "0x" prefix to type or parse, since the
+// prompt shows that prefix itself as a fixed label — and malformed
+// input is rejected rather than guessed at.
+func TestParseOffsetAlwaysHex(t *testing.T) {
 	cases := []struct {
 		input  string
 		want   int64
 		wantOK bool
 	}{
-		{"0x1a", 0x1a, true},
-		{"0X1A", 0x1A, true},
-		{"26", 26, true},
+		{"1a", 0x1a, true},
+		{"1A", 0x1A, true},
+		{"26", 0x26, true}, // hex, not decimal: 0x26 == 38
 		{"0", 0, true},
 		{"", 0, false},
 		{"-5", 0, false},
-		{"1a", 0, false}, // no 0x prefix: not valid decimal
-		{"0xzz", 0, false},
-		{"0x", 0, false},
+		{"0x1a", 0, false}, // "x" isn't a hex digit; isHexOffsetRune never admits it either
+		{"zz", 0, false},
 	}
 	for _, c := range cases {
 		got, ok := parseOffset(c.input)
 		if ok != c.wantOK || (ok && got != c.want) {
 			t.Errorf("parseOffset(%q) = (%d, %v), want (%d, %v)", c.input, got, ok, c.want, c.wantOK)
+		}
+	}
+}
+
+// TestIsHexOffsetRuneOnlyAcceptsHexDigits guards the goto-offset
+// prompt's input filter (SPEC.md §2.1a): only 0-9/a-f/A-F are
+// accepted — no "x", since the prompt's "0x" is a fixed label the user
+// never types, and no other punctuation.
+func TestIsHexOffsetRuneOnlyAcceptsHexDigits(t *testing.T) {
+	for _, r := range "0123456789abcdefABCDEF" {
+		if !isHexOffsetRune(r) {
+			t.Errorf("isHexOffsetRune(%q) = false, want true", r)
+		}
+	}
+	for _, r := range "xXgG .-+\n" {
+		if isHexOffsetRune(r) {
+			t.Errorf("isHexOffsetRune(%q) = true, want false", r)
 		}
 	}
 }
@@ -471,8 +489,10 @@ func TestHandleKeyHexNavigation(t *testing.T) {
 }
 
 // TestHandleKeyHexGotoOffset exercises the goto-offset prompt end to end
-// through Preview.HandleKey (SPEC.md §2.1a): 'g' opens it, typing a
-// hex-prefixed offset and Enter jumps the viewport, closing the prompt.
+// through Preview.HandleKey (SPEC.md §2.1a): 'g' opens it, typing hex
+// digits (no "0x" — the prompt supplies that itself) and Enter jumps
+// the viewport, interpreting the input as hexadecimal, and closes the
+// prompt.
 func TestHandleKeyHexGotoOffset(t *testing.T) {
 	dir := t.TempDir()
 	content := append([]byte{0}, make([]byte, 999)...)
@@ -496,7 +516,7 @@ func TestHandleKeyHexGotoOffset(t *testing.T) {
 	if !v.GotoPromptOpen {
 		t.Fatal("expected goto prompt open after 'g'")
 	}
-	for _, r := range "0x64" { // 0x64 == 100
+	for _, r := range "64" { // hex 64 == decimal 100
 		v.HandleKey(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
 	}
 	v.HandleKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))

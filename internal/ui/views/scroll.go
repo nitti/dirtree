@@ -29,10 +29,13 @@ const windowMargin = 200
 // prompt is open (SPEC.md §2.1, §2.1a): shared prompt state (GotoInput)
 // for both, since the two are mutually exclusive on which entry is
 // displayed but otherwise identical — a text entry's Enter jumps to a
-// line number, a TierBinary entry's jumps to a byte offset (accepting
-// hex digits and an "0x" prefix in addition to plain decimal digits).
-// Backspace, Ctrl+U (clear), and Escape (cancel without changing the
-// viewport) behave the same either way.
+// line number (decimal digits only), a TierBinary entry's jumps to a
+// byte offset, always interpreted as hexadecimal (hex digits only —
+// the prompt itself shows a literal "0x" ahead of the typed input,
+// drawHexContent, so there's no decimal/hex ambiguity to resolve and
+// no "0x" for the user to type themselves). Backspace, Ctrl+U (clear),
+// and Escape (cancel without changing the viewport) behave the same
+// either way.
 func (v *Preview) handleGotoPromptKey(ev *tcell.EventKey) {
 	e := v.Files.DisplayedEntry()
 	isHex := e != nil && e.Tier == preview.TierBinary
@@ -60,13 +63,13 @@ func (v *Preview) handleGotoPromptKey(ev *tcell.EventKey) {
 }
 
 // isHexOffsetRune reports whether r is acceptable input for the
-// goto-offset prompt (SPEC.md §2.1a): decimal digits, hex digits, and
-// 'x'/'X' so a "0x"-prefixed hex offset can be typed — parseOffset
-// (hexview.go) decides afterward whether the full input is actually
-// valid, the same "accept broadly while typing, reject on submit"
-// approach the rest of the app's free-text prompts take.
+// goto-offset prompt (SPEC.md §2.1a): only hex digits — the prompt's
+// input is always interpreted as hexadecimal (drawHexContent shows the
+// "0x" ahead of it as a fixed label, not something the user types), so
+// there's nothing else valid to accept here, unlike goto-line's
+// broader "accept while typing, reject on submit" prompts elsewhere.
 func isHexOffsetRune(r rune) bool {
-	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') || r == 'x' || r == 'X'
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 }
 
 // scroll scrolls the currently-displayed entry by delta display rows

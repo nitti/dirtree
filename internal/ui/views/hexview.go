@@ -261,24 +261,19 @@ func (v *Preview) hexJumpEnd() {
 	e.HexOffset = hexMaxOffset(e.Size, v.hexBytesPerRow(e), v.viewportHeight())
 }
 
-// parseOffset parses a goto-offset prompt's input (SPEC.md §2.1a) as
-// either a "0x"-prefixed hexadecimal number or a plain decimal number,
-// reporting ok=false for anything else (an empty input, a negative
-// number, or text that doesn't parse cleanly under the selected base) —
-// the goto-offset prompt's Enter handler (gotoOffset) leaves the
-// viewport unchanged in that case, mirroring goto-line's own "malformed
-// input is simply not actioned" behavior.
+// parseOffset parses a goto-offset prompt's input (SPEC.md §2.1a) as a
+// hexadecimal number — the prompt's input is always hex (isHexOffsetRune,
+// scroll.go, only accepts hex digits, and the displayed "0x" ahead of it
+// is a fixed label rather than something the user types or this parses),
+// reporting ok=false for anything that doesn't parse cleanly (including
+// an empty input) — the goto-offset prompt's Enter handler (gotoOffset)
+// leaves the viewport unchanged in that case, mirroring goto-line's own
+// "malformed input is simply not actioned" behavior.
 func parseOffset(input string) (int64, bool) {
-	s := input
-	base := 10
-	if len(s) > 2 && (s[:2] == "0x" || s[:2] == "0X") {
-		s = s[2:]
-		base = 16
-	}
-	if s == "" {
+	if input == "" {
 		return 0, false
 	}
-	n, err := strconv.ParseInt(s, base, 64)
+	n, err := strconv.ParseInt(input, 16, 64)
 	if err != nil || n < 0 {
 		return 0, false
 	}
@@ -694,6 +689,6 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 		if v.HelpVisible {
 			gotoRowLegend = nil
 		}
-		v.Canvas.DrawText(x0, y0+h-1, w, canvas.LegendText(w, "goto offset: "+v.GotoInput, gotoRowLegend), canvas.StyleNormal)
+		v.Canvas.DrawText(x0, y0+h-1, w, canvas.LegendText(w, "goto offset: 0x"+v.GotoInput, gotoRowLegend), canvas.StyleNormal)
 	}
 }

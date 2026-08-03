@@ -139,7 +139,7 @@ func (a *App) cursorPos(h int) (x, y int, ok bool) {
 		case a.Preview.GotoPromptOpen:
 			label := "goto line: "
 			if e := a.Preview.Files.DisplayedEntry(); e != nil && e.Tier == preview.TierBinary {
-				label = "goto offset: "
+				label = "goto offset: 0x"
 			}
 			return len([]rune(label + a.Preview.GotoInput)), h - 1, true
 		}
