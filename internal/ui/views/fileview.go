@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nitti/dirtree/internal/find"
+	"github.com/nitti/dirtree/internal/hexfind"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/spinner"
@@ -17,15 +19,17 @@ import (
 // the goto prompt (which characters are valid input, how a submitted
 // input is applied, its label/legend/range hint), the file title bar's
 // drawing and state precedence, its help-overlay legend accessor,
-// background find-scan syncing, content drawing, and scroll/navigation.
-// This is the shared "file view" abstraction proposed in #114,
-// replacing the several `if e.Tier == preview.TierBinary { ... } else
-// { ... }` branches that used to sit directly in Draw, CurrentFileLegend,
-// handleGotoPromptKey, HandleKey's scroll/Home/End cases, and the
+// background find-scan syncing, content drawing, scroll/navigation, and
+// find's own perform/step/clear actions. This is the shared "file view"
+// abstraction proposed in #114, replacing the several `if e.Tier ==
+// preview.TierBinary { ... } else { ... }` branches that used to sit
+// directly in Draw, CurrentFileLegend, handleGotoPromptKey, and
+// HandleKey's scroll/Home/End/find-step/clear-find cases, and the
 // now-deleted drawFileTitleBar/drawHexFileTitleBar/syncFindScan/
 // syncHexFindScan/drawContent/drawHexContent/scroll/hexScroll/
-// hexJumpStart/hexJumpEnd functions. Find's own perform/step/clear
-// actions remain their own separate branch point for now, left for
+// hexJumpStart/hexJumpEnd/performFind/performHexFind/findStep/
+// hexFindStep/clearFind/clearHexFind functions. Copy mode's own toggle
+// remains its own separate branch point for now (Stage 7), left for
 // further follow-up rather than folded in all at once.
 type fileView interface {
 	// acceptGotoRune reports whether r is valid input for the goto
@@ -93,6 +97,22 @@ type fileView interface {
 	JumpStart(v *Preview, e *openfiles.Entry)
 	// JumpEnd moves e's viewport to its very end (End binding).
 	JumpEnd(v *Preview, e *openfiles.Entry)
+
+	// PerformFind executes an in-file find for query against e (SPEC.md
+	// §2.4, §2.1a), replacing any previous find state — synchronous or a
+	// background scan, and matched by whatever coordinate system this
+	// tier's content addresses (line/rune vs. byte offset), per the
+	// implementation. An empty query clears any existing find state
+	// instead of searching. A no-op if e is nil.
+	PerformFind(v *Preview, e *openfiles.Entry, query string)
+	// FindStep moves e's current find match by delta (+1/-1), wrapping
+	// around at either end and noting the wrap. A no-op if e is nil or
+	// has no matches.
+	FindStep(v *Preview, e *openfiles.Entry, delta int)
+	// ClearFind clears e's find state (query, matches, current index,
+	// wrap note), canceling a still-running scan first. A no-op if
+	// there's nothing to clear.
+	ClearFind(v *Preview, e *openfiles.Entry)
 }
 
 // textFileView is the fileView for every tier except TierBinary
@@ -603,6 +623,163 @@ func (hexFileView) JumpEnd(v *Preview, e *openfiles.Entry) {
 		return
 	}
 	e.Hex.HexOffset = hexMaxOffset(e.Size, v.hexBytesPerRow(e), v.viewportHeight())
+}
+
+// PerformFind executes an in-file find (SPEC.md §2.4): locates every
+// case-insensitive match of query, then jumps to the first one at or
+// after the source line currently at the top of the viewport — the same
+// "search forward from here" behavior as `less` — wrapping to the very
+// first match (and noting the wrap) if none exists at or after that
+// point. A no-op if e is nil; an empty query clears any existing find
+// state instead of searching (mirroring a bare "/" + Enter in `less`).
+//
+// For a TierPlainText entry, whose full content isn't resident
+// (docs/STREAMING_PREVIEW_DESIGN.md §9), matches can't be located
+// synchronously — this instead cancels any previous scan for the entry
+// and starts a new background one (find.StartScan), leaving FindMatches
+// empty and FindCurrent at -1 until SyncFindScan picks up its result on
+// a later frame; the file title bar's status area shows a "searching…"
+// spinner in the meantime (findStatusText) rather than blocking this
+// keystroke.
+func (textFileView) PerformFind(v *Preview, e *openfiles.Entry, query string) {
+	if e == nil {
+		return
+	}
+
+	if e.Text.FindScan != nil {
+		e.Text.FindScan.Cancel()
+		e.Text.FindScan = nil
+	}
+	e.Text.FindQuery = query
+	e.Text.FindMatches = nil
+	e.Text.FindCurrent = -1
+	e.Text.FindWrapNote = ""
+	if query == "" {
+		return
+	}
+
+	if e.Tier == preview.TierPlainText {
+		e.Text.FindScan = find.StartScan(e.Path, query)
+		return
+	}
+
+	v.ensureWrapped(e, v.computedWidth())
+	e.Text.FindMatches = find.InLines(e.Text.Lines, query)
+	if len(e.Text.FindMatches) == 0 {
+		return
+	}
+	v.seedFindCurrent(e)
+}
+
+// PerformFind executes a hex-view find (SPEC.md §2.1a): always a
+// background scan (hexfind.StartScan), since a TierBinary entry never
+// holds its file's full byte content resident regardless of size,
+// unlike text find's TierHighlighted/TierPlainText split
+// (textFileView.PerformFind). A no-op if e is nil; an empty query
+// clears any existing hex-find state instead of searching, mirroring
+// textFileView.PerformFind's own empty-query behavior.
+func (hexFileView) PerformFind(v *Preview, e *openfiles.Entry, query string) {
+	if e == nil {
+		return
+	}
+	if e.Hex.HexFindScan != nil {
+		e.Hex.HexFindScan.Cancel()
+		e.Hex.HexFindScan = nil
+	}
+	e.Hex.HexFindQuery = query
+	e.Hex.HexFindMatches = nil
+	e.Hex.HexFindCurrent = -1
+	e.Hex.HexFindWrapNote = ""
+	if query == "" {
+		return
+	}
+	e.Hex.HexFindScan = hexfind.StartScan(e.Path, query)
+}
+
+// FindStep moves the current match by delta (+1 for `n`/next, -1 for
+// `N`/previous), wrapping around at either end and noting the wrap
+// (SPEC.md §2.4) — the same wraparound stepper the browser and finder
+// overlays already use (internal/tree.MoveSelection). A no-op if e is
+// nil or has no matches.
+func (textFileView) FindStep(v *Preview, e *openfiles.Entry, delta int) {
+	if e == nil || len(e.Text.FindMatches) == 0 {
+		return
+	}
+	next := tree.MoveSelection(e.Text.FindCurrent, delta, len(e.Text.FindMatches))
+	switch {
+	case delta > 0 && next < e.Text.FindCurrent:
+		e.Text.FindWrapNote = "wrapped to top"
+	case delta < 0 && next > e.Text.FindCurrent:
+		e.Text.FindWrapNote = "wrapped to bottom"
+	default:
+		e.Text.FindWrapNote = ""
+	}
+	e.Text.FindCurrent = next
+	v.scrollToFindMatch(e)
+}
+
+// FindStep moves the current hex-find match by delta (+1/-1), wrapping
+// around at either end and noting the wrap (SPEC.md §2.1a), mirroring
+// textFileView.FindStep. A no-op if e is nil or has no matches.
+func (hexFileView) FindStep(v *Preview, e *openfiles.Entry, delta int) {
+	if e == nil || len(e.Hex.HexFindMatches) == 0 {
+		return
+	}
+	next := tree.MoveSelection(e.Hex.HexFindCurrent, delta, len(e.Hex.HexFindMatches))
+	switch {
+	case delta > 0 && next < e.Hex.HexFindCurrent:
+		e.Hex.HexFindWrapNote = "wrapped to top"
+	case delta < 0 && next > e.Hex.HexFindCurrent:
+		e.Hex.HexFindWrapNote = "wrapped to bottom"
+	default:
+		e.Hex.HexFindWrapNote = ""
+	}
+	e.Hex.HexFindCurrent = next
+	v.scrollToHexFindMatch(e)
+}
+
+// ClearFind clears e's in-file find state (SPEC.md §2.4), if any — its
+// query, matches, current index, and wrap note — so its highlighting
+// and file-title-bar status disappear, leaving the idle file title bar
+// in their place. Bound to Escape at the primary preview view: this
+// does not conflict with Escape's deliberate no-op-when-nothing-to-
+// back-out-of behavior there (it still never quits — only `q` does), it
+// just gives find an explicit way out, since otherwise it would persist
+// until superseded by a new search on the same entry. A no-op if e is
+// nil and there's no active query or in-progress scan, so Escape stays
+// inert exactly when there was nothing to clear. Also cancels a still-
+// running TierPlainText find scan (docs/STREAMING_PREVIEW_DESIGN.md §9)
+// rather than leaving it to finish unread.
+func (textFileView) ClearFind(v *Preview, e *openfiles.Entry) {
+	if e == nil || (e.Text.FindQuery == "" && e.Text.FindScan == nil) {
+		return
+	}
+	if e.Text.FindScan != nil {
+		e.Text.FindScan.Cancel()
+		e.Text.FindScan = nil
+	}
+	e.Text.FindQuery = ""
+	e.Text.FindMatches = nil
+	e.Text.FindCurrent = -1
+	e.Text.FindWrapNote = ""
+}
+
+// ClearFind clears e's hex-find state (SPEC.md §2.1a), if any,
+// canceling a still-running scan first — the hex view's analog of
+// textFileView.ClearFind. A no-op if e is nil and there's no active
+// query or in-progress scan.
+func (hexFileView) ClearFind(v *Preview, e *openfiles.Entry) {
+	if e == nil || (e.Hex.HexFindQuery == "" && e.Hex.HexFindScan == nil) {
+		return
+	}
+	if e.Hex.HexFindScan != nil {
+		e.Hex.HexFindScan.Cancel()
+		e.Hex.HexFindScan = nil
+	}
+	e.Hex.HexFindQuery = ""
+	e.Hex.HexFindMatches = nil
+	e.Hex.HexFindCurrent = -1
+	e.Hex.HexFindWrapNote = ""
 }
 
 // fileViewFor returns the fileView implementation for e's tier —

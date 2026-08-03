@@ -97,8 +97,8 @@ type Preview struct {
 // not quit and there is no overlay to back out of here (holding `q` is
 // the only way to quit, so an accidental Escape press, or a stray tap
 // of `q`, can't lose the session's open-files state) — its only effect
-// at this view is clearFind, clearing an active in-file find if there
-// is one, and otherwise remaining a no-op. Reaching another view
+// at this view is fileView.ClearFind, clearing an active in-file find
+// if there is one, and otherwise remaining a no-op. Reaching another view
 // (`b`/Tab/`o`/`s`) and progressing the hold-to-quit gesture (`q`) are
 // reported via the returned Action so App's dispatcher, which owns
 // Overlay transitions, QuickOpen/Search's own Open() setup, and the
@@ -172,23 +172,11 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 			e.Text.CopyMode = !e.Text.CopyMode
 		}
 	case ev.Rune() == 'n':
-		if isHex {
-			v.hexFindStep(1)
-		} else {
-			v.findStep(1)
-		}
+		fv.FindStep(v, e, 1)
 	case ev.Rune() == 'N':
-		if isHex {
-			v.hexFindStep(-1)
-		} else {
-			v.findStep(-1)
-		}
+		fv.FindStep(v, e, -1)
 	case ev.Key() == tcell.KeyEscape:
-		if isHex {
-			v.clearHexFind()
-		} else {
-			v.clearFind()
-		}
+		fv.ClearFind(v, e)
 	}
 	return ActionNone
 }

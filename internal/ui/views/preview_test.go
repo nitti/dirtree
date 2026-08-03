@@ -718,9 +718,9 @@ func TestTierPlainTextFindStartsBackgroundScan(t *testing.T) {
 	files, e := openTierPlainText(t, 10)
 	v := newTestPreview(files, 60, 10)
 
-	v.performFind("line 7")
+	textFileView{}.PerformFind(v, e, "line 7")
 	if e.Text.FindScan == nil {
-		t.Fatal("expected performFind to start a background scan for a TierPlainText entry")
+		t.Fatal("expected PerformFind to start a background scan for a TierPlainText entry")
 	}
 	if len(e.Text.FindMatches) != 0 || e.Text.FindCurrent != -1 {
 		t.Fatalf("expected no matches yet while the scan is in flight, got FindMatches=%v FindCurrent=%d", e.Text.FindMatches, e.Text.FindCurrent)
@@ -731,7 +731,7 @@ func TestTierPlainTextFindScanResultsSyncOnceDone(t *testing.T) {
 	files, e := openTierPlainText(t, 10)
 	v := newTestPreview(files, 60, 10)
 
-	v.performFind("line 7")
+	textFileView{}.PerformFind(v, e, "line 7")
 	waitFindScanDone(t, v, e)
 
 	if len(e.Text.FindMatches) != 1 || e.Text.FindMatches[0].Line != 6 {
@@ -753,13 +753,13 @@ func TestTierPlainTextFindClearCancelsInFlightScan(t *testing.T) {
 	files, e := openTierPlainText(t, 10)
 	v := newTestPreview(files, 60, 10)
 
-	v.performFind("line 7")
+	textFileView{}.PerformFind(v, e, "line 7")
 	if e.Text.FindScan == nil {
 		t.Fatal("expected a scan to be in flight")
 	}
-	v.clearFind()
+	textFileView{}.ClearFind(v, e)
 	if e.Text.FindScan != nil || e.Text.FindQuery != "" {
-		t.Fatalf("expected clearFind to cancel and clear the in-flight scan, got FindScan=%v FindQuery=%q", e.Text.FindScan, e.Text.FindQuery)
+		t.Fatalf("expected ClearFind to cancel and clear the in-flight scan, got FindScan=%v FindQuery=%q", e.Text.FindScan, e.Text.FindQuery)
 	}
 }
 

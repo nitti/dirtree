@@ -6,10 +6,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/nitti/dirtree/internal/hexfind"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/spinner"
-	"github.com/nitti/dirtree/internal/tree"
 	"github.com/nitti/dirtree/internal/ui/canvas"
 )
 
@@ -240,13 +238,16 @@ func parseOffset(input string) (int64, bool) {
 // is open (SPEC.md §2.1a): any printable character is accepted (a byte
 // pattern/ASCII substring, like in-file find's free-text query), Enter
 // executes the search, Escape cancels without changing the entry's
-// existing hex-find state.
+// existing hex-find state. HexFindPromptOpen is only ever set true for
+// a hex-tier entry (HandleKey's `/` case), so this reaches straight for
+// hexFileView rather than dispatching through fileViewFor.
 func (v *Preview) handleHexFindPromptKey(ev *tcell.EventKey) {
+	e := v.Files.DisplayedEntry()
 	switch {
 	case ev.Key() == tcell.KeyEscape:
 		v.HexFindPromptOpen = false
 	case ev.Key() == tcell.KeyEnter:
-		v.performHexFind(v.HexFindInput)
+		hexFileView{}.PerformFind(v, e, v.HexFindInput)
 		v.HexFindPromptOpen = false
 	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
 		if len(v.HexFindInput) > 0 {
@@ -258,51 +259,6 @@ func (v *Preview) handleHexFindPromptKey(ev *tcell.EventKey) {
 	case ev.Rune() != 0 && ev.Key() == tcell.KeyRune:
 		v.HexFindInput += string(ev.Rune())
 	}
-}
-
-// clearHexFind clears the displayed entry's hex-find state (SPEC.md
-// §2.1a), if any, canceling a still-running scan first — the hex view's
-// analog of clearFind (find.go). A no-op if there's no displayed entry
-// and no active query or in-progress scan.
-func (v *Preview) clearHexFind() {
-	e := v.Files.DisplayedEntry()
-	if e == nil || (e.Hex.HexFindQuery == "" && e.Hex.HexFindScan == nil) {
-		return
-	}
-	if e.Hex.HexFindScan != nil {
-		e.Hex.HexFindScan.Cancel()
-		e.Hex.HexFindScan = nil
-	}
-	e.Hex.HexFindQuery = ""
-	e.Hex.HexFindMatches = nil
-	e.Hex.HexFindCurrent = -1
-	e.Hex.HexFindWrapNote = ""
-}
-
-// performHexFind executes a hex-view find (SPEC.md §2.1a): always a
-// background scan (hexfind.StartScan), since a TierBinary entry never
-// holds its file's full byte content resident regardless of size, unlike
-// text find's TierHighlighted/TierPlainText split (performFind, find.go).
-// A no-op if there's no displayed entry; an empty query clears any
-// existing hex-find state instead of searching, mirroring performFind's
-// own empty-query behavior.
-func (v *Preview) performHexFind(query string) {
-	e := v.Files.DisplayedEntry()
-	if e == nil {
-		return
-	}
-	if e.Hex.HexFindScan != nil {
-		e.Hex.HexFindScan.Cancel()
-		e.Hex.HexFindScan = nil
-	}
-	e.Hex.HexFindQuery = query
-	e.Hex.HexFindMatches = nil
-	e.Hex.HexFindCurrent = -1
-	e.Hex.HexFindWrapNote = ""
-	if query == "" {
-		return
-	}
-	e.Hex.HexFindScan = hexfind.StartScan(e.Path, query)
 }
 
 // seedHexFindCurrent picks e's initial current hex-find match — the
@@ -322,28 +278,6 @@ func (v *Preview) seedHexFindCurrent(e *openfiles.Entry) {
 		e.Hex.HexFindWrapNote = "wrapped to top"
 	}
 	e.Hex.HexFindCurrent = idx
-	v.scrollToHexFindMatch(e)
-}
-
-// hexFindStep moves the current hex-find match by delta (+1/-1),
-// wrapping around at either end and noting the wrap (SPEC.md §2.1a),
-// mirroring findStep (find.go). A no-op if there's no displayed entry
-// or it has no matches.
-func (v *Preview) hexFindStep(delta int) {
-	e := v.Files.DisplayedEntry()
-	if e == nil || len(e.Hex.HexFindMatches) == 0 {
-		return
-	}
-	next := tree.MoveSelection(e.Hex.HexFindCurrent, delta, len(e.Hex.HexFindMatches))
-	switch {
-	case delta > 0 && next < e.Hex.HexFindCurrent:
-		e.Hex.HexFindWrapNote = "wrapped to top"
-	case delta < 0 && next > e.Hex.HexFindCurrent:
-		e.Hex.HexFindWrapNote = "wrapped to bottom"
-	default:
-		e.Hex.HexFindWrapNote = ""
-	}
-	e.Hex.HexFindCurrent = next
 	v.scrollToHexFindMatch(e)
 }
 
