@@ -168,9 +168,7 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 			v.FindInput = ""
 		}
 	case ev.Rune() == 'c':
-		if !isHex && e != nil {
-			e.Text.CopyMode = !e.Text.CopyMode
-		}
+		fv.ToggleCopyMode(v, e)
 	case ev.Rune() == 'n':
 		fv.FindStep(v, e, 1)
 	case ev.Rune() == 'N':

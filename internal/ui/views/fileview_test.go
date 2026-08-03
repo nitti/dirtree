@@ -233,3 +233,25 @@ func TestGotoLabelDispatchesOnTier(t *testing.T) {
 		t.Errorf("GotoLabel() with hex entry = %q, want %q", got, want)
 	}
 }
+
+// TestToggleCopyModeDispatchesOnTier guards #114's final cleanup stage:
+// textFileView.ToggleCopyMode actually toggles the entry's copy mode,
+// while hexFileView.ToggleCopyMode is a genuine no-op (SPEC.md §2.1a —
+// copy mode does not apply to a hex view). HexState has no CopyMode
+// field at all, so the only thing to verify on the hex side is that it
+// doesn't panic reaching for one.
+func TestToggleCopyModeDispatchesOnTier(t *testing.T) {
+	textEntry := &openfiles.Entry{Tier: preview.TierHighlighted, Text: &openfiles.TextState{}}
+	hexEntry := &openfiles.Entry{Tier: preview.TierBinary, Hex: &openfiles.HexState{}}
+
+	textFileView{}.ToggleCopyMode(nil, textEntry)
+	if !textEntry.Text.CopyMode {
+		t.Fatal("expected textFileView.ToggleCopyMode to toggle CopyMode on")
+	}
+	textFileView{}.ToggleCopyMode(nil, textEntry)
+	if textEntry.Text.CopyMode {
+		t.Fatal("expected a second call to toggle CopyMode back off")
+	}
+
+	hexFileView{}.ToggleCopyMode(nil, hexEntry)
+}

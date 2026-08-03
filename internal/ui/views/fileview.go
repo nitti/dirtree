@@ -15,22 +15,33 @@ import (
 )
 
 // fileView captures the pieces of the primary preview view's behavior
-// that differ between the text and hex tiers (SPEC.md §2.1, §2.1a):
-// the goto prompt (which characters are valid input, how a submitted
-// input is applied, its label/legend/range hint), the file title bar's
+// that differ between the text and hex tiers (SPEC.md §2.1, §2.1a): the
+// goto prompt (which characters are valid input, how a submitted input
+// is applied, its label/legend/range hint), the file title bar's
 // drawing and state precedence, its help-overlay legend accessor,
-// background find-scan syncing, content drawing, scroll/navigation, and
-// find's own perform/step/clear actions. This is the shared "file view"
-// abstraction proposed in #114, replacing the several `if e.Tier ==
-// preview.TierBinary { ... } else { ... }` branches that used to sit
-// directly in Draw, CurrentFileLegend, handleGotoPromptKey, and
-// HandleKey's scroll/Home/End/find-step/clear-find cases, and the
-// now-deleted drawFileTitleBar/drawHexFileTitleBar/syncFindScan/
-// syncHexFindScan/drawContent/drawHexContent/scroll/hexScroll/
-// hexJumpStart/hexJumpEnd/performFind/performHexFind/findStep/
-// hexFindStep/clearFind/clearHexFind functions. Copy mode's own toggle
-// remains its own separate branch point for now (Stage 7), left for
-// further follow-up rather than folded in all at once.
+// background find-scan syncing, content drawing, scroll/navigation,
+// find's own perform/step/clear actions, and the copy-mode toggle. This
+// is the shared "file view" abstraction proposed in #114, replacing the
+// several `if e.Tier == preview.TierBinary { ... } else { ... }`
+// branches that used to sit directly in Draw, CurrentFileLegend,
+// handleGotoPromptKey, and HandleKey's scroll/Home/End/find-step/
+// clear-find/copy-mode cases, and the now-deleted drawFileTitleBar/
+// drawHexFileTitleBar/syncFindScan/syncHexFindScan/drawContent/
+// drawHexContent/scroll/hexScroll/hexJumpStart/hexJumpEnd/performFind/
+// performHexFind/findStep/hexFindStep/clearFind/clearHexFind functions.
+//
+// This completes #114's core ask: after this, fileViewFor itself is
+// the only remaining `e.Tier == preview.TierBinary` branch point in
+// this package for behavior this interface covers. HandleKey's `g` and
+// `/` cases still branch on tier too, but for a different reason than
+// the branches above — the branch itself isn't the same action reached
+// two ways, it reflects genuine per-tier asymmetry that doesn't fit
+// this interface's shape: `g`'s text-tier case has an extra
+// gotoLineBlocked check hex has no equivalent of, and `/` sets one of
+// two still-separate Preview.FindPromptOpen/HexFindPromptOpen fields.
+// Collapsing those two fields into one (making `/`'s branch removable
+// the same way copy mode's was) is a smaller, opportunistic follow-up,
+// not folded in here.
 type fileView interface {
 	// acceptGotoRune reports whether r is valid input for the goto
 	// prompt while this tier's entry is displayed.
@@ -113,6 +124,11 @@ type fileView interface {
 	// wrap note), canceling a still-running scan first. A no-op if
 	// there's nothing to clear.
 	ClearFind(v *Preview, e *openfiles.Entry)
+
+	// ToggleCopyMode toggles e's copy mode (SPEC.md §2.1) — a no-op for
+	// a TierBinary entry, which copy mode does not apply to (SPEC.md
+	// §2.1a). A no-op if e is nil.
+	ToggleCopyMode(v *Preview, e *openfiles.Entry)
 }
 
 // textFileView is the fileView for every tier except TierBinary
@@ -781,6 +797,21 @@ func (hexFileView) ClearFind(v *Preview, e *openfiles.Entry) {
 	e.Hex.HexFindCurrent = -1
 	e.Hex.HexFindWrapNote = ""
 }
+
+// ToggleCopyMode toggles e's copy mode (SPEC.md §2.1): strips the
+// preview's line-number gutter and syntax-color styling for e
+// specifically, so a terminal mouse selection over its content grabs
+// exactly the file's own characters. A no-op if e is nil.
+func (textFileView) ToggleCopyMode(v *Preview, e *openfiles.Entry) {
+	if e != nil {
+		e.Text.CopyMode = !e.Text.CopyMode
+	}
+}
+
+// ToggleCopyMode is a no-op for the hex tier: copy mode does not apply
+// to a hex view (SPEC.md §2.1a) — pressing `c` while one is displayed
+// has no effect.
+func (hexFileView) ToggleCopyMode(v *Preview, e *openfiles.Entry) {}
 
 // fileViewFor returns the fileView implementation for e's tier —
 // hexFileView for TierBinary, textFileView otherwise — mirroring every

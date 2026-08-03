@@ -535,6 +535,33 @@ func TestHandleKeyHexNavigation(t *testing.T) {
 // digits (no "0x" — the prompt supplies that itself) and Enter jumps
 // the viewport, interpreting the input as hexadecimal, and closes the
 // prompt.
+// TestHandleKeyCIsNoOpOnHexTier guards SPEC.md §2.1a: copy mode does
+// not apply to a hex view, so pressing 'c' while one is displayed has
+// no effect — now dispatched through fileView.ToggleCopyMode
+// (hexFileView's own implementation is a genuine no-op) rather than an
+// inline isHex check, and must not panic reaching for a CopyMode field
+// HexState doesn't have.
+func TestHandleKeyCIsNoOpOnHexTier(t *testing.T) {
+	dir := t.TempDir()
+	content := append([]byte{0}, make([]byte, 99)...)
+	path := writeBinaryFile(t, dir, content)
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	sim.SetSize(80, 10)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
+	res := files.Open(path, preview.DefaultByteCap)
+	if res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %+v", res)
+	}
+
+	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+}
+
 func TestHandleKeyHexGotoOffset(t *testing.T) {
 	dir := t.TempDir()
 	content := append([]byte{0}, make([]byte, 999)...)

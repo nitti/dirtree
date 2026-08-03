@@ -51,6 +51,33 @@ func TestHandleKeyQReturnsActionQuitKey(t *testing.T) {
 	}
 }
 
+// TestHandleKeyTogglesCopyMode exercises 'c' end to end through
+// Preview.HandleKey for a text-tier entry (SPEC.md §2.1), now dispatched
+// through fileView.ToggleCopyMode rather than an inline isHex check.
+func TestHandleKeyTogglesCopyMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(path, []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := openfiles.New()
+	v := newTestPreview(files, 60, 10)
+	res := files.Open(path, 1<<20)
+	if res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	e := res.Entry
+
+	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+	if !e.Text.CopyMode {
+		t.Fatal("expected 'c' to toggle copy mode on")
+	}
+	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+	if e.Text.CopyMode {
+		t.Fatal("expected a second 'c' to toggle copy mode back off")
+	}
+}
+
 // TestStreamBuildingVisible exercises the file-legend spinner's
 // show/hide decision (SPEC.md §5.3's perceptibility-threshold and
 // minimum-display-duration discipline, applied here the same way
