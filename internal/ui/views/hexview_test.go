@@ -411,7 +411,7 @@ func TestHexScrollBumpsAtRestEdges(t *testing.T) {
 	}
 	e := res.Entry
 
-	v.hexScroll(-1) // already at the top: pushing further up bumps
+	hexFileView{}.Scroll(v, e, -1) // already at the top: pushing further up bumps
 	if v.TopBumpPath != e.Path {
 		t.Fatalf("expected top bump after scrolling up from the top, got TopBumpPath=%q", v.TopBumpPath)
 	}
@@ -420,18 +420,18 @@ func TestHexScrollBumpsAtRestEdges(t *testing.T) {
 	}
 
 	v.TopBumpPath = ""
-	v.hexScroll(1) // ordinary downward scroll within bounds: no bump
+	hexFileView{}.Scroll(v, e, 1) // ordinary downward scroll within bounds: no bump
 	if v.TopBumpPath != "" || v.BottomBumpPath != "" {
 		t.Fatalf("expected no bump from an ordinary in-bounds scroll, got TopBumpPath=%q BottomBumpPath=%q", v.TopBumpPath, v.BottomBumpPath)
 	}
 
 	e.Hex.HexOffset = 0
 	v.BottomBumpPath = ""
-	v.hexScroll(1000) // scroll far past the bottom: first landing on the last row doesn't bump
+	hexFileView{}.Scroll(v, e, 1000) // scroll far past the bottom: first landing on the last row doesn't bump
 	if v.BottomBumpPath != "" {
 		t.Fatalf("expected no bottom bump on first reaching the last row, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
-	v.hexScroll(1) // already at the bottom: pushing further down bumps
+	hexFileView{}.Scroll(v, e, 1) // already at the bottom: pushing further down bumps
 	if v.BottomBumpPath != e.Path {
 		t.Fatalf("expected bottom bump after scrolling down from the bottom, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
@@ -460,10 +460,11 @@ func TestDrawHexContentFlashesEdgeRowOnBump(t *testing.T) {
 	if res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %+v", res)
 	}
+	e := res.Entry
 
-	v.drawHexContent(0, 0, w, h)
-	v.hexScroll(-1) // already at the top: bumps
-	v.drawHexContent(0, 0, w, h)
+	hexFileView{}.DrawContent(v, e, 0, 0, w, h)
+	hexFileView{}.Scroll(v, e, -1) // already at the top: bumps
+	hexFileView{}.DrawContent(v, e, 0, 0, w, h)
 	sim.Show()
 
 	_, _, attr := cellStyle(sim, 0, 0).Decompose()

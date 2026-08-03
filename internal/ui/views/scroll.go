@@ -32,10 +32,11 @@ const windowMargin = 200
 // line number (decimal digits only), a TierBinary entry's jumps to a
 // byte offset, always interpreted as hexadecimal (hex digits only —
 // the prompt itself shows a literal "0x" ahead of the typed input,
-// drawHexContent, so there's no decimal/hex ambiguity to resolve and
-// no "0x" for the user to type themselves). Backspace, Ctrl+U (clear),
-// and Escape (cancel without changing the viewport) behave the same
-// either way. Which digits are accepted and what Enter jumps to are
+// hexFileView.DrawTitleBar, so there's no decimal/hex ambiguity to
+// resolve and no "0x" for the user to type themselves). Backspace,
+// Ctrl+U (clear), and Escape (cancel without changing the viewport)
+// behave the same either way. Which digits are accepted and what
+// Enter jumps to are
 // the two tier-specific pieces, dispatched through fileViewFor
 // (fileview.go) rather than branched here directly.
 func (v *Preview) handleGotoPromptKey(ev *tcell.EventKey) {
@@ -59,55 +60,20 @@ func (v *Preview) handleGotoPromptKey(ev *tcell.EventKey) {
 
 // isHexOffsetRune reports whether r is acceptable input for the
 // goto-offset prompt (SPEC.md §2.1a): only hex digits — the prompt's
-// input is always interpreted as hexadecimal (drawHexContent shows the
-// "0x" ahead of it as a fixed label, not something the user types), so
-// there's nothing else valid to accept here, unlike goto-line's
-// broader "accept while typing, reject on submit" prompts elsewhere.
+// input is always interpreted as hexadecimal (hexFileView.DrawContent
+// shows the "0x" ahead of it as a fixed label, not something the user
+// types), so there's nothing else valid to accept here, unlike
+// goto-line's broader "accept while typing, reject on submit" prompts
+// elsewhere.
 func isHexOffsetRune(r rune) bool {
 	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 }
 
-// scroll scrolls the currently-displayed entry by delta display rows
-// (SPEC.md §2.1), clamped so it never goes negative or past the point
-// where the last display row would leave the viewport. A no-op at the
-// empty state (no displayed entry) or while its content isn't ready yet
-// (docs/STREAMING_PREVIEW_DESIGN.md §4, §8).
-//
-// For a TierPlainText entry, delta is instead treated as a number of
-// source lines rather than display rows (§8's "a real change to the
-// preview view's scroll model," flagged and accepted here as a
-// deliberate simplification, since that tier's window only ever holds a
-// slice of the file rather than a whole-file wrap cache to walk display
-// rows against) — Up/Down and Page Up/Page Down all move by source line
-// count for that tier.
-func (v *Preview) scroll(delta int) {
-	e := v.Files.DisplayedEntry()
-	if e == nil || !contentReady(e) {
-		return
-	}
-	width := v.computedWidth()
-	if e.Tier == preview.TierPlainText {
-		cur := currentTopLine(e)
-		target := clamp(cur+delta, 1, bestLineCount(e))
-		if target == cur {
-			v.bumpEdge(e, delta)
-		}
-		v.ensureWindow(e, width, target)
-		v.setScrollToLine(e, target)
-		return
-	}
-	v.ensureWrapped(e, width)
-	old := e.Text.Scroll
-	e.Text.Scroll = clamp(e.Text.Scroll+delta, 0, v.maxScroll(e, v.viewportHeight()))
-	if e.Text.Scroll == old {
-		v.bumpEdge(e, delta)
-	}
-}
-
-// bumpEdge records a scroll attempt (from scroll, above) that pushed
-// further than e's content allows, in the direction delta indicates:
-// negative means already at the top, positive means already at the
-// bottom. A no-op for delta == 0, which scroll never actually passes.
+// bumpEdge records a scroll attempt (from textFileView.Scroll or
+// hexFileView.Scroll) that pushed further than e's content allows, in
+// the direction delta indicates: negative means already at the top,
+// positive means already at the bottom. A no-op for delta == 0, which
+// neither Scroll implementation ever actually passes.
 func (v *Preview) bumpEdge(e *openfiles.Entry, delta int) {
 	switch {
 	case delta < 0:

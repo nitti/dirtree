@@ -63,9 +63,10 @@ type Preview struct {
 	// TopBumpPath/TopBumpFlashStart and BottomBumpPath/BottomBumpFlashStart
 	// track a scroll attempt (Up/Page Up past the first line, or
 	// Down/Page Down past the last) that pushed further than the
-	// currently-displayed entry's content allows (SPEC.md §2.1):
-	// drawContent briefly reverses the corresponding edge row's video as a
-	// "you've hit the end" cue. Same self-expiring time.Time-field pattern
+	// currently-displayed entry's content allows (SPEC.md §2.1): the
+	// fileView's DrawContent implementation briefly reverses the
+	// corresponding edge row's video as a "you've hit the end" cue.
+	// Same self-expiring time.Time-field pattern
 	// as GotoBlockedPath/GotoBlockedFlashStart above, path-keyed for the
 	// same reason — so switching to a different entry within the flash
 	// window doesn't carry a stale flash over onto it.
@@ -118,6 +119,7 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 
 	e := v.Files.DisplayedEntry()
 	isHex := e != nil && e.Tier == preview.TierBinary
+	fv := fileViewFor(e)
 
 	switch {
 	case ev.Rune() == 'b':
@@ -130,26 +132,18 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 		return ActionOpenSearch
 	case ev.Rune() == 'q':
 		return ActionQuitKey
-	case isHex && ev.Key() == tcell.KeyUp:
-		v.hexScroll(-1)
-	case isHex && ev.Key() == tcell.KeyDown:
-		v.hexScroll(1)
-	case isHex && ev.Key() == tcell.KeyPgUp:
-		v.hexScroll(-v.viewportHeight())
-	case isHex && ev.Key() == tcell.KeyPgDn:
-		v.hexScroll(v.viewportHeight())
-	case isHex && ev.Key() == tcell.KeyHome:
-		v.hexJumpStart()
-	case isHex && ev.Key() == tcell.KeyEnd:
-		v.hexJumpEnd()
 	case ev.Key() == tcell.KeyUp:
-		v.scroll(-1)
+		fv.Scroll(v, e, -1)
 	case ev.Key() == tcell.KeyDown:
-		v.scroll(1)
+		fv.Scroll(v, e, 1)
 	case ev.Key() == tcell.KeyPgUp:
-		v.scroll(-v.viewportHeight())
+		fv.Scroll(v, e, -v.viewportHeight())
 	case ev.Key() == tcell.KeyPgDn:
-		v.scroll(v.viewportHeight())
+		fv.Scroll(v, e, v.viewportHeight())
+	case ev.Key() == tcell.KeyHome:
+		fv.JumpStart(v, e)
+	case ev.Key() == tcell.KeyEnd:
+		fv.JumpEnd(v, e)
 	case ev.Rune() == 'g':
 		switch {
 		case isHex:

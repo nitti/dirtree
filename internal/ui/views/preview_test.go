@@ -121,7 +121,7 @@ func TestDrawContentEmptyStateHintMatchesLegendOrder(t *testing.T) {
 	sim.SetSize(w, h)
 
 	v := &Preview{Shared: &Shared{Files: openfiles.New(), Canvas: canvas.New(sim)}}
-	v.drawContent(0, 0, w, h)
+	v.drawEmptyState(0, 0, w, h)
 	sim.Show()
 
 	row := strings.TrimSpace(rowText(sim, h/2, w))
@@ -548,7 +548,7 @@ func TestTierPlainTextWindowStartsAtFirstLine(t *testing.T) {
 	files, e := openTierPlainText(t, 10)
 	v := newTestPreview(files, 60, 10)
 
-	v.drawContent(0, 0, 60, 10)
+	textFileView{}.DrawContent(v, e, 0, 0, 60, 10)
 	if e.Text.WindowStartLine != 0 {
 		t.Fatalf("expected window to start at line 0, got %d", e.Text.WindowStartLine)
 	}
@@ -560,9 +560,9 @@ func TestTierPlainTextWindowStartsAtFirstLine(t *testing.T) {
 func TestTierPlainTextScrollMovesBySourceLine(t *testing.T) {
 	files, e := openTierPlainText(t, 50)
 	v := newTestPreview(files, 60, 10)
-	v.drawContent(0, 0, 60, 10)
+	textFileView{}.DrawContent(v, e, 0, 0, 60, 10)
 
-	v.scroll(3)
+	textFileView{}.Scroll(v, e, 3)
 	if got := currentTopLine(e); got != 4 {
 		t.Fatalf("expected top line 4 after scrolling 3, got %d", got)
 	}
@@ -591,9 +591,9 @@ func TestScrollBumpsAtRestEdges(t *testing.T) {
 	e := files.DisplayedEntry()
 	waitEntryReady(t, e)
 	v := newTestPreview(files, 60, 5)
-	v.drawContent(0, 0, 60, 5)
+	textFileView{}.DrawContent(v, e, 0, 0, 60, 5)
 
-	v.scroll(-1) // already at the top: pushing further up bumps
+	textFileView{}.Scroll(v, e, -1) // already at the top: pushing further up bumps
 	if v.TopBumpPath != e.Path {
 		t.Fatalf("expected top bump after scrolling up from the top, got TopBumpPath=%q", v.TopBumpPath)
 	}
@@ -602,16 +602,16 @@ func TestScrollBumpsAtRestEdges(t *testing.T) {
 	}
 
 	v.TopBumpPath = ""
-	v.scroll(1) // ordinary downward scroll within bounds: no bump
+	textFileView{}.Scroll(v, e, 1) // ordinary downward scroll within bounds: no bump
 	if v.TopBumpPath != "" || v.BottomBumpPath != "" {
 		t.Fatalf("expected no bump from an in-bounds scroll, got top=%q bottom=%q", v.TopBumpPath, v.BottomBumpPath)
 	}
 
-	v.scroll(100) // reaches the bottom for the first time: no bump yet
+	textFileView{}.Scroll(v, e, 100) // reaches the bottom for the first time: no bump yet
 	if v.BottomBumpPath != "" {
 		t.Fatalf("expected no bottom bump on first reaching the bottom, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
-	v.scroll(1) // pushes past the bottom again: bumps
+	textFileView{}.Scroll(v, e, 1) // pushes past the bottom again: bumps
 	if v.BottomBumpPath != e.Path {
 		t.Fatalf("expected bottom bump after scrolling past the last line, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
@@ -625,9 +625,9 @@ func TestScrollBumpsAtRestEdges(t *testing.T) {
 func TestScrollBumpsAtRestEdgesForTierPlainText(t *testing.T) {
 	files, e := openTierPlainText(t, 20)
 	v := newTestPreview(files, 60, 5)
-	v.drawContent(0, 0, 60, 5)
+	textFileView{}.DrawContent(v, e, 0, 0, 60, 5)
 
-	v.scroll(-1)
+	textFileView{}.Scroll(v, e, -1)
 	if v.TopBumpPath != e.Path {
 		t.Fatalf("expected top bump for TierPlainText already at line 1, got TopBumpPath=%q", v.TopBumpPath)
 	}
@@ -652,7 +652,8 @@ func TestDrawContentFlashesEdgeRowOnBump(t *testing.T) {
 	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %s", res.Message)
 	}
-	waitEntryReady(t, files.DisplayedEntry())
+	e := files.DisplayedEntry()
+	waitEntryReady(t, e)
 
 	sim := tcell.NewSimulationScreen("")
 	if err := sim.Init(); err != nil {
@@ -662,9 +663,9 @@ func TestDrawContentFlashesEdgeRowOnBump(t *testing.T) {
 	sim.SetSize(w, h)
 	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
 
-	v.drawContent(0, 0, w, h)
-	v.scroll(-1) // already at the top: bumps
-	v.drawContent(0, 0, w, h)
+	textFileView{}.DrawContent(v, e, 0, 0, w, h)
+	textFileView{}.Scroll(v, e, -1) // already at the top: bumps
+	textFileView{}.DrawContent(v, e, 0, 0, w, h)
 	sim.Show()
 
 	_, _, attr := cellStyle(sim, 0, 0).Decompose()

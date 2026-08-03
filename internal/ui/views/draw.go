@@ -1,8 +1,6 @@
 package views
 
 import (
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -94,23 +92,30 @@ var findLegendNoMatches = []canvas.LegendEntry{
 // title bar's own left/right content the same way the find prompt does
 // (fileView.DrawTitleBar) — reachable only when this is the primary
 // (non-overlaid) view, since no overlay leaves the goto-line key
-// handled while this is showing. Title bar drawing and find-scan
-// syncing are dispatched through fileViewFor; content drawing still
-// branches directly here for now (a later stage of #114 moves it
-// behind the interface too).
+// handled while this is showing. Find-scan syncing, title bar drawing,
+// and content drawing are all dispatched through fileViewFor now — this
+// function itself has no remaining `e.Tier == preview.TierBinary`
+// branch of its own (#114).
 func (v *Preview) Draw(x0, y0, w, h int, interactive bool) {
 	e := v.Files.DisplayedEntry()
 	fv := fileViewFor(e)
 	fv.SyncFindScan(v, e)
-	titleRows := 0
-	if e != nil {
-		titleRows = fv.DrawTitleBar(v, e, x0, y0, w, interactive)
-	}
-	if e != nil && e.Tier == preview.TierBinary {
-		v.drawHexContent(x0, y0+titleRows, w, h-titleRows)
+	if e == nil {
+		v.drawEmptyState(x0, y0, w, h)
 		return
 	}
-	v.drawContent(x0, y0+titleRows, w, h-titleRows)
+	titleRows := fv.DrawTitleBar(v, e, x0, y0, w, interactive)
+	fv.DrawContent(v, e, x0, y0+titleRows, w, h-titleRows)
+}
+
+// drawEmptyState renders the primary preview view's "no files open"
+// placeholder (SPEC.md §2.1) — tier-agnostic, since there is no
+// displayed entry at all in this state, so it's Draw's own
+// responsibility rather than either fileView implementation's.
+func (v *Preview) drawEmptyState(x0, y0, w, h int) {
+	msg := "no files open — press o to quick open, b to browse, s to search contents"
+	row := y0 + max(h/2, 1)
+	v.Canvas.DrawText(x0, row, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
 }
 
 // CurrentFileLegend returns the keybinding legend the file title bar
@@ -201,77 +206,6 @@ func streamBuildingVisible(elapsed, sinceDone time.Duration, done bool, threshol
 		doneAt = minDisplayDuration
 	}
 	return elapsed < doneAt
-}
-
-// drawContent renders the primary preview view's content (SPEC.md
-// §2.1) into the (x0, y0)-(x0+w, y0+h) rectangle: a line-number gutter
-// plus wrapped, highlighted rows for the currently-displayed entry, or
-// an explanatory empty-state message if none is displayed. The
-// goto-line prompt, when open, occupies the bottom row.
-func (v *Preview) drawContent(x0, y0, w, h int) {
-	e := v.Files.DisplayedEntry()
-	if e == nil {
-		msg := "no files open — press o to quick open, b to browse, s to search contents"
-		row := y0 + max(h/2, 1)
-		v.Canvas.DrawText(x0, row, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
-		return
-	}
-	if !contentReady(e) {
-		msg := "building preview…"
-		if e.Text.Stream != nil {
-			elapsed := e.Text.Stream.Elapsed()
-			if spinner.ShouldShow(e.Text.Stream.Done(), elapsed, canvas.SpinnerThreshold) {
-				frame := spinner.Frame(elapsed, canvas.SpinnerFPS, spinner.DefaultFrames)
-				msg = "building preview " + string(frame)
-			}
-		}
-		row := y0 + max(h/2, 1)
-		v.Canvas.DrawText(x0, row, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
-		return
-	}
-
-	gw := gutterWidth(e)
-	contentWidth := max(w-gw, 1)
-	if e.Tier == preview.TierPlainText {
-		v.ensureWindow(e, contentWidth, currentTopLine(e))
-	} else {
-		v.ensureWrapped(e, contentWidth)
-	}
-
-	viewportHeight := h
-	digits := gw - 2
-
-	topFlash := e.Path == v.TopBumpPath && time.Since(v.TopBumpFlashStart) < canvas.FlashDuration
-	bottomFlash := e.Path == v.BottomBumpPath && time.Since(v.BottomBumpFlashStart) < canvas.FlashDuration
-	lastDrawnY := -1
-
-	for row := range viewportHeight {
-		y := y0 + row
-		i := e.Text.Scroll + row
-		if i >= len(e.Text.Rows) {
-			break
-		}
-		dr := e.Text.Rows[i]
-		if gw > 0 {
-			numField := strings.Repeat(" ", digits)
-			if dr.HasNumber {
-				numField = fmt.Sprintf("%*d", digits, e.Text.WindowStartLine+dr.SourceLine+1)
-			}
-			v.Canvas.DrawText(x0, y, gw, numField+"  ", canvas.StyleNormal)
-		}
-		v.drawSegments(x0+gw, y, contentWidth, dr.Segments, findHighlightsForRow(e, dr), e.Text.CopyMode)
-		lastDrawnY = y
-	}
-	if topFlash {
-		v.Canvas.FlashRow(x0, y0, w)
-	}
-	if bottomFlash && lastDrawnY >= 0 && lastDrawnY != y0 {
-		// lastDrawnY == y0 means the document is short enough that its
-		// only visible row is both the top and bottom edge; skip so a
-		// simultaneous top+bottom flash doesn't reverse the same row
-		// twice and cancel itself back out.
-		v.Canvas.FlashRow(x0, lastDrawnY, w)
-	}
 }
 
 // findHighlight is one in-file find match's column range within a

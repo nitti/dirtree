@@ -3,13 +3,11 @@ package views
 import (
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/nitti/dirtree/internal/hexfind"
 	"github.com/nitti/dirtree/internal/openfiles"
-	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/tree"
 	"github.com/nitti/dirtree/internal/ui/canvas"
@@ -25,7 +23,7 @@ const maxHexBytesPerRow = 64
 // bytesPerRowFor picks a row's byte count at: a row always holds a whole
 // number of groups, never a partial one — splitting a group across two
 // rows read worse than giving up a little width to the ASCII column
-// instead (drawHexContent), which absorbs whatever width a partial
+// instead (hexFileView.DrawContent), which absorbs whatever width a partial
 // group would have used.
 const hexBytesPerGroup = 8
 
@@ -91,7 +89,7 @@ func hexRowWidth(gutterWidth, n int) int {
 // text wrapping adapting to a live resize. A row is always a whole
 // number of groups (never a partial one split awkwardly across the
 // grid); any width left over from not fitting one more full group is
-// picked up by the ASCII column instead (drawHexContent), not wasted.
+// picked up by the ASCII column instead (hexFileView.DrawContent), not wasted.
 // Never returns less than one full group, so a hex view remains
 // navigable (if visually cramped) even at a width too narrow to fit one
 // comfortably.
@@ -210,55 +208,13 @@ func formatSize(n int64, width int) string {
 }
 
 // hexBytesPerRow returns e's current bytes-per-row, derived from the
-// canvas's actual current width (SPEC.md §6.2) — the same value drawHex-
-// Content used most recently, kept as a small helper since navigation
-// (hexScroll and friends) needs it independent of a draw call.
+// canvas's actual current width (SPEC.md §6.2) — the same value
+// hexFileView.DrawContent used most recently, kept as a small helper
+// since navigation (hexFileView.Scroll and friends) needs it
+// independent of a draw call.
 func (v *Preview) hexBytesPerRow(e *openfiles.Entry) int {
 	w, _ := v.Canvas.Size()
 	return bytesPerRowFor(w, hexGutterWidth(e.Size))
-}
-
-// hexScroll moves e's hex-view viewport by deltaRows rows (SPEC.md
-// §2.1a), clamped so it never goes negative or past the file's last
-// row. A no-op at the empty state (no displayed entry). Mirrors scroll's
-// (scroll.go) own edge-bump behavior: a move that clamps back to
-// exactly where it started (already at the top/bottom) calls bumpEdge,
-// the same path-keyed flash-request mechanism the text tiers use, so
-// Up/Page Up past offset 0 (or Down/Page Down past the last row) gets
-// the same "you've hit the end" cue there — reused as-is rather than
-// duplicated, since it already operates in terms of the entry and a
-// signed delta, neither of which is tier-specific.
-func (v *Preview) hexScroll(deltaRows int) {
-	e := v.Files.DisplayedEntry()
-	if e == nil {
-		return
-	}
-	n := v.hexBytesPerRow(e)
-	old := e.Hex.HexOffset
-	e.Hex.HexOffset = clampHexOffset(e.Hex.HexOffset+int64(deltaRows)*int64(n), e.Size, n, v.viewportHeight())
-	if e.Hex.HexOffset == old {
-		v.bumpEdge(e, deltaRows)
-	}
-}
-
-// hexJumpStart jumps e's hex-view viewport to offset 0 (SPEC.md §2.1a's
-// Home binding).
-func (v *Preview) hexJumpStart() {
-	if e := v.Files.DisplayedEntry(); e != nil {
-		e.Hex.HexOffset = 0
-	}
-}
-
-// hexJumpEnd jumps e's hex-view viewport to hexMaxOffset — the file's
-// last row at the bottom of a full viewport, rather than just its own
-// start with the rest of the screen left blank (SPEC.md §2.1a's End
-// binding).
-func (v *Preview) hexJumpEnd() {
-	e := v.Files.DisplayedEntry()
-	if e == nil {
-		return
-	}
-	e.Hex.HexOffset = hexMaxOffset(e.Size, v.hexBytesPerRow(e), v.viewportHeight())
 }
 
 // parseOffset parses a goto-offset prompt's input (SPEC.md §2.1a) as a
@@ -531,60 +487,5 @@ func (v *Preview) drawHexRow(x0, y, rowWidth, gutterWidth, bytesPerRow int, rowO
 			style = hexHighlightStyleAt(i, highlights, canvas.StyleNormal)
 		}
 		v.Canvas.SetContent(x, y, ch, style)
-	}
-}
-
-// drawHexContent renders the hex view's content (SPEC.md §2.1a) into
-// the (x0, y0)-(x0+w, y0+h) rectangle: the offset gutter, hex-byte grid,
-// and ASCII column for the currently-displayed TierBinary entry's
-// viewport, reading only the bytes actually needed for it (preview.
-// ReadRange) rather than holding the file's content resident. The
-// goto-offset prompt, when open, replaces the title bar's own content
-// instead (hexFileView.DrawTitleBar), the same as textFileView.
-// DrawTitleBar's goto-line prompt — this rectangle is unaffected by it
-// either way.
-func (v *Preview) drawHexContent(x0, y0, w, h int) {
-	e := v.Files.DisplayedEntry()
-	if e == nil {
-		return
-	}
-	gw := hexGutterWidth(e.Size)
-	n := bytesPerRowFor(w, gw)
-
-	viewportHeight := h
-	if viewportHeight < 0 {
-		viewportHeight = 0
-	}
-
-	e.Hex.HexOffset = clampHexOffset(e.Hex.HexOffset, e.Size, n, viewportHeight)
-
-	data, err := preview.ReadRange(e.Path, e.Hex.HexOffset, viewportHeight*n)
-	if err != nil {
-		data = nil
-	}
-
-	topFlash := e.Path == v.TopBumpPath && time.Since(v.TopBumpFlashStart) < canvas.FlashDuration
-	bottomFlash := e.Path == v.BottomBumpPath && time.Since(v.BottomBumpFlashStart) < canvas.FlashDuration
-	lastDrawnY := -1
-
-	for row := range viewportHeight {
-		rowStart := row * n
-		if rowStart >= len(data) {
-			break
-		}
-		rowEnd := min(rowStart+n, len(data))
-		y := y0 + row
-		v.drawHexRow(x0, y, w, gw, n, e.Hex.HexOffset+int64(rowStart), data[rowStart:rowEnd], e)
-		lastDrawnY = y
-	}
-	if topFlash {
-		v.Canvas.FlashRow(x0, y0, w)
-	}
-	if bottomFlash && lastDrawnY >= 0 && lastDrawnY != y0 {
-		// lastDrawnY == y0 means the whole file fits in one visible row;
-		// skip so a simultaneous top+bottom flash doesn't reverse the
-		// same row twice and cancel itself back out (drawContent, above,
-		// guards the same case for the text tiers).
-		v.Canvas.FlashRow(x0, lastDrawnY, w)
 	}
 }
