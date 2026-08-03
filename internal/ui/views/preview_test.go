@@ -167,7 +167,7 @@ func TestDrawFileTitleBarShowsGotoPrompt(t *testing.T) {
 	v.GotoPromptOpen = true
 	v.GotoInput = "2"
 
-	v.drawFileTitleBar(0, 0, w, true)
+	textFileView{}.DrawTitleBar(v, files.DisplayedEntry(), 0, 0, w, true)
 	sim.Show()
 
 	row := rowText(sim, 0, w)
@@ -209,7 +209,7 @@ func TestDrawFileTitleBarSuppressesGotoLegendWhenHelpVisible(t *testing.T) {
 	v.GotoPromptOpen = true
 	v.GotoInput = "2"
 
-	v.drawFileTitleBar(0, 0, w, true)
+	textFileView{}.DrawTitleBar(v, files.DisplayedEntry(), 0, 0, w, true)
 	sim.Show()
 
 	row := rowText(sim, 0, w)
@@ -223,8 +223,8 @@ func TestDrawFileTitleBarSuppressesGotoLegendWhenHelpVisible(t *testing.T) {
 
 // TestPreviewCurrentFileLegendPrecedence guards CurrentFileLegend's
 // state precedence (SPEC.md §5.4), which must exactly mirror
-// drawFileTitleBar's own switch so the help overlay never shows a
-// legend the title bar itself isn't actually offering.
+// textFileView.DrawTitleBar's own switch so the help overlay never
+// shows a legend the title bar itself isn't actually offering.
 func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
@@ -273,7 +273,7 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 	// #114: the goto prompt now renders in the file title bar (same as
 	// find), so CurrentFileLegend must offer its legend too, taking
 	// precedence over every other title-bar state the same way
-	// drawFileTitleBar's own switch does.
+	// textFileView.DrawTitleBar's own switch does.
 	t.Run("goto prompt open", func(t *testing.T) {
 		reset()
 		v.GotoPromptOpen = true
@@ -697,13 +697,14 @@ func TestTierPlainTextFindKeyOpensPrompt(t *testing.T) {
 }
 
 // waitFindScanDone blocks until e's in-progress find scan has been
-// picked up by syncFindScan (i.e. FindScan cleared back to nil), the
-// same signal the real Draw loop's per-frame sync relies on.
+// picked up by textFileView.SyncFindScan (i.e. FindScan cleared back
+// to nil), the same signal the real Draw loop's per-frame sync relies
+// on.
 func waitFindScanDone(t *testing.T, v *Preview, e *openfiles.Entry) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		v.syncFindScan(e)
+		textFileView{}.SyncFindScan(v, e)
 		if e.Text.FindScan == nil {
 			return
 		}

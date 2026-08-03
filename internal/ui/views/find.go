@@ -78,10 +78,10 @@ func (v *Preview) handleFindPromptKey(ev *tcell.EventKey) {
 // (docs/STREAMING_PREVIEW_DESIGN.md §9), matches can't be located
 // synchronously — this instead cancels any previous scan for the entry
 // and starts a new background one (find.StartScan), leaving FindMatches
-// empty and FindCurrent at -1 until syncFindScan picks up its result on
-// a later frame; the file title bar's status area shows a "searching…"
-// spinner in the meantime (findStatusText) rather than blocking this
-// keystroke.
+// empty and FindCurrent at -1 until textFileView.SyncFindScan picks up
+// its result on a later frame; the file title bar's status area shows
+// a "searching…" spinner in the meantime (findStatusText) rather than
+// blocking this keystroke.
 func (v *Preview) performFind(query string) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
@@ -117,8 +117,9 @@ func (v *Preview) performFind(query string) {
 // after the source line currently at the top of the viewport, wrapping
 // to the very first match (and noting the wrap) if none exists at or
 // after that point — and scrolls to it. Shared by performFind's
-// synchronous (TierHighlighted) path and syncFindScan's asynchronous
-// (TierPlainText) one, once a match set actually exists either way.
+// synchronous (TierHighlighted) path and textFileView.SyncFindScan's
+// asynchronous (TierPlainText) one, once a match set actually exists
+// either way.
 func (v *Preview) seedFindCurrent(e *openfiles.Entry) {
 	startLine := currentTopLine(e) - 1
 	idx := 0
@@ -133,31 +134,6 @@ func (v *Preview) seedFindCurrent(e *openfiles.Entry) {
 	}
 	e.Text.FindCurrent = idx
 	v.scrollToFindMatch(e)
-}
-
-// syncFindScan picks up a finished TierPlainText find scan's result
-// (docs/STREAMING_PREVIEW_DESIGN.md §9): once e.Text.FindScan reports done,
-// its matches are copied into FindMatches and the current match is
-// seeded and scrolled to exactly like a synchronous find's result would
-// be, then FindScan is cleared so this only ever runs once per scan. A
-// no-op while no scan is running or it hasn't finished yet. Called once
-// per frame (Draw) so the "searching…" spinner and, once ready, the
-// match highlighting/status both reflect current state without any
-// caller needing to poll for it explicitly.
-func (v *Preview) syncFindScan(e *openfiles.Entry) {
-	if e == nil || e.Text == nil || e.Text.FindScan == nil {
-		return
-	}
-	matches, done := e.Text.FindScan.Snapshot()
-	if !done {
-		return
-	}
-	e.Text.FindScan = nil
-	e.Text.FindMatches = matches
-	if len(matches) == 0 {
-		return
-	}
-	v.seedFindCurrent(e)
 }
 
 // findStep moves the current match by delta (+1 for `n`/next, -1 for

@@ -285,8 +285,8 @@ func TestFormatSize(t *testing.T) {
 // never runs past the width budget it was given (SPEC.md §2.1a's "the
 // size indicator should always be sized to fit within the gutter").
 // Widths below 5 aren't exercised here — hexGutterWidth's own 4-hex-
-// digit floor means drawHexFileTitleBar never actually offers formatSize
-// a budget narrower than that in practice.
+// digit floor means hexFileView.DrawTitleBar never actually offers
+// formatSize a budget narrower than that in practice.
 func TestFormatSizeNeverExceedsWidth(t *testing.T) {
 	sizes := []int64{1, 1023, 1024, 1025, 1536, 999_999, 1 << 20, 1 << 30, 1<<40 + 12345}
 	for _, n := range sizes {
@@ -370,7 +370,7 @@ func TestDrawHexFileTitleBarShowsGotoPrompt(t *testing.T) {
 	v.GotoPromptOpen = true
 	v.GotoInput = "64"
 
-	v.drawHexFileTitleBar(0, 0, w, true, e)
+	hexFileView{}.DrawTitleBar(v, e, 0, 0, w, true)
 	sim.Show()
 
 	row := rowText(sim, 0, w)
@@ -573,9 +573,9 @@ func TestHandleKeyHexGotoOffset(t *testing.T) {
 }
 
 // TestHandleKeyHexFindEndToEnd exercises the hex-find prompt through
-// Preview.HandleKey and syncHexFindScan (SPEC.md §2.1a): '/' opens the
-// prompt, typing a query and Enter starts a background scan, and once
-// it finishes the match is found and seeded as current.
+// Preview.HandleKey and hexFileView.SyncFindScan (SPEC.md §2.1a): '/'
+// opens the prompt, typing a query and Enter starts a background scan,
+// and once it finishes the match is found and seeded as current.
 func TestHandleKeyHexFindEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	content := append([]byte{0, 0, 0}, []byte("NEEDLE")...)
@@ -613,7 +613,7 @@ func TestHandleKeyHexFindEndToEnd(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for e.Hex.HexFindScan != nil && time.Now().Before(deadline) {
-		v.syncHexFindScan(e)
+		hexFileView{}.SyncFindScan(v, e)
 		time.Sleep(time.Millisecond)
 	}
 	if e.Hex.HexFindScan != nil {

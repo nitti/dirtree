@@ -349,27 +349,6 @@ func (v *Preview) performHexFind(query string) {
 	e.Hex.HexFindScan = hexfind.StartScan(e.Path, query)
 }
 
-// syncHexFindScan picks up a finished hex-find scan's result (SPEC.md
-// §2.1a), mirroring syncFindScan (find.go): once e.Hex.HexFindScan reports
-// done, its matches are copied into HexFindMatches and the current match
-// is seeded, then HexFindScan is cleared so this only ever runs once per
-// scan. A no-op while no scan is running or it hasn't finished yet.
-func (v *Preview) syncHexFindScan(e *openfiles.Entry) {
-	if e == nil || e.Hex == nil || e.Hex.HexFindScan == nil {
-		return
-	}
-	matches, done := e.Hex.HexFindScan.Snapshot()
-	if !done {
-		return
-	}
-	e.Hex.HexFindScan = nil
-	e.Hex.HexFindMatches = matches
-	if len(matches) == 0 {
-		return
-	}
-	v.seedHexFindCurrent(e)
-}
-
 // seedHexFindCurrent picks e's initial current hex-find match — the
 // first one at or after the offset currently at the top of the
 // viewport, wrapping to the very first match (and noting the wrap) if
@@ -454,67 +433,6 @@ func hexFindStatusText(e *openfiles.Entry) string {
 		status += " (" + e.Hex.HexFindWrapNote + ")"
 	}
 	return status
-}
-
-// drawHexFileTitleBar renders the hex view's own file title bar (SPEC.md
-// §2.1a): the file's total size in place of a line count, and goto-
-// offset/hex-find in place of goto-line/find/copy-mode in the legend.
-// Mirrors drawFileTitleBar's (draw.go) state precedence, minus the
-// goto-blocked/copy-mode cases, neither of which apply to a TierBinary
-// entry (it starts no background stream to block on, and copy mode does
-// not apply to a hex view, SPEC.md §2.1a).
-func (v *Preview) drawHexFileTitleBar(x0, y0, w int, interactive bool, e *openfiles.Entry) int {
-	path := tree.RelativeDisplayPath(v.RootPath, e.Path)
-	// sizeField is sized to gutterWidth-1 columns: formatSize spends
-	// that whole budget on precision (as many decimal places as fit)
-	// rather than settling for a fixed shape, so it fills the budget on
-	// its own for most files — the trailing %-*s pad is only a safety
-	// net for whatever's left (the sub-1024-byte case, where there's no
-	// more precision to add, or a rounding carry that costs a column).
-	// Either way, the single space joining it to path always lands
-	// path's own first column at x0+gutterWidth — the same column the
-	// hex-byte grid itself starts at (drawHexContent) — regardless of
-	// the file's size. This is the hex view's analog of §2.1's "NL"-tag-
-	// plus-single-space alignment trick, which instead gets this for
-	// free since its tag length and its gutter's digit width are both
-	// derived from the same line count; here the two aren't naturally
-	// coupled (hex digit count in the file's size vs. formatSize's own
-	// decimal-with-unit-letter rendering), so sizing formatSize's own
-	// output to the budget (and padding whatever's left) takes its place.
-	gw := hexGutterWidth(e.Size)
-	sizeField := fmt.Sprintf("%-*s", gw-1, formatSize(e.Size, gw-1))
-	left := sizeField + " " + path
-
-	legend := func(entries []canvas.LegendEntry) []canvas.LegendEntry {
-		if v.HelpVisible {
-			return nil
-		}
-		return entries
-	}
-
-	var text string
-	switch {
-	case interactive && v.GotoPromptOpen:
-		fv := hexFileView{}
-		text = canvas.LegendText(w, fv.gotoLabel()+v.GotoInput+" ("+fv.gotoRangeHint(e)+")", legend(fv.gotoLegend()))
-	case interactive && v.HexFindPromptOpen:
-		text = canvas.LegendText(w, "/"+v.HexFindInput, legend(hexFindPromptLegend))
-	case !interactive:
-		text = left
-	case e.Hex.HexFindScan != nil:
-		text = canvas.LegendText(w, left, withStatus(hexFindStatusText(e), legend(hexFindLegendNoMatches)))
-	case e.Hex.HexFindQuery != "" && len(e.Hex.HexFindMatches) > 0:
-		text = canvas.LegendText(w, left, withStatus(hexFindStatusText(e), legend(hexFindLegend)))
-	case e.Hex.HexFindQuery != "":
-		text = canvas.LegendText(w, left, withStatus(hexFindStatusText(e), legend(hexFindLegendNoMatches)))
-	default:
-		text = canvas.LegendText(w, left, legend(hexFileLegend))
-	}
-
-	style := canvas.StyleFileTitle
-	v.Canvas.DrawText(x0, y0, w, text, style)
-	v.boldPathInFileTitleBar(x0, y0, text, path, style)
-	return 1
 }
 
 // hexFindHighlight is one hex-find match's byte-index range within a
@@ -622,8 +540,9 @@ func (v *Preview) drawHexRow(x0, y, rowWidth, gutterWidth, bytesPerRow int, rowO
 // viewport, reading only the bytes actually needed for it (preview.
 // ReadRange) rather than holding the file's content resident. The
 // goto-offset prompt, when open, replaces the title bar's own content
-// instead (drawHexFileTitleBar), the same as drawFileTitleBar's
-// goto-line prompt — this rectangle is unaffected by it either way.
+// instead (hexFileView.DrawTitleBar), the same as textFileView.
+// DrawTitleBar's goto-line prompt — this rectangle is unaffected by it
+// either way.
 func (v *Preview) drawHexContent(x0, y0, w, h int) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
