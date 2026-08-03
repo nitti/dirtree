@@ -280,22 +280,6 @@ func parseOffset(input string) (int64, bool) {
 	return n, true
 }
 
-// gotoOffset jumps the currently-displayed entry's hex-view viewport to
-// the row containing the parsed byte offset (SPEC.md §2.1a), clamped to
-// the file's valid range. A no-op if input is empty, doesn't parse, or
-// there's no displayed entry.
-func (v *Preview) gotoOffset(input string) {
-	e := v.Files.DisplayedEntry()
-	if input == "" || e == nil {
-		return
-	}
-	offset, ok := parseOffset(input)
-	if !ok {
-		return
-	}
-	e.HexOffset = clampHexOffset(offset, e.Size, v.hexBytesPerRow(e), v.viewportHeight())
-}
-
 // handleHexFindPromptKey handles input while the hex view's find prompt
 // is open (SPEC.md §2.1a): any printable character is accepted (a byte
 // pattern/ASCII substring, like in-file find's free-text query), Enter

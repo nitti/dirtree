@@ -119,21 +119,6 @@ func (v *Preview) bumpEdge(e *openfiles.Entry, delta int) {
 	}
 }
 
-// gotoLine jumps the currently-displayed entry's scroll to the source
-// line's first display row (SPEC.md §2.1), clamped to [1, total source
-// lines]. A no-op if input is empty or there's no displayed entry.
-func (v *Preview) gotoLine(input string) {
-	e := v.Files.DisplayedEntry()
-	if input == "" || e == nil {
-		return
-	}
-	n := 0
-	for _, r := range input {
-		n = n*10 + int(r-'0')
-	}
-	v.ScrollToLine(e, n)
-}
-
 // ScrollToLine jumps e's scroll to source line n's first display row
 // (SPEC.md §2.1), clamped to [1, total source lines]. Used by both the
 // goto-line prompt and, via App's dispatcher, content search's
