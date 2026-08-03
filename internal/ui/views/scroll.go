@@ -35,19 +35,16 @@ const windowMargin = 200
 // drawHexContent, so there's no decimal/hex ambiguity to resolve and
 // no "0x" for the user to type themselves). Backspace, Ctrl+U (clear),
 // and Escape (cancel without changing the viewport) behave the same
-// either way.
+// either way. Which digits are accepted and what Enter jumps to are
+// the two tier-specific pieces, dispatched through fileViewFor
+// (fileview.go) rather than branched here directly.
 func (v *Preview) handleGotoPromptKey(ev *tcell.EventKey) {
-	e := v.Files.DisplayedEntry()
-	isHex := e != nil && e.Tier == preview.TierBinary
+	fv := fileViewFor(v.Files.DisplayedEntry())
 	switch {
 	case ev.Key() == tcell.KeyEscape:
 		v.GotoPromptOpen = false
 	case ev.Key() == tcell.KeyEnter:
-		if isHex {
-			v.gotoOffset(v.GotoInput)
-		} else {
-			v.gotoLine(v.GotoInput)
-		}
+		fv.jumpTo(v, v.GotoInput)
 		v.GotoPromptOpen = false
 	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
 		if len(v.GotoInput) > 0 {
@@ -55,9 +52,7 @@ func (v *Preview) handleGotoPromptKey(ev *tcell.EventKey) {
 		}
 	case ev.Key() == tcell.KeyCtrlU:
 		v.GotoInput = ""
-	case isHex && isHexOffsetRune(ev.Rune()):
-		v.GotoInput += string(ev.Rune())
-	case !isHex && ev.Rune() >= '0' && ev.Rune() <= '9':
+	case fv.acceptGotoRune(ev.Rune()):
 		v.GotoInput += string(ev.Rune())
 	}
 }
