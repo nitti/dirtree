@@ -11,9 +11,10 @@ DATA_DIR := data
 	llvm clean-llvm \
 	cpython clean-cpython \
 	bigfiles clean-bigfiles \
+	hexfile clean-hexfile \
 	bench-linux bench-bigfiles compare
 
-all: linux llvm cpython bigfiles
+all: linux llvm cpython bigfiles hexfile
 
 list:
 	@echo "Targets:"
@@ -21,6 +22,7 @@ list:
 	@echo "  make llvm          - LLVM monorepo (llvm/llvm-project, larger and deeper than linux)"
 	@echo "  make cpython       - CPython source (python/cpython, smaller, quick to fetch)"
 	@echo "  make bigfiles      - synthetic large files with known search markers (see README.md)"
+	@echo "  make hexfile       - synthetic binary file for exercising the hex view (see README.md)"
 	@echo "  make all           - all of the above"
 	@echo "  make bench-linux   - fetch linux (if needed) and benchmark content search's concurrency knob against it"
 	@echo "  make bench-bigfiles - generate bigfiles (if needed) and benchmark against it"
@@ -87,6 +89,18 @@ $(DATA_DIR)/bigfiles/.generated: make_bigfiles.sh
 
 clean-bigfiles:
 	rm -rf $(DATA_DIR)/bigfiles
+
+# --- hexfile ---
+
+hexfile: $(DATA_DIR)/hexfile/.generated
+
+$(DATA_DIR)/hexfile/.generated: make_hexfile.sh
+	@mkdir -p $(DATA_DIR)/hexfile
+	./make_hexfile.sh $(DATA_DIR)/hexfile
+	touch $@
+
+clean-hexfile:
+	rm -rf $(DATA_DIR)/hexfile
 
 clean:
 	rm -rf $(DATA_DIR)

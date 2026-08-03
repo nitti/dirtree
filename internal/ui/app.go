@@ -411,7 +411,7 @@ func (a *App) textInputActive() bool {
 	case views.OverlayBrowser:
 		return a.Browser.JumpActive
 	case views.OverlayNone:
-		return a.Preview.FindPromptOpen
+		return a.Preview.FindPromptOpen || a.Preview.HexFindPromptOpen
 	}
 	return false
 }

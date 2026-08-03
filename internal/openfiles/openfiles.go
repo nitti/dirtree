@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nitti/dirtree/internal/find"
+	"github.com/nitti/dirtree/internal/hexfind"
 	"github.com/nitti/dirtree/internal/preview"
 )
 
@@ -110,6 +111,23 @@ type Entry struct {
 	// (Reload) always resets whichever one applied to the old tier.
 	Size      int64
 	HexOffset int64
+
+	// Hex-view find state (SPEC.md §2.1a), the TierBinary analog of
+	// FindQuery/FindMatches/FindCurrent/FindWrapNote above — kept as its
+	// own separate set of fields rather than shared with them, since
+	// hexfind.Match addresses content by byte offset rather than the
+	// line/rune-column pair find.Match uses, and the two coordinate
+	// systems don't compose. HexFindScan is always used for a TierBinary
+	// entry's find (never left nil the way FindScan is for a
+	// TierHighlighted entry, which searches its resident Lines
+	// synchronously instead): a hex view never holds a file's full byte
+	// content resident regardless of size, so every hex find is a
+	// background scan.
+	HexFindQuery    string
+	HexFindMatches  []hexfind.Match
+	HexFindCurrent  int
+	HexFindWrapNote string
+	HexFindScan     *hexfind.Scan
 }
 
 // Outcome is the result of an open attempt (SPEC.md §2.2).
@@ -279,7 +297,7 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 		return OpenResult{Outcome: Failed, Message: preview.ErrText(err)}
 	}
 
-	e := &Entry{Path: path, FindCurrent: -1}
+	e := &Entry{Path: path, FindCurrent: -1, HexFindCurrent: -1}
 	var size int64
 	if info, err := os.Stat(path); err == nil {
 		e.ModTime = info.ModTime()
@@ -382,6 +400,14 @@ func (l *List) Reload(capBytes int64) []string {
 		e.FindMatches = nil
 		e.FindCurrent = -1
 		e.FindWrapNote = ""
+		if e.HexFindScan != nil {
+			e.HexFindScan.Cancel()
+			e.HexFindScan = nil
+		}
+		e.HexFindQuery = ""
+		e.HexFindMatches = nil
+		e.HexFindCurrent = -1
+		e.HexFindWrapNote = ""
 		reloaded = append(reloaded, filepath.Base(e.Path))
 	}
 	return reloaded
