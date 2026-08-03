@@ -103,18 +103,6 @@ func bytesPerRowFor(width, gutterWidth int) int {
 	return hexBytesPerGroup
 }
 
-// hexAsciiWidth returns the ASCII column's actual on-screen width for a
-// hex-view row laid out at bytesPerRow bytes/row within the given total
-// width and gutterWidth (SPEC.md §2.1a): bytesPerRow, widened by
-// whatever width bytesPerRowFor's whole-groups-only row didn't use —
-// less than one full group's worth, by construction — rather than
-// leaving it unclaimed. Floored at bytesPerRow itself (no widening) for
-// the narrow-terminal fallback case where even one group's row doesn't
-// fit width at all.
-func hexAsciiWidth(width, gutterWidth, bytesPerRow int) int {
-	return max(bytesPerRow+(width-hexRowWidth(gutterWidth, bytesPerRow)), bytesPerRow)
-}
-
 // hexGutterWidth returns the offset gutter's column width for a file of
 // the given size (SPEC.md §2.1a): enough hex digits for the largest
 // offset the file can contain, plus a two-column separator — the hex
@@ -517,25 +505,26 @@ func hexHighlightStyleAt(i int, highlights []hexFindHighlight, base tcell.Style)
 	return base
 }
 
-// drawHexRow renders one hex-view row at (x0, y): the offset gutter,
-// the hex-byte grid, and the ASCII column (SPEC.md §2.1a), for the
-// bytesPerRow-byte row starting at rowOffset whose actual bytes are
-// data (fewer than bytesPerRow at the file's final, partial row — the
-// remainder renders as blank space in both columns). asciiWidth is the
-// ASCII column's actual on-screen width, which may exceed bytesPerRow:
-// bytesPerRowFor only ever returns a whole number of hexBytesPerGroup-
-// sized groups, so a row's hex-byte grid never splits a group across
-// the width budget — whatever width that leaves unclaimed (less than
-// one full group) is instead added to the ASCII column, rendered here
-// as trailing blank space past the row's actual bytes, rather than left
-// as dead space the grid couldn't use anyway.
-func (v *Preview) drawHexRow(x0, y, gutterWidth, bytesPerRow, asciiWidth int, rowOffset int64, data []byte, e *openfiles.Entry) {
+// drawHexRow renders one hex-view row at (x0, y): the offset gutter and
+// hex-byte grid left-aligned starting at x0, and the ASCII column
+// right-aligned flush against x0+rowWidth — the row's own two
+// representations of the same bytes take different amounts of width to
+// show (bytesPerRow of them, at 3-4 columns apiece in the hex grid vs.
+// exactly 1 apiece in the ASCII column), and the more compact one won't
+// generally span the same width the other does, so rather than pick an
+// arbitrary side to absorb that difference, both blocks anchor to their
+// own edge of the row and whatever width is left over falls as a gap
+// between them (SPEC.md §2.1a) — never inside either block itself. For
+// the file's final, partial row (fewer than bytesPerRow actual bytes,
+// data), the shortfall renders as blank space within both columns
+// rather than changing either block's position.
+func (v *Preview) drawHexRow(x0, y, rowWidth, gutterWidth, bytesPerRow int, rowOffset int64, data []byte, e *openfiles.Entry) {
 	offsetStr := fmt.Sprintf("%0*x", gutterWidth-2, rowOffset)
 	v.Canvas.DrawText(x0, y, gutterWidth, offsetStr+"  ", canvas.StyleNormal)
 
 	highlights := hexFindHighlightsForRow(e, rowOffset, len(data))
 	hexX := x0 + gutterWidth
-	asciiX := hexX + hexBytesWidth(bytesPerRow) + 2
+	asciiX := x0 + rowWidth - bytesPerRow
 
 	col := 0
 	for i := range bytesPerRow {
@@ -556,8 +545,7 @@ func (v *Preview) drawHexRow(x0, y, gutterWidth, bytesPerRow, asciiWidth int, ro
 			}
 		}
 	}
-
-	for i := range asciiWidth {
+	for i := range bytesPerRow {
 		x := asciiX + i
 		ch, style := ' ', canvas.StyleNormal
 		if i < len(data) {
@@ -588,8 +576,6 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 	n := bytesPerRowFor(w, gw)
 	e.HexOffset = clampHexOffset(e.HexOffset, e.Size, n)
 
-	asciiWidth := hexAsciiWidth(w, gw, n)
-
 	viewportHeight := h
 	if v.GotoPromptOpen {
 		viewportHeight--
@@ -609,7 +595,7 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 			break
 		}
 		rowEnd := min(rowStart+n, len(data))
-		v.drawHexRow(x0, y0+row, gw, n, asciiWidth, e.HexOffset+int64(rowStart), data[rowStart:rowEnd], e)
+		v.drawHexRow(x0, y0+row, w, gw, n, e.HexOffset+int64(rowStart), data[rowStart:rowEnd], e)
 	}
 
 	if v.GotoPromptOpen {

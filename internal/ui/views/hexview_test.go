@@ -51,22 +51,46 @@ func TestBytesPerRowForNeverBelowOneGroup(t *testing.T) {
 	}
 }
 
-// TestHexAsciiWidthAbsorbsLeftoverWidth guards SPEC.md §2.1a's "the
-// ASCII column absorbs whatever width a partial group would have used"
-// rule: the ASCII column is exactly wide enough to make the row use all
-// of width when at least one group's row fits, and never narrower than
-// bytesPerRow itself in the narrow-terminal fallback case.
-func TestHexAsciiWidthAbsorbsLeftoverWidth(t *testing.T) {
-	gutterWidth := 10
-	for _, w := range []int{40, 50, 60, 77, 78, 100, 123} {
-		n := bytesPerRowFor(w, gutterWidth)
-		asciiWidth := hexAsciiWidth(w, gutterWidth, n)
-		if asciiWidth < n {
-			t.Errorf("width %d: hexAsciiWidth = %d, want >= bytesPerRow %d", w, asciiWidth, n)
+// TestDrawHexContentAsciiColumnRightAligned guards SPEC.md §2.1a's
+// left-align-the-hex-grid/right-align-the-ASCII-column layout rule: the
+// gutter+hex-grid block starts flush at the row's left edge and the
+// ASCII column ends flush at its right edge (x0+w-1), with whatever
+// width is left over falling as a gap *between* them rather than
+// stretching either block — and this holds across a resize, confirming
+// the ASCII column's right edge tracks the actual available width
+// instead of staying pinned to wherever the hex grid happens to end.
+func TestDrawHexContentAsciiColumnRightAligned(t *testing.T) {
+	dir := t.TempDir()
+	// Printable, non-space bytes throughout so every rendered ASCII cell
+	// this test inspects is unambiguously real content, never blank
+	// padding that could be mistaken for it.
+	content := make([]byte, 0, 200)
+	content = append(content, 0) // NUL byte -> binary
+	for i := 1; i < 200; i++ {
+		content = append(content, byte('A'+(i%26)))
+	}
+	path := writeBinaryFile(t, dir, content)
+
+	for _, w := range []int{60, 78, 100, 140} {
+		sim := tcell.NewSimulationScreen("")
+		if err := sim.Init(); err != nil {
+			t.Fatal(err)
 		}
-		wantTotal := gutterWidth + 2 + hexBytesWidth(n) + 2 + asciiWidth
-		if hexRowWidth(gutterWidth, n) <= w && wantTotal != w {
-			t.Errorf("width %d: row with widened ASCII column totals %d, want exactly %d", w, wantTotal, w)
+		sim.SetSize(w, 10)
+
+		files := openfiles.New()
+		v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
+		res := files.Open(path, preview.DefaultByteCap)
+		if res.Outcome != openfiles.Opened {
+			t.Fatalf("width %d: Open failed: %+v", w, res)
+		}
+
+		v.Draw(0, 1, w, 9, true)
+		sim.Show()
+
+		mainc, _, _, _ := sim.GetContent(w-1, 2)
+		if mainc == ' ' || mainc == 0 {
+			t.Errorf("width %d: rightmost cell of the first content row is blank, want the ASCII column flush to the right edge", w)
 		}
 	}
 }
