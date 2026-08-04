@@ -2,156 +2,20 @@
 // the rest of the UI operates on (SPEC.md §2.2): an ordered collection
 // of files opened during the session, plus which one (if any) is
 // currently displayed, kept free of any terminal-rendering dependency
-// so it's unit-testable.
+// so it's unit-testable. List itself knows nothing about tiers or an
+// entry's own content/state — it operates purely through the minimal
+// internal/entry.Entry interface (Path/Close/Evict), delegating all
+// per-file tier-deciding/reload logic to that package. What List does
+// own is genuine list mechanics: order, paging, displayed index,
+// dedup-by-path, and the resident-content LRU policy (below).
 package openfiles
 
 import (
-	"os"
 	"path/filepath"
-	"time"
 
-	"github.com/nitti/dirtree/internal/find"
-	"github.com/nitti/dirtree/internal/hexfind"
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/preview"
 )
-
-// Entry is one open file: its resolved absolute path and its own
-// independent per-tier state (SPEC.md §2.1, §2.2, §2.4). Text and Hex
-// hold that tier-specific state; exactly one is ever non-nil at a
-// time, mirroring the Tier-decides-validity pattern used everywhere
-// else in this codebase (Text non-nil iff Tier != preview.TierBinary,
-// Hex non-nil iff Tier == preview.TierBinary). Open and Reload always
-// allocate a fresh Text or Hex for whichever tier is decided rather
-// than leaving a stale struct from an abandoned tier reachable — a
-// tier flip (Reload) discards the old one entirely rather than
-// carrying any of its fields forward.
-type Entry struct {
-	Path string
-
-	// Tier is decided from the file's size (SPEC.md §2.1's ceiling) at
-	// open time, and re-decided the same way on every reload that
-	// changes the file (docs/STREAMING_PREVIEW_DESIGN.md §2) — not
-	// sticky across the entry's lifetime.
-	Tier preview.Tier
-
-	// ModTime is the file's mtime as of the last successful load or
-	// reload (SPEC.md §6.1a), used by Reload to detect whether the file
-	// has changed on disk since without re-reading its content on every
-	// check.
-	ModTime time.Time
-
-	// Size is the file's byte length as of the last successful
-	// load/reload, sized once at open/reload time (the same Stat call
-	// that sets ModTime) rather than re-stat'd every frame. Meaningful
-	// today only for a preview.TierBinary entry — it sizes the hex
-	// view's offset gutter and bounds HexOffset's top end — but kept
-	// here rather than on HexState since it falls out of the same Stat
-	// call regardless of tier.
-	Size int64
-
-	Text *TextState
-	Hex  *HexState
-}
-
-// TextState is the state of a text-tier (TierHighlighted or
-// TierPlainText) entry: its resident/windowed content, scroll and
-// wrap-cache, in-file find, and copy mode.
-type TextState struct {
-	// Lines/Segs hold this entry's resident content. For a
-	// preview.TierHighlighted entry, this is the whole file, populated
-	// from Stream once its background pass finishes (nil until then).
-	// For a preview.TierPlainText entry, this is only the current
-	// on-screen window — refetched as scrolling moves outside it — and
-	// WindowStartLine is the 0-based count of source lines before
-	// Lines[0] (always 0 for TierHighlighted, whose Lines always starts
-	// at the file's first line).
-	Lines           []string
-	Segs            [][]preview.Segment
-	WindowStartLine int
-
-	// Stream is the background pass kicked off when this entry was
-	// opened (docs/STREAMING_PREVIEW_DESIGN.md §3, §4): it builds the
-	// line-offset index unconditionally, and — for a TierHighlighted
-	// entry — the full decoded/highlighted content consumed into
-	// Lines/Segs above once done. It's what goto-line gates itself on
-	// (SPEC.md §2.1), what the file title bar's "building…" indicator
-	// reflects (SPEC.md §5.2), and, for TierPlainText, what windowed
-	// reads seek through (§8).
-	Stream *preview.StreamIndex
-
-	// Scroll is the entry's display-row scroll offset, preserved across
-	// switches to other entries and restored exactly when this one is
-	// displayed again.
-	Scroll int
-
-	// Rows/FirstRow/RowsWidth cache the last-computed line-wrap for this
-	// entry (SPEC.md §2.1's "recomputed whenever the available width
-	// changes"); RowsWidth is the width the cache was computed for, 0
-	// meaning "not yet computed."
-	Rows      []preview.DisplayRow
-	FirstRow  map[int]int
-	RowsWidth int
-
-	// In-file find state (SPEC.md §2.4), independent per entry like
-	// scroll/goto-line above. FindQuery is the last executed search
-	// ("" means no active find); FindMatches is every match it found,
-	// in source order; FindCurrent indexes the currently-highlighted
-	// match into FindMatches (-1 if there are none); FindWrapNote is a
-	// transient "wrapped to top/bottom" note set by the most recent
-	// next/previous step that crossed an end of the match list, cleared
-	// by the next step that doesn't.
-	FindQuery    string
-	FindMatches  []find.Match
-	FindCurrent  int
-	FindWrapNote string
-
-	// FindScan is a TierPlainText entry's in-progress background find
-	// scan (docs/STREAMING_PREVIEW_DESIGN.md §9), non-nil only while one
-	// is running: that tier never holds full file content resident, so
-	// FindMatches can't be computed synchronously from Lines the way a
-	// TierHighlighted entry's find already is. Cleared once its result
-	// has been consumed into FindMatches, or by Reload/clearing an
-	// active find, either of which cancels it first if still running.
-	FindScan *find.Scan
-
-	// CopyMode strips the preview's line-number gutter and syntax-color
-	// styling for this entry specifically (SPEC.md §2.1), so a terminal
-	// mouse selection over its content grabs exactly the file's own
-	// characters. Per entry rather than global, like the rest of this
-	// struct's state, so switching files doesn't carry a copy-mode
-	// preference that had nothing to do with the file you're switching
-	// to.
-	CopyMode bool
-}
-
-// HexState is the state of a preview.TierBinary (hex view) entry: its
-// viewport offset and hex-view find state.
-type HexState struct {
-	// HexOffset is the byte offset of the first byte shown in the hex
-	// view's viewport — the TierBinary analog of TextState.Scroll's
-	// display-row offset, kept as a separate field rather than
-	// overloading Scroll since the two count fundamentally different
-	// things (rows vs. bytes), and a tier flip (Reload) always
-	// discards whichever state applied to the old tier anyway.
-	HexOffset int64
-
-	// Hex-view find state (SPEC.md §2.1a), the TierBinary analog of
-	// TextState's FindQuery/FindMatches/FindCurrent/FindWrapNote —
-	// kept as its own separate set of fields rather than shared with
-	// them, since hexfind.Match addresses content by byte offset
-	// rather than the line/rune-column pair find.Match uses, and the
-	// two coordinate systems don't compose. HexFindScan is always used
-	// for a TierBinary entry's find (never left nil the way FindScan
-	// is for a TierHighlighted entry, which searches its resident
-	// Lines synchronously instead): a hex view never holds a file's
-	// full byte content resident regardless of size, so every hex find
-	// is a background scan.
-	HexFindQuery    string
-	HexFindMatches  []hexfind.Match
-	HexFindCurrent  int
-	HexFindWrapNote string
-	HexFindScan     *hexfind.Scan
-}
 
 // Outcome is the result of an open attempt (SPEC.md §2.2).
 type Outcome int
@@ -167,32 +31,33 @@ const (
 type OpenResult struct {
 	Outcome Outcome
 	Message string
-	Entry   *Entry
+	Entry   entry.Entry
 }
 
 // List is the ordered open-files list plus which entry, if any, is
 // currently displayed.
 type List struct {
-	Entries   []*Entry
+	Entries   []entry.Entry
 	Displayed int // index into Entries, or -1 if none
 
-	// resident tracks which entries currently hold a TierHighlighted
-	// entry's resident Lines/Segs, most-recently-displayed first,
-	// capped at ResidentCap (below) — the LRU eviction bookkeeping
-	// behind SyncContent's memory-footprint bound. Never touches
-	// TierPlainText entries, which never hold full content resident to
-	// begin with.
-	resident []*Entry
+	// resident tracks which entries currently hold resident content
+	// (in practice, only a TierHighlighted entry's Lines/Segs — but
+	// List itself doesn't know or care which entries that is, only that
+	// Evict() is safe to call on any of them), most-recently-displayed
+	// first, capped at ResidentCap (below) — the LRU eviction
+	// bookkeeping behind the memory-footprint bound entry.TextEntry's
+	// own SyncContent/Evict implement.
+	resident []entry.Entry
 }
 
 // ResidentCap bounds how many entries' fully-decoded/highlighted content
-// (Lines/Segs) are kept memory-resident at once, LRU-evicted beyond
-// that. Without a cap, every TierHighlighted file ever opened in a
-// session stays fully resident until manually closed (`x`), even though
-// only the currently-displayed entry is ever on screen — a handful of
-// files near HighlightCeiling left open can retain hundreds of MB for
-// no benefit. Kept deliberately small, the same "simple fixed constant,
-// tuned later against real usage" stance internal/ui/views/scroll.go's
+// are kept memory-resident at once, LRU-evicted beyond that. Without a
+// cap, every TierHighlighted file ever opened in a session stays fully
+// resident until manually closed (`x`), even though only the
+// currently-displayed entry is ever on screen — a handful of files near
+// HighlightCeiling left open can retain hundreds of MB for no benefit.
+// Kept deliberately small, the same "simple fixed constant, tuned later
+// against real usage" stance internal/ui/views/scroll.go's
 // windowLines/windowMargin already take, so ordinary quick tab-switching
 // among a few recently-viewed files still finds their content resident
 // (no re-read/re-highlight), while a session that accumulates many open
@@ -201,31 +66,31 @@ const ResidentCap = 4
 
 // touchResident marks e as the most-recently-displayed entry for
 // residency purposes, evicting the least-recently-displayed entry's
-// Lines/Segs once more than ResidentCap entries have been displayed.
-// Called every time an entry becomes displayed — newly opened, reused
-// by path, or switched to — so the resident set always reflects actual
-// recent viewing, not list order or open order.
-func (l *List) touchResident(e *Entry) {
+// resident content once more than ResidentCap entries have been
+// displayed. Called every time an entry becomes displayed — newly
+// opened, reused by path, or switched to — so the resident set always
+// reflects actual recent viewing, not list order or open order.
+func (l *List) touchResident(e entry.Entry) {
 	for i, r := range l.resident {
 		if r == e {
 			l.resident = append(l.resident[:i], l.resident[i+1:]...)
 			break
 		}
 	}
-	l.resident = append([]*Entry{e}, l.resident...)
+	l.resident = append([]entry.Entry{e}, l.resident...)
 	for len(l.resident) > ResidentCap {
 		last := len(l.resident) - 1
-		l.resident[last].evictContent()
+		l.resident[last].Evict()
 		l.resident = l.resident[:last]
 	}
 }
 
 // forgetResident drops e from residency tracking without evicting its
 // content — for Remove, where e is leaving the list entirely, so there's
-// nothing left to evict content *from*, but the stale pointer must not
+// nothing left to evict content *from*, but the stale reference must not
 // be left in l.resident or it would keep e (and its content) reachable,
 // and thus never collected, for as long as the list itself lives.
-func (l *List) forgetResident(e *Entry) {
+func (l *List) forgetResident(e entry.Entry) {
 	for i, r := range l.resident {
 		if r == e {
 			l.resident = append(l.resident[:i], l.resident[i+1:]...)
@@ -240,100 +105,36 @@ func New() *List {
 }
 
 // DisplayedEntry returns the currently-displayed entry, or nil.
-func (l *List) DisplayedEntry() *Entry {
+func (l *List) DisplayedEntry() entry.Entry {
 	if l.Displayed < 0 || l.Displayed >= len(l.Entries) {
 		return nil
 	}
 	return l.Entries[l.Displayed]
 }
 
-// SyncContent copies a TierHighlighted entry's full decoded/highlighted
-// content out of its background stream into Lines/Segs, once that
-// pass has finished — a no-op if Lines is already populated, if the
-// stream isn't done yet, or if e is TierPlainText, which never builds
-// full content in the stream at all (docs/STREAMING_PREVIEW_DESIGN.md
-// §2, §8). Safe to call every frame; callers (the preview view, and
-// tests that need to observe reloaded content) call it before reading
-// Lines/Segs rather than assuming Open/Reload populated them
-// synchronously, since that work now happens in the background.
-func (e *Entry) SyncContent() {
-	if e.Tier != preview.TierHighlighted || e.Text.Lines != nil || e.Text.Stream == nil {
-		return
-	}
-	lines, segs := e.Text.Stream.Content()
-	if lines == nil {
-		return
-	}
-	e.Text.Lines = lines
-	e.Text.Segs = segs
-}
-
-// evictContent frees e's resident Lines/Segs — the memory-heavy
-// decoded/highlighted copy of a TierHighlighted file's full content,
-// SyncContent's counterpart — and restarts e's background Stream so
-// SyncContent transparently rebuilds them (re-read plus re-highlight,
-// the same work Open/Reload already do) the next time e is displayed,
-// rather than leaving Lines/Segs permanently nil. Note this restart
-// means switching back to an evicted entry briefly shows the same
-// "building preview…" state a freshly opened file does, until the new
-// background pass finishes — normally fast, but a real (and deliberate)
-// memory-for-latency tradeoff for a file that takes a while to
-// highlight, same as the original open did.
-//
-// A no-op for a TierPlainText entry, which never holds full content
-// resident to begin with (it holds only an on-screen window,
-// independently bounded by windowLines), or for an entry whose content
-// isn't resident yet (e.g. its background pass hasn't finished, or it
-// was already evicted) — nothing to evict, and restarting an
-// already-running or not-yet-started pass would just be wasted work.
-func (e *Entry) evictContent() {
-	if e.Tier != preview.TierHighlighted || e.Text.Lines == nil {
-		return
-	}
-	e.Text.Lines = nil
-	e.Text.Segs = nil
-	e.Text.Stream = preview.StartStream(e.Path, e.Tier)
-}
-
 // Open implements SPEC.md §2.2's open semantics for a resolved absolute
 // path: reuse an existing entry without re-reading or moving it if the
-// path is already open; otherwise check the file (capBytes bounds this
-// check, SPEC.md §2.1) for a read error — a failed result, with no entry
-// created and the currently-displayed entry (if any) left unchanged.
-// Binary content is not a failure: it opens as a preview.TierBinary
-// entry (a hex view) instead. Otherwise, decide the new entry's tier
-// from its size (docs/STREAMING_PREVIEW_DESIGN.md §5) and start its
-// background content/index pass (§3, §4) rather than reading/
-// highlighting synchronously here: the entry appears immediately and
-// lights up once that pass reports progress (SPEC.md §2.1, §5.2).
+// path is already open (List's own dedup-by-path concern); otherwise
+// delegate entirely to entry.Open, which checks the file (capBytes
+// bounds this check, SPEC.md §2.1) for a read error — a failed result,
+// with no entry created and the currently-displayed entry (if any) left
+// unchanged — decides tier, and starts whatever background pass that
+// tier needs. Binary content is not a failure: entry.Open returns a
+// TierBinary entry (a hex view) instead.
 func (l *List) Open(path string, capBytes int64) OpenResult {
 	for i, e := range l.Entries {
-		if e.Path == path {
+		if e.Path() == path {
 			l.Displayed = i
 			l.touchResident(e)
 			return OpenResult{Outcome: Opened, Entry: e}
 		}
 	}
 
-	_, binary, err := preview.ReadCapped(path, capBytes)
+	e, err := entry.Open(path, capBytes)
 	if err != nil {
 		return OpenResult{Outcome: Failed, Message: preview.ErrText(err)}
 	}
 
-	e := &Entry{Path: path}
-	var size int64
-	if info, err := os.Stat(path); err == nil {
-		e.ModTime = info.ModTime()
-		size = info.Size()
-	}
-	e.Size = size
-	if binary {
-		e.Tier = preview.TierBinary
-		e.Hex = &HexState{HexFindCurrent: -1}
-	} else {
-		e.Tier = preview.TierFor(size)
-		e.Text = &TextState{FindCurrent: -1, Stream: preview.StartStream(path, e.Tier)}
-	}
 	l.Entries = append(l.Entries, e)
 	l.Displayed = len(l.Entries) - 1
 	l.touchResident(e)
@@ -341,113 +142,28 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 }
 
 // Reload checks every open entry against current disk state (SPEC.md
-// §6.1a) and re-reads any whose mtime has changed since it was last
-// loaded or reloaded, replacing its content in place — entry identity,
-// list position, and displayed status are all untouched, so this never
-// disturbs list order or which entry is currently shown. The wrap
-// cache and any in-file find state are invalidated, since both are
-// derived from content that just changed; Scroll/HexOffset are left
-// as-is and self-clamp the next time the entry is scrolled or
-// displayed, unless the reload also flips the entry's tier (below), in
-// which case a fresh Text/HexState is allocated and the old one
-// discarded entirely (so the reset to the top falls out naturally,
-// same as a freshly-opened entry never having a stale scroll position
-// to carry forward).
-//
-// The entry's tier (docs/STREAMING_PREVIEW_DESIGN.md §2, §5) is
-// re-decided here from the file's current on-disk size, the same way
-// it's decided at open time — not treated as sticky from whenever the
-// entry was first opened. This falls out of the Stat call already made
-// to compare mtimes: re-checking size against the ceiling at that same
-// moment costs nothing extra, and reload is the only mechanism by which
-// dirtree ever learns a file changed at all, so it's the only point
-// where a stale tier decision could otherwise ever be corrected. Without
-// this, a file that grows well past the ceiling after being opened would
-// keep being fully read and highlighted in the background on every
-// reload for the rest of the session, exactly the unbounded cost the
-// ceiling exists to prevent; a file that shrinks back under the ceiling
-// is symmetrically promoted back to full highlighting. A tier flip
-// resets Scroll/HexOffset to the top: a display-row index means
-// something different under each tier's model (an index into a
-// whole-file wrap cache for TierHighlighted vs. into a small on-screen
-// window for TierPlainText, §8, vs. a byte offset for TierBinary), so
-// there's no meaningful way to carry the old value across the change —
-// it would either point at an arbitrary, unrelated row or fall past
-// the end of a much smaller window. A tier flip between TierHighlighted
-// and TierPlainText (both still text-tier) also resets CopyMode to
-// false, for the same reason: it's a fresh TextState like any other
-// flip, not a carried-forward one.
-//
-// An entry whose file can no longer be stat'd or read (deleted or
-// permission lost) is left with its last-known content untouched — it
-// simply goes stale, per §6.1's existing handling for a currently-open
-// file whose underlying path disappears. A file that has become binary
-// is not treated this way: like Open, it re-tiers into preview.TierBinary
-// (a hex view) instead of going stale, the same as any other tier flip
-// below.
+// §6.1a) by delegating to entry.Reload, which re-stats each entry's own
+// path, re-reads and re-decides tier if it changed, and reports whether
+// anything actually happened — List itself no longer stats paths,
+// compares mtimes, or knows anything about tiers. Entry identity, list
+// position, and displayed status are all untouched by a reload that
+// doesn't flip tier (entry.Reload mutates that same object in place);
+// one that does flip tier hands back a different concrete object, which
+// this simply writes into the same list slot — list order and displayed
+// index still never move either way.
 //
 // Returns the base name of each entry that was actually reloaded, in
 // list order (nil if none changed), for callers that want to surface a
 // transient notification.
 func (l *List) Reload(capBytes int64) []string {
 	var reloaded []string
-	for _, e := range l.Entries {
-		info, err := os.Stat(e.Path)
-		if err != nil || info.ModTime().Equal(e.ModTime) {
+	for i, e := range l.Entries {
+		updated, changed, err := entry.Reload(e, capBytes)
+		if err != nil || !changed {
 			continue
 		}
-		_, binary, err := preview.ReadCapped(e.Path, capBytes)
-		if err != nil {
-			continue
-		}
-
-		e.Size = info.Size()
-		e.ModTime = info.ModTime()
-		newTier := preview.TierBinary
-		if !binary {
-			newTier = preview.TierFor(info.Size())
-		}
-		flipped := newTier != e.Tier
-		e.Tier = newTier
-
-		if binary {
-			if flipped || e.Hex == nil {
-				e.Hex = &HexState{HexFindCurrent: -1}
-			} else {
-				if e.Hex.HexFindScan != nil {
-					e.Hex.HexFindScan.Cancel()
-				}
-				e.Hex.HexFindQuery = ""
-				e.Hex.HexFindMatches = nil
-				e.Hex.HexFindCurrent = -1
-				e.Hex.HexFindWrapNote = ""
-				e.Hex.HexFindScan = nil
-			}
-			e.Text = nil
-		} else {
-			stream := preview.StartStream(e.Path, e.Tier)
-			if flipped || e.Text == nil {
-				e.Text = &TextState{FindCurrent: -1}
-			} else {
-				if e.Text.FindScan != nil {
-					e.Text.FindScan.Cancel()
-				}
-				e.Text.Lines = nil
-				e.Text.Segs = nil
-				e.Text.WindowStartLine = 0
-				e.Text.Rows = nil
-				e.Text.FirstRow = nil
-				e.Text.RowsWidth = 0
-				e.Text.FindQuery = ""
-				e.Text.FindMatches = nil
-				e.Text.FindCurrent = -1
-				e.Text.FindWrapNote = ""
-				e.Text.FindScan = nil
-			}
-			e.Text.Stream = stream
-			e.Hex = nil
-		}
-		reloaded = append(reloaded, filepath.Base(e.Path))
+		l.Entries[i] = updated
+		reloaded = append(reloaded, filepath.Base(updated.Path()))
 	}
 	return reloaded
 }
@@ -455,7 +171,7 @@ func (l *List) Reload(capBytes int64) []string {
 // IsOpen reports whether path already has an entry in the list.
 func (l *List) IsOpen(path string) bool {
 	for _, e := range l.Entries {
-		if e.Path == path {
+		if e.Path() == path {
 			return true
 		}
 	}
@@ -475,7 +191,9 @@ func (l *List) Display(i int) {
 
 // Remove removes the entry at i — the open-files-list overlay's own
 // selected index, since §2.3's `x` always removes the currently
-// selected entry — and returns the overlay's new selected index.
+// selected entry — and returns the overlay's new selected index. Calls
+// the removed entry's Close() first, canceling any in-flight background
+// scan it was holding rather than leaving it to finish unread.
 //
 // If the removed entry was not displayed, the displayed entry and its
 // state are unaffected and only the list shrinks; the returned index
@@ -490,6 +208,7 @@ func (l *List) Remove(i int) (newSelected int) {
 	}
 
 	wasDisplayed := i == l.Displayed
+	l.Entries[i].Close()
 	l.forgetResident(l.Entries[i])
 	l.Entries = append(l.Entries[:i], l.Entries[i+1:]...)
 

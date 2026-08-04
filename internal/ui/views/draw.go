@@ -5,7 +5,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/nitti/dirtree/internal/openfiles"
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/ui/canvas"
@@ -155,11 +155,11 @@ func (v *Preview) boldPathInFileTitleBar(x0, y0 int, text, path string, style tc
 // (docs/STREAMING_PREVIEW_DESIGN.md §7) — reusing the corner badge's own
 // threshold/minimum-display-duration discipline (SPEC.md §5.3) rather
 // than inventing new timing rules for this second indicator.
-func (v *Preview) fileLegendForIdle(e *openfiles.Entry) []canvas.LegendEntry {
-	if e.Text.Stream == nil {
+func (v *Preview) fileLegendForIdle(e *entry.TextEntry) []canvas.LegendEntry {
+	if e.Stream == nil {
 		return fileLegend
 	}
-	elapsed, sinceDone, done := e.Text.Stream.Elapsed(), e.Text.Stream.SinceDone(), e.Text.Stream.Done()
+	elapsed, sinceDone, done := e.Stream.Elapsed(), e.Stream.SinceDone(), e.Stream.Done()
 	if !streamBuildingVisible(elapsed, sinceDone, done, canvas.SpinnerThreshold, streamSpinnerMinDisplayDuration) {
 		return fileLegend
 	}
@@ -219,18 +219,18 @@ type findHighlight struct {
 
 // findHighlightsForRow returns row's portion of every in-file find
 // match that overlaps it, converting each match's source-line-relative
-// column range (found against e.Text.Lines, independent of wrapping) into
+// column range (found against e.Lines, independent of wrapping) into
 // row-relative columns via the row's ColStart — a match split across
 // two wrapped rows by a mid-token wrap naturally yields one highlight
 // per row it touches.
-func findHighlightsForRow(e *openfiles.Entry, row preview.DisplayRow) []findHighlight {
-	if len(e.Text.FindMatches) == 0 {
+func findHighlightsForRow(e *entry.TextEntry, row preview.DisplayRow) []findHighlight {
+	if len(e.FindMatches) == 0 {
 		return nil
 	}
 	rowLen := preview.SegmentsRuneLen(row.Segments)
 	var out []findHighlight
-	for i, m := range e.Text.FindMatches {
-		if m.Line-e.Text.WindowStartLine != row.SourceLine {
+	for i, m := range e.FindMatches {
+		if m.Line-e.WindowStartLine != row.SourceLine {
 			continue
 		}
 		start := m.Col - row.ColStart
@@ -240,7 +240,7 @@ func findHighlightsForRow(e *openfiles.Entry, row preview.DisplayRow) []findHigh
 		}
 		start = max(start, 0)
 		end = min(end, rowLen)
-		out = append(out, findHighlight{Start: start, End: end, Current: i == e.Text.FindCurrent})
+		out = append(out, findHighlight{Start: start, End: end, Current: i == e.FindCurrent})
 	}
 	return out
 }

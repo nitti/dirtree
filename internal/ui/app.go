@@ -138,7 +138,7 @@ type App struct {
 	// Preview is the primary preview view's own state: the goto-line
 	// prompt (SPEC.md §2.1) and in-file find prompt (§2.4). The
 	// displayed entry's scroll and wrapped-row cache live per-entry on
-	// openfiles.Entry instead, since they're tracked per open file.
+	// entry.Entry instead, since they're tracked per open file.
 	Preview views.Preview
 
 	badgeSkip spinner.MinDurationSkip

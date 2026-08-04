@@ -9,6 +9,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/tree"
@@ -324,7 +325,7 @@ func TestDrawHexFileTitleBarAlignsPathWithHexGrid(t *testing.T) {
 		if res.Outcome != openfiles.Opened {
 			t.Fatalf("size %d: Open failed: %+v", size, res)
 		}
-		e := res.Entry
+		he := res.Entry.(*entry.HexEntry)
 
 		v.Draw(0, 1, w, h-1, true)
 		sim.Show()
@@ -336,7 +337,7 @@ func TestDrawHexFileTitleBarAlignsPathWithHexGrid(t *testing.T) {
 			t.Fatalf("size %d: path %q not found in title bar row %q", size, relPath, titleRow)
 		}
 
-		wantCol := hexGutterWidth(e.Size)
+		wantCol := hexGutterWidth(he.Size)
 		if pathCol != wantCol {
 			t.Errorf("size %d: path starts at column %d, want %d (the hex grid's own start column)", size, pathCol, wantCol)
 		}
@@ -410,9 +411,10 @@ func TestHexScrollBumpsAtRestEdges(t *testing.T) {
 		t.Fatalf("Open failed: %+v", res)
 	}
 	e := res.Entry
+	he := e.(*entry.HexEntry)
 
 	hexFileView{}.Scroll(v, e, -1) // already at the top: pushing further up bumps
-	if v.TopBumpPath != e.Path {
+	if v.TopBumpPath != he.Path() {
 		t.Fatalf("expected top bump after scrolling up from the top, got TopBumpPath=%q", v.TopBumpPath)
 	}
 	if v.BottomBumpPath != "" {
@@ -425,14 +427,14 @@ func TestHexScrollBumpsAtRestEdges(t *testing.T) {
 		t.Fatalf("expected no bump from an ordinary in-bounds scroll, got TopBumpPath=%q BottomBumpPath=%q", v.TopBumpPath, v.BottomBumpPath)
 	}
 
-	e.Hex.HexOffset = 0
+	he.HexOffset = 0
 	v.BottomBumpPath = ""
 	hexFileView{}.Scroll(v, e, 1000) // scroll far past the bottom: first landing on the last row doesn't bump
 	if v.BottomBumpPath != "" {
 		t.Fatalf("expected no bottom bump on first reaching the last row, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
 	hexFileView{}.Scroll(v, e, 1) // already at the bottom: pushing further down bumps
-	if v.BottomBumpPath != e.Path {
+	if v.BottomBumpPath != he.Path() {
 		t.Fatalf("expected bottom bump after scrolling down from the bottom, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
 }
@@ -502,31 +504,31 @@ func TestHandleKeyHexNavigation(t *testing.T) {
 	files := openfiles.New()
 	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
 	res := files.Open(path, preview.DefaultByteCap)
-	if res.Outcome != openfiles.Opened || res.Entry.Tier != preview.TierBinary {
+	he, ok := res.Entry.(*entry.HexEntry)
+	if res.Outcome != openfiles.Opened || !ok {
 		t.Fatalf("expected an opened TierBinary entry, got %+v", res)
 	}
-	e := res.Entry
 
-	n := v.hexBytesPerRow(e)
+	n := v.hexBytesPerRow(he)
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
-	if e.Hex.HexOffset != int64(n) {
-		t.Fatalf("after Down, HexOffset = %d, want %d", e.Hex.HexOffset, n)
+	if he.HexOffset != int64(n) {
+		t.Fatalf("after Down, HexOffset = %d, want %d", he.HexOffset, n)
 	}
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone))
-	if e.Hex.HexOffset != 0 {
-		t.Fatalf("after Up, HexOffset = %d, want 0", e.Hex.HexOffset)
+	if he.HexOffset != 0 {
+		t.Fatalf("after Up, HexOffset = %d, want 0", he.HexOffset)
 	}
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
-	if want := hexMaxOffset(e.Size, n, v.viewportHeight()); e.Hex.HexOffset != want {
-		t.Fatalf("after End, HexOffset = %d, want %d", e.Hex.HexOffset, want)
+	if want := hexMaxOffset(he.Size, n, v.viewportHeight()); he.HexOffset != want {
+		t.Fatalf("after End, HexOffset = %d, want %d", he.HexOffset, want)
 	}
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModNone))
-	if e.Hex.HexOffset != 0 {
-		t.Fatalf("after Home, HexOffset = %d, want 0", e.Hex.HexOffset)
+	if he.HexOffset != 0 {
+		t.Fatalf("after Home, HexOffset = %d, want 0", he.HexOffset)
 	}
 }
 
@@ -579,7 +581,7 @@ func TestHandleKeyHexGotoOffset(t *testing.T) {
 	if res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %+v", res)
 	}
-	e := res.Entry
+	he := res.Entry.(*entry.HexEntry)
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'g', tcell.ModNone))
 	if !v.GotoPromptOpen {
@@ -593,10 +595,10 @@ func TestHandleKeyHexGotoOffset(t *testing.T) {
 		t.Fatal("expected goto prompt closed after Enter")
 	}
 
-	n := v.hexBytesPerRow(e)
-	want := clampHexOffset(0x64, e.Size, n, v.viewportHeight())
-	if e.Hex.HexOffset != want {
-		t.Fatalf("HexOffset = %d, want %d", e.Hex.HexOffset, want)
+	n := v.hexBytesPerRow(he)
+	want := clampHexOffset(0x64, he.Size, n, v.viewportHeight())
+	if he.HexOffset != want {
+		t.Fatalf("HexOffset = %d, want %d", he.HexOffset, want)
 	}
 }
 
@@ -623,6 +625,7 @@ func TestHandleKeyHexFindEndToEnd(t *testing.T) {
 		t.Fatalf("Open failed: %+v", res)
 	}
 	e := res.Entry
+	he := e.(*entry.HexEntry)
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, '/', tcell.ModNone))
 	if !v.HexFindPromptOpen {
@@ -635,23 +638,23 @@ func TestHandleKeyHexFindEndToEnd(t *testing.T) {
 	if v.HexFindPromptOpen {
 		t.Fatal("expected hex-find prompt closed after Enter")
 	}
-	if e.Hex.HexFindScan == nil {
+	if he.HexFindScan == nil {
 		t.Fatal("expected a background hex-find scan to have started")
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
-	for e.Hex.HexFindScan != nil && time.Now().Before(deadline) {
+	for he.HexFindScan != nil && time.Now().Before(deadline) {
 		hexFileView{}.SyncFindScan(v, e)
 		time.Sleep(time.Millisecond)
 	}
-	if e.Hex.HexFindScan != nil {
+	if he.HexFindScan != nil {
 		t.Fatal("hex-find scan did not finish in time")
 	}
-	if len(e.Hex.HexFindMatches) != 1 || e.Hex.HexFindMatches[0].Offset != 3 {
-		t.Fatalf("expected one match at offset 3, got %v", e.Hex.HexFindMatches)
+	if len(he.HexFindMatches) != 1 || he.HexFindMatches[0].Offset != 3 {
+		t.Fatalf("expected one match at offset 3, got %v", he.HexFindMatches)
 	}
-	if e.Hex.HexFindCurrent != 0 {
-		t.Fatalf("expected HexFindCurrent = 0, got %d", e.Hex.HexFindCurrent)
+	if he.HexFindCurrent != 0 {
+		t.Fatalf("expected HexFindCurrent = 0, got %d", he.HexFindCurrent)
 	}
 }
 

@@ -5,7 +5,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/nitti/dirtree/internal/preview"
+	"github.com/nitti/dirtree/internal/entry"
 )
 
 // Action is a one-shot signal Preview.HandleKey returns for the
@@ -37,9 +37,9 @@ const (
 
 // Preview holds the primary preview view's own state (SPEC.md §2.1,
 // §2.4): the goto-line prompt and in-file find prompt. The displayed
-// entry's scroll position and wrapped-row cache live per-entry on
-// openfiles.Entry instead, since they're tracked per open file rather
-// than per view.
+// entry's scroll position and wrapped-row cache live on the
+// entry.Entry itself instead, since they're tracked per open file
+// rather than per view.
 type Preview struct {
 	*Shared
 
@@ -118,7 +118,7 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 	}
 
 	e := v.Files.DisplayedEntry()
-	isHex := e != nil && e.Tier == preview.TierBinary
+	_, isHex := e.(*entry.HexEntry)
 	fv := fileViewFor(e)
 
 	switch {
@@ -150,8 +150,9 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 			v.GotoPromptOpen = true
 			v.GotoInput = ""
 		case e != nil:
-			if gotoLineBlocked(e.Text.Stream != nil, e.Text.Stream != nil && e.Text.Stream.Done()) {
-				v.GotoBlockedPath = e.Path
+			te := e.(*entry.TextEntry)
+			if gotoLineBlocked(te.Stream != nil, te.Stream != nil && te.Stream.Done()) {
+				v.GotoBlockedPath = te.Path()
 				v.GotoBlockedFlashStart = time.Now()
 			} else {
 				v.GotoPromptOpen = true

@@ -10,6 +10,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/find"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
@@ -66,14 +67,14 @@ func TestHandleKeyTogglesCopyMode(t *testing.T) {
 	if res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %s", res.Message)
 	}
-	e := res.Entry
+	e := res.Entry.(*entry.TextEntry)
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
-	if !e.Text.CopyMode {
+	if !e.CopyMode {
 		t.Fatal("expected 'c' to toggle copy mode on")
 	}
 	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
-	if e.Text.CopyMode {
+	if e.CopyMode {
 		t.Fatal("expected a second 'c' to toggle copy mode back off")
 	}
 }
@@ -271,15 +272,15 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 		t.Fatalf("Open failed: %s", res.Message)
 	}
 	waitEntryReady(t, files.DisplayedEntry())
-	e := files.DisplayedEntry()
+	e := files.DisplayedEntry().(*entry.TextEntry)
 
 	reset := func() {
 		v.GotoPromptOpen = false
 		v.FindPromptOpen = false
-		e.Text.CopyMode = false
-		e.Text.FindQuery = ""
-		e.Text.FindMatches = nil
-		e.Text.FindScan = nil
+		e.CopyMode = false
+		e.FindQuery = ""
+		e.FindMatches = nil
+		e.FindScan = nil
 	}
 
 	t.Run("no displayed entry", func(t *testing.T) {
@@ -321,7 +322,7 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 
 	t.Run("find scan running", func(t *testing.T) {
 		reset()
-		e.Text.FindScan = &find.Scan{}
+		e.FindScan = &find.Scan{}
 		got, ok := v.CurrentFileLegend()
 		if !ok || &got[0] != &findLegendNoMatches[0] {
 			t.Errorf("CurrentFileLegend() = (%v, %v), want findLegendNoMatches", got, ok)
@@ -330,8 +331,8 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 
 	t.Run("find query with matches", func(t *testing.T) {
 		reset()
-		e.Text.FindQuery = "one"
-		e.Text.FindMatches = []find.Match{{Line: 0, Col: 0, Len: 3}}
+		e.FindQuery = "one"
+		e.FindMatches = []find.Match{{Line: 0, Col: 0, Len: 3}}
 		got, ok := v.CurrentFileLegend()
 		if !ok || &got[0] != &findLegend[0] {
 			t.Errorf("CurrentFileLegend() = (%v, %v), want findLegend", got, ok)
@@ -340,7 +341,7 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 
 	t.Run("find query no matches", func(t *testing.T) {
 		reset()
-		e.Text.FindQuery = "zzz"
+		e.FindQuery = "zzz"
 		got, ok := v.CurrentFileLegend()
 		if !ok || &got[0] != &findLegendNoMatches[0] {
 			t.Errorf("CurrentFileLegend() = (%v, %v), want findLegendNoMatches", got, ok)
@@ -349,7 +350,7 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 
 	t.Run("copy mode", func(t *testing.T) {
 		reset()
-		e.Text.CopyMode = true
+		e.CopyMode = true
 		got, ok := v.CurrentFileLegend()
 		if !ok || &got[0] != &fileLegendCopyModeOn[0] {
 			t.Errorf("CurrentFileLegend() = (%v, %v), want fileLegendCopyModeOn", got, ok)
@@ -460,7 +461,7 @@ func TestDrawFileTitleBarPathAlignsWithContent(t *testing.T) {
 		t.Fatalf("test setup: %q not found in content row %q", "one", contentRow)
 	}
 	if pathStart != contentStart {
-		t.Fatalf("path starts at column %d, content starts at column %d, want equal (gutterWidth=%d)", pathStart, contentStart, gutterWidth(e))
+		t.Fatalf("path starts at column %d, content starts at column %d, want equal (gutterWidth=%d)", pathStart, contentStart, gutterWidth(e.(*entry.TextEntry)))
 	}
 }
 
@@ -515,11 +516,15 @@ func TestDrawFileTitleBarBoldsPath(t *testing.T) {
 // prompt or scrolls before this point either (contentReady/gotoLineBlocked
 // gate on the same signal), so tests exercising rendering/scrolling
 // against a freshly-opened entry wait for it the same way.
-func waitEntryReady(t *testing.T, e *openfiles.Entry) {
+func waitEntryReady(t *testing.T, e entry.Entry) {
 	t.Helper()
+	te, ok := e.(*entry.TextEntry)
+	if !ok {
+		return
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if contentReady(e) {
+		if te.ContentReady() {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -534,7 +539,7 @@ func waitEntryReady(t *testing.T, e *openfiles.Entry) {
 // own tier tests use, so Tier B's windowed-read/scroll logic can be
 // exercised without a real multi-megabyte fixture. Restores the ceiling
 // via t.Cleanup.
-func openTierPlainText(t *testing.T, numLines int) (*openfiles.List, *openfiles.Entry) {
+func openTierPlainText(t *testing.T, numLines int) (*openfiles.List, *entry.TextEntry) {
 	t.Helper()
 	orig := preview.HighlightCeiling
 	preview.HighlightCeiling = 0
@@ -554,7 +559,7 @@ func openTierPlainText(t *testing.T, numLines int) (*openfiles.List, *openfiles.
 	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %s", res.Message)
 	}
-	e := files.DisplayedEntry()
+	e := files.DisplayedEntry().(*entry.TextEntry)
 	if e.Tier != preview.TierPlainText {
 		t.Fatalf("expected TierPlainText, got %v", e.Tier)
 	}
@@ -576,11 +581,11 @@ func TestTierPlainTextWindowStartsAtFirstLine(t *testing.T) {
 	v := newTestPreview(files, 60, 10)
 
 	textFileView{}.DrawContent(v, e, 0, 0, 60, 10)
-	if e.Text.WindowStartLine != 0 {
-		t.Fatalf("expected window to start at line 0, got %d", e.Text.WindowStartLine)
+	if e.WindowStartLine != 0 {
+		t.Fatalf("expected window to start at line 0, got %d", e.WindowStartLine)
 	}
-	if len(e.Text.Lines) == 0 || e.Text.Lines[0] != "line 1" {
-		t.Fatalf("expected window to start with 'line 1', got %v", e.Text.Lines)
+	if len(e.Lines) == 0 || e.Lines[0] != "line 1" {
+		t.Fatalf("expected window to start with 'line 1', got %v", e.Lines)
 	}
 }
 
@@ -621,7 +626,7 @@ func TestScrollBumpsAtRestEdges(t *testing.T) {
 	textFileView{}.DrawContent(v, e, 0, 0, 60, 5)
 
 	textFileView{}.Scroll(v, e, -1) // already at the top: pushing further up bumps
-	if v.TopBumpPath != e.Path {
+	if v.TopBumpPath != e.Path() {
 		t.Fatalf("expected top bump after scrolling up from the top, got TopBumpPath=%q", v.TopBumpPath)
 	}
 	if v.BottomBumpPath != "" {
@@ -639,7 +644,7 @@ func TestScrollBumpsAtRestEdges(t *testing.T) {
 		t.Fatalf("expected no bottom bump on first reaching the bottom, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
 	textFileView{}.Scroll(v, e, 1) // pushes past the bottom again: bumps
-	if v.BottomBumpPath != e.Path {
+	if v.BottomBumpPath != e.Path() {
 		t.Fatalf("expected bottom bump after scrolling past the last line, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
 }
@@ -655,7 +660,7 @@ func TestScrollBumpsAtRestEdgesForTierPlainText(t *testing.T) {
 	textFileView{}.DrawContent(v, e, 0, 0, 60, 5)
 
 	textFileView{}.Scroll(v, e, -1)
-	if v.TopBumpPath != e.Path {
+	if v.TopBumpPath != e.Path() {
 		t.Fatalf("expected top bump for TierPlainText already at line 1, got TopBumpPath=%q", v.TopBumpPath)
 	}
 }
@@ -709,8 +714,8 @@ func TestTierPlainTextGotoLineJumpsViaWindow(t *testing.T) {
 	if got := currentTopLine(e); got != 7 {
 		t.Fatalf("expected top line 7 after ScrollToLine(7), got %d", got)
 	}
-	if e.Text.Lines[e.Text.Scroll] != "line 7" {
-		t.Fatalf("expected line 7 at the scrolled-to row, got %q", e.Text.Lines[e.Text.Scroll])
+	if e.Lines[e.Scroll] != "line 7" {
+		t.Fatalf("expected line 7 at the scrolled-to row, got %q", e.Lines[e.Scroll])
 	}
 }
 
@@ -728,12 +733,12 @@ func TestTierPlainTextFindKeyOpensPrompt(t *testing.T) {
 // picked up by textFileView.SyncFindScan (i.e. FindScan cleared back
 // to nil), the same signal the real Draw loop's per-frame sync relies
 // on.
-func waitFindScanDone(t *testing.T, v *Preview, e *openfiles.Entry) {
+func waitFindScanDone(t *testing.T, v *Preview, e *entry.TextEntry) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		textFileView{}.SyncFindScan(v, e)
-		if e.Text.FindScan == nil {
+		if e.FindScan == nil {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -746,11 +751,11 @@ func TestTierPlainTextFindStartsBackgroundScan(t *testing.T) {
 	v := newTestPreview(files, 60, 10)
 
 	textFileView{}.PerformFind(v, e, "line 7")
-	if e.Text.FindScan == nil {
+	if e.FindScan == nil {
 		t.Fatal("expected PerformFind to start a background scan for a TierPlainText entry")
 	}
-	if len(e.Text.FindMatches) != 0 || e.Text.FindCurrent != -1 {
-		t.Fatalf("expected no matches yet while the scan is in flight, got FindMatches=%v FindCurrent=%d", e.Text.FindMatches, e.Text.FindCurrent)
+	if len(e.FindMatches) != 0 || e.FindCurrent != -1 {
+		t.Fatalf("expected no matches yet while the scan is in flight, got FindMatches=%v FindCurrent=%d", e.FindMatches, e.FindCurrent)
 	}
 }
 
@@ -761,18 +766,18 @@ func TestTierPlainTextFindScanResultsSyncOnceDone(t *testing.T) {
 	textFileView{}.PerformFind(v, e, "line 7")
 	waitFindScanDone(t, v, e)
 
-	if len(e.Text.FindMatches) != 1 || e.Text.FindMatches[0].Line != 6 {
-		t.Fatalf("expected a single match on source line 6 (the 0-based index of the text \"line 7\"), got %v", e.Text.FindMatches)
+	if len(e.FindMatches) != 1 || e.FindMatches[0].Line != 6 {
+		t.Fatalf("expected a single match on source line 6 (the 0-based index of the text \"line 7\"), got %v", e.FindMatches)
 	}
-	if e.Text.FindCurrent != 0 {
-		t.Fatalf("expected the single match to be current, got %d", e.Text.FindCurrent)
+	if e.FindCurrent != 0 {
+		t.Fatalf("expected the single match to be current, got %d", e.FindCurrent)
 	}
-	matchRow := e.Text.FindMatches[0].Line - e.Text.WindowStartLine
-	if matchRow < 0 || matchRow >= len(e.Text.Lines) || e.Text.Lines[matchRow] != "line 7" {
-		t.Fatalf("expected the match's window-relative row to hold \"line 7\", got %v (row %d)", e.Text.Lines, matchRow)
+	matchRow := e.FindMatches[0].Line - e.WindowStartLine
+	if matchRow < 0 || matchRow >= len(e.Lines) || e.Lines[matchRow] != "line 7" {
+		t.Fatalf("expected the match's window-relative row to hold \"line 7\", got %v (row %d)", e.Lines, matchRow)
 	}
-	if matchRow < e.Text.Scroll || matchRow >= e.Text.Scroll+v.viewportHeight() {
-		t.Fatalf("expected the match's row (%d) to be scrolled into view (Scroll=%d, viewportHeight=%d)", matchRow, e.Text.Scroll, v.viewportHeight())
+	if matchRow < e.Scroll || matchRow >= e.Scroll+v.viewportHeight() {
+		t.Fatalf("expected the match's row (%d) to be scrolled into view (Scroll=%d, viewportHeight=%d)", matchRow, e.Scroll, v.viewportHeight())
 	}
 }
 
@@ -781,12 +786,12 @@ func TestTierPlainTextFindClearCancelsInFlightScan(t *testing.T) {
 	v := newTestPreview(files, 60, 10)
 
 	textFileView{}.PerformFind(v, e, "line 7")
-	if e.Text.FindScan == nil {
+	if e.FindScan == nil {
 		t.Fatal("expected a scan to be in flight")
 	}
 	textFileView{}.ClearFind(v, e)
-	if e.Text.FindScan != nil || e.Text.FindQuery != "" {
-		t.Fatalf("expected ClearFind to cancel and clear the in-flight scan, got FindScan=%v FindQuery=%q", e.Text.FindScan, e.Text.FindQuery)
+	if e.FindScan != nil || e.FindQuery != "" {
+		t.Fatalf("expected ClearFind to cancel and clear the in-flight scan, got FindScan=%v FindQuery=%q", e.FindScan, e.FindQuery)
 	}
 }
 

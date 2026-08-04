@@ -5,7 +5,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/nitti/dirtree/internal/openfiles"
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/ui/canvas"
 )
@@ -74,13 +74,13 @@ func isHexOffsetRune(r rune) bool {
 // the direction delta indicates: negative means already at the top,
 // positive means already at the bottom. A no-op for delta == 0, which
 // neither Scroll implementation ever actually passes.
-func (v *Preview) bumpEdge(e *openfiles.Entry, delta int) {
+func (v *Preview) bumpEdge(e entry.Entry, delta int) {
 	switch {
 	case delta < 0:
-		v.TopBumpPath = e.Path
+		v.TopBumpPath = e.Path()
 		v.TopBumpFlashStart = time.Now()
 	case delta > 0:
-		v.BottomBumpPath = e.Path
+		v.BottomBumpPath = e.Path()
 		v.BottomBumpFlashStart = time.Now()
 	}
 }
@@ -93,44 +93,45 @@ func (v *Preview) bumpEdge(e *openfiles.Entry, delta int) {
 // itself. A no-op while e's content isn't ready yet (goto-line's own
 // gating already prevents this for the goto-line prompt itself, SPEC.md
 // §2.1; this guards the same for a jump arriving some other way).
-func (v *Preview) ScrollToLine(e *openfiles.Entry, n int) {
-	if !contentReady(e) {
+func (v *Preview) ScrollToLine(e entry.Entry, n int) {
+	te, ok := e.(*entry.TextEntry)
+	if !ok || !te.ContentReady() {
 		return
 	}
 	width := v.computedWidth()
-	n = clamp(n, 1, bestLineCount(e))
-	if e.Tier == preview.TierPlainText {
-		v.ensureWindow(e, width, n)
+	n = clamp(n, 1, bestLineCount(te))
+	if te.Tier == preview.TierPlainText {
+		v.ensureWindow(te, width, n)
 	} else {
-		v.ensureWrapped(e, width)
+		v.ensureWrapped(te, width)
 	}
-	v.setScrollToLine(e, n)
+	v.setScrollToLine(te, n)
 }
 
-// setScrollToLine sets e.Text.Scroll to source line n's first display row
+// setScrollToLine sets e.Scroll to source line n's first display row
 // within e's currently-loaded content (the whole file for
 // TierHighlighted, e's current window for TierPlainText — WindowStartLine
 // is always 0 for the former, so this is n-1 there, matching the
 // pre-windowing behavior exactly).
-func (v *Preview) setScrollToLine(e *openfiles.Entry, n int) {
-	if row, ok := e.Text.FirstRow[n-1-e.Text.WindowStartLine]; ok {
-		e.Text.Scroll = clamp(row, 0, v.maxScroll(e, v.viewportHeight()))
+func (v *Preview) setScrollToLine(e *entry.TextEntry, n int) {
+	if row, ok := e.FirstRow[n-1-e.WindowStartLine]; ok {
+		e.Scroll = clamp(row, 0, v.maxScroll(e, v.viewportHeight()))
 	}
 }
 
-func (v *Preview) maxScroll(e *openfiles.Entry, viewportHeight int) int {
-	return max(len(e.Text.Rows)-viewportHeight, 0)
+func (v *Preview) maxScroll(e *entry.TextEntry, viewportHeight int) int {
+	return max(len(e.Rows)-viewportHeight, 0)
 }
 
 // currentTopLine returns the 1-based source line currently at the top of
-// e's viewport, derived from e.Text.Scroll's row within e's currently-loaded
+// e's viewport, derived from e.Scroll's row within e's currently-loaded
 // window — used to compute a TierPlainText entry's scroll target in
 // source-line units (§8).
-func currentTopLine(e *openfiles.Entry) int {
-	if e.Text.Rows != nil && e.Text.Scroll >= 0 && e.Text.Scroll < len(e.Text.Rows) {
-		return e.Text.WindowStartLine + e.Text.Rows[e.Text.Scroll].SourceLine + 1
+func currentTopLine(e *entry.TextEntry) int {
+	if e.Rows != nil && e.Scroll >= 0 && e.Scroll < len(e.Rows) {
+		return e.WindowStartLine + e.Rows[e.Scroll].SourceLine + 1
 	}
-	return e.Text.WindowStartLine + 1
+	return e.WindowStartLine + 1
 }
 
 // bestLineCount returns the best currently-known total line count for e:
@@ -138,32 +139,12 @@ func currentTopLine(e *openfiles.Entry) int {
 // stream's line count for TierPlainText — exact once done, which is the
 // only time this is consulted for that tier (content isn't considered
 // ready, and so isn't scrolled/goto-lined, before then — §4, §8).
-func bestLineCount(e *openfiles.Entry) int {
+func bestLineCount(e *entry.TextEntry) int {
 	if e.Tier == preview.TierHighlighted {
-		return max(len(e.Text.Lines), 1)
+		return max(len(e.Lines), 1)
 	}
-	_, lineCount, _ := e.Text.Stream.Snapshot()
+	_, lineCount, _ := e.Stream.Snapshot()
 	return max(lineCount, 1)
-}
-
-// contentReady syncs a TierHighlighted entry's content from its
-// background stream if not already done (a cheap no-op once synced, or
-// while the pass is still running) and reports whether e's
-// tier-appropriate content is available to render, scroll, goto-line, or
-// find against: for TierHighlighted, once Lines is populated; for
-// TierPlainText, once the background pass has finished. This stage
-// gates TierPlainText's windowed reading on that same "pass fully done"
-// signal goto-line already gates on (SPEC.md §2.1, docs/STREAMING_
-// PREVIEW_DESIGN.md §4), rather than the design's more ambitious
-// progressive-availability aspiration ("a jump ahead of where the pass
-// has reached can still show plain-text content immediately") — a
-// deliberate simplification for this stage, flagged in SPEC.md.
-func contentReady(e *openfiles.Entry) bool {
-	if e.Tier == preview.TierHighlighted {
-		e.SyncContent()
-		return e.Text.Lines != nil
-	}
-	return e.Text.Stream != nil && e.Text.Stream.Done()
 }
 
 // ensureWindow fetches (or reuses) a TierPlainText entry's on-screen
@@ -171,18 +152,18 @@ func contentReady(e *openfiles.Entry) bool {
 // if targetLine is already within the currently-loaded window and width
 // hasn't changed; if only width changed, the existing window is
 // rewrapped without a fresh disk read.
-func (v *Preview) ensureWindow(e *openfiles.Entry, width, targetLine int) {
-	offsets, lineCount, done := e.Text.Stream.Snapshot()
+func (v *Preview) ensureWindow(e *entry.TextEntry, width, targetLine int) {
+	offsets, lineCount, done := e.Stream.Snapshot()
 	if !done {
 		return
 	}
 	targetLine = clamp(targetLine, 1, max(lineCount, 1))
-	windowEnd := e.Text.WindowStartLine + len(e.Text.Lines)
-	inWindow := e.Text.Lines != nil && targetLine-1 >= e.Text.WindowStartLine && targetLine-1 < windowEnd
+	windowEnd := e.WindowStartLine + len(e.Lines)
+	inWindow := e.Lines != nil && targetLine-1 >= e.WindowStartLine && targetLine-1 < windowEnd
 	if inWindow {
-		if e.Text.RowsWidth != width {
-			e.Text.Rows, e.Text.FirstRow = preview.BuildDisplayRows(e.Text.Segs, width)
-			e.Text.RowsWidth = width
+		if e.RowsWidth != width {
+			e.Rows, e.FirstRow = preview.BuildDisplayRows(e.Segs, width)
+			e.RowsWidth = width
 		}
 		return
 	}
@@ -192,7 +173,7 @@ func (v *Preview) ensureWindow(e *openfiles.Entry, width, targetLine int) {
 		start = max(0, lineCount-windowLines)
 	}
 	count := min(windowLines, lineCount-start)
-	lines, err := preview.ReadWindow(e.Path, offsets, start, count)
+	lines, err := preview.ReadWindow(e.Path(), offsets, start, count)
 	if err != nil {
 		lines = nil
 	}
@@ -200,11 +181,11 @@ func (v *Preview) ensureWindow(e *openfiles.Entry, width, targetLine int) {
 	for i, l := range lines {
 		segs[i] = []preview.Segment{{Text: l, Category: preview.CategoryText}}
 	}
-	e.Text.Lines = lines
-	e.Text.Segs = segs
-	e.Text.WindowStartLine = start
-	e.Text.Rows, e.Text.FirstRow = preview.BuildDisplayRows(e.Text.Segs, width)
-	e.Text.RowsWidth = width
+	e.Lines = lines
+	e.Segs = segs
+	e.WindowStartLine = start
+	e.Rows, e.FirstRow = preview.BuildDisplayRows(e.Segs, width)
+	e.RowsWidth = width
 }
 
 func (v *Preview) viewportHeight() int {
@@ -223,11 +204,11 @@ func (v *Preview) viewportHeight() int {
 // context.
 func (v *Preview) computedWidth() int {
 	w, _ := v.Canvas.Size()
-	e := v.Files.DisplayedEntry()
-	if e == nil {
+	te, ok := v.Files.DisplayedEntry().(*entry.TextEntry)
+	if !ok {
 		return w
 	}
-	return max(w-gutterWidth(e), 1)
+	return max(w-gutterWidth(te), 1)
 }
 
 // gutterWidth returns the line-number gutter's width for e:
@@ -242,18 +223,18 @@ func (v *Preview) computedWidth() int {
 // bound instead (docs/STREAMING_PREVIEW_DESIGN.md §4), floored at a
 // minimum width of 4 digits so the large majority of files (which end up
 // under 10,000 lines) never visibly resize their gutter at all.
-func gutterWidth(e *openfiles.Entry) int {
-	if e.Text.CopyMode {
+func gutterWidth(e *entry.TextEntry) int {
+	if e.CopyMode {
 		return 0
 	}
 	if e.Tier == preview.TierPlainText {
-		_, lineCount, done := e.Text.Stream.Snapshot()
+		_, lineCount, done := e.Stream.Snapshot()
 		if !done && lineCount < 9999 {
 			lineCount = 9999
 		}
 		return canvas.GutterWidth(lineCount)
 	}
-	return canvas.GutterWidth(len(e.Text.Lines))
+	return canvas.GutterWidth(len(e.Lines))
 }
 
 // ensureWrapped recomputes e's wrapped display rows if width has
@@ -269,12 +250,12 @@ func gutterWidth(e *openfiles.Entry) int {
 // avoiding the extra line break a multi-row selection can pick up at a
 // wrap point — an inherent limitation of any fixed-width terminal grid,
 // not something copy mode can fully solve either way.
-func (v *Preview) ensureWrapped(e *openfiles.Entry, width int) {
-	if e.Text.RowsWidth == width && e.Text.Rows != nil {
+func (v *Preview) ensureWrapped(e *entry.TextEntry, width int) {
+	if e.RowsWidth == width && e.Rows != nil {
 		return
 	}
-	e.Text.Rows, e.Text.FirstRow = preview.BuildDisplayRows(e.Text.Segs, width)
-	e.Text.RowsWidth = width
+	e.Rows, e.FirstRow = preview.BuildDisplayRows(e.Segs, width)
+	e.RowsWidth = width
 }
 
 func clamp(v, lo, hi int) int {

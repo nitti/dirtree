@@ -6,7 +6,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/nitti/dirtree/internal/openfiles"
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/ui/canvas"
 )
@@ -210,7 +210,7 @@ func formatSize(n int64, width int) string {
 // hexFileView.DrawContent used most recently, kept as a small helper
 // since navigation (hexFileView.Scroll and friends) needs it
 // independent of a draw call.
-func (v *Preview) hexBytesPerRow(e *openfiles.Entry) int {
+func (v *Preview) hexBytesPerRow(e *entry.HexEntry) int {
 	w, _ := v.Canvas.Size()
 	return bytesPerRowFor(w, hexGutterWidth(e.Size))
 }
@@ -266,18 +266,18 @@ func (v *Preview) handleHexFindPromptKey(ev *tcell.EventKey) {
 // viewport, wrapping to the very first match (and noting the wrap) if
 // none exists at or after that point — and scrolls to it. Mirrors
 // seedFindCurrent (find.go).
-func (v *Preview) seedHexFindCurrent(e *openfiles.Entry) {
+func (v *Preview) seedHexFindCurrent(e *entry.HexEntry) {
 	idx := 0
-	for i, m := range e.Hex.HexFindMatches {
-		if m.Offset >= e.Hex.HexOffset {
+	for i, m := range e.HexFindMatches {
+		if m.Offset >= e.HexOffset {
 			idx = i
 			break
 		}
 	}
-	if e.Hex.HexFindMatches[idx].Offset < e.Hex.HexOffset {
-		e.Hex.HexFindWrapNote = "wrapped to top"
+	if e.HexFindMatches[idx].Offset < e.HexOffset {
+		e.HexFindWrapNote = "wrapped to top"
 	}
-	e.Hex.HexFindCurrent = idx
+	e.HexFindCurrent = idx
 	v.scrollToHexFindMatch(e)
 }
 
@@ -285,42 +285,42 @@ func (v *Preview) seedHexFindCurrent(e *openfiles.Entry) {
 // bring its current hex-find match into view (SPEC.md §2.1a), the same
 // "only scroll if it's not already visible" rule scrollToFindMatch
 // (find.go) uses. A no-op if there is no current match.
-func (v *Preview) scrollToHexFindMatch(e *openfiles.Entry) {
-	if e.Hex.HexFindCurrent < 0 || e.Hex.HexFindCurrent >= len(e.Hex.HexFindMatches) {
+func (v *Preview) scrollToHexFindMatch(e *entry.HexEntry) {
+	if e.HexFindCurrent < 0 || e.HexFindCurrent >= len(e.HexFindMatches) {
 		return
 	}
-	m := e.Hex.HexFindMatches[e.Hex.HexFindCurrent]
+	m := e.HexFindMatches[e.HexFindCurrent]
 	n := v.hexBytesPerRow(e)
 	rowStart := m.Offset - m.Offset%int64(n)
 	h := int64(max(v.viewportHeight(), 1))
-	if rowStart < e.Hex.HexOffset {
-		e.Hex.HexOffset = rowStart
+	if rowStart < e.HexOffset {
+		e.HexOffset = rowStart
 	}
-	if rowStart >= e.Hex.HexOffset+h*int64(n) {
-		e.Hex.HexOffset = rowStart - (h-1)*int64(n)
+	if rowStart >= e.HexOffset+h*int64(n) {
+		e.HexOffset = rowStart - (h-1)*int64(n)
 	}
-	e.Hex.HexOffset = clampHexOffset(e.Hex.HexOffset, e.Size, n, v.viewportHeight())
+	e.HexOffset = clampHexOffset(e.HexOffset, e.Size, n, v.viewportHeight())
 }
 
 // hexFindStatusText renders the hex view's find status (SPEC.md
 // §2.1a), mirroring findStatusText (find.go): the query, a "searching…"
 // spinner while a scan is in flight, match position/count once one has
 // finished, and the transient wrap note.
-func hexFindStatusText(e *openfiles.Entry) string {
-	if e.Hex.HexFindScan != nil {
-		elapsed := e.Hex.HexFindScan.Elapsed()
+func hexFindStatusText(e *entry.HexEntry) string {
+	if e.HexFindScan != nil {
+		elapsed := e.HexFindScan.Elapsed()
 		if elapsed < canvas.SpinnerThreshold {
-			return "/" + e.Hex.HexFindQuery
+			return "/" + e.HexFindQuery
 		}
 		frame := spinner.Frame(elapsed, canvas.SpinnerFPS, spinner.DefaultFrames)
-		return fmt.Sprintf("/%s  searching %c", e.Hex.HexFindQuery, frame)
+		return fmt.Sprintf("/%s  searching %c", e.HexFindQuery, frame)
 	}
-	if len(e.Hex.HexFindMatches) == 0 {
-		return "/" + e.Hex.HexFindQuery + "  no matches"
+	if len(e.HexFindMatches) == 0 {
+		return "/" + e.HexFindQuery + "  no matches"
 	}
-	status := fmt.Sprintf("/%s  %d/%d", e.Hex.HexFindQuery, e.Hex.HexFindCurrent+1, len(e.Hex.HexFindMatches))
-	if e.Hex.HexFindWrapNote != "" {
-		status += " (" + e.Hex.HexFindWrapNote + ")"
+	status := fmt.Sprintf("/%s  %d/%d", e.HexFindQuery, e.HexFindCurrent+1, len(e.HexFindMatches))
+	if e.HexFindWrapNote != "" {
+		status += " (" + e.HexFindWrapNote + ")"
 	}
 	return status
 }
@@ -339,18 +339,18 @@ type hexFindHighlight struct {
 // hexFindHighlightsForRow returns rowLen bytes' worth of every hex-find
 // match overlapping the row starting at rowOffset, in row-relative byte
 // indices — mirrors findHighlightsForRow (draw.go).
-func hexFindHighlightsForRow(e *openfiles.Entry, rowOffset int64, rowLen int) []hexFindHighlight {
-	if len(e.Hex.HexFindMatches) == 0 {
+func hexFindHighlightsForRow(e *entry.HexEntry, rowOffset int64, rowLen int) []hexFindHighlight {
+	if len(e.HexFindMatches) == 0 {
 		return nil
 	}
 	var out []hexFindHighlight
-	for i, m := range e.Hex.HexFindMatches {
+	for i, m := range e.HexFindMatches {
 		start := int(m.Offset - rowOffset)
 		end := start + int(m.Len)
 		if end <= 0 || start >= rowLen {
 			continue
 		}
-		out = append(out, hexFindHighlight{Start: max(start, 0), End: min(end, rowLen), Current: i == e.Hex.HexFindCurrent})
+		out = append(out, hexFindHighlight{Start: max(start, 0), End: min(end, rowLen), Current: i == e.HexFindCurrent})
 	}
 	return out
 }
@@ -382,7 +382,7 @@ func hexHighlightStyleAt(i int, highlights []hexFindHighlight, base tcell.Style)
 // the file's final, partial row (fewer than bytesPerRow actual bytes,
 // data), the shortfall renders as blank space within both columns
 // rather than changing either block's position.
-func (v *Preview) drawHexRow(x0, y, rowWidth, gutterWidth, bytesPerRow int, rowOffset int64, data []byte, e *openfiles.Entry) {
+func (v *Preview) drawHexRow(x0, y, rowWidth, gutterWidth, bytesPerRow int, rowOffset int64, data []byte, e *entry.HexEntry) {
 	offsetStr := fmt.Sprintf("%0*x", gutterWidth-2, rowOffset)
 	v.Canvas.DrawText(x0, y, gutterWidth, offsetStr+"  ", canvas.StyleNormal)
 

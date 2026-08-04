@@ -8,25 +8,26 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/ui/canvas"
 )
 
 // TestFileViewForDispatchesOnTier guards fileViewFor's own branch
-// (SPEC.md §2.1, §2.1a): a TierBinary entry gets hexFileView, every
+// (SPEC.md §2.1, §2.1a): a *entry.HexEntry gets hexFileView, every
 // other tier (and a nil entry, which the goto prompt can never actually
 // be open against) gets textFileView.
 func TestFileViewForDispatchesOnTier(t *testing.T) {
 	cases := []struct {
 		name string
-		e    *openfiles.Entry
+		e    entry.Entry
 		want fileView
 	}{
 		{"nil entry", nil, textFileView{}},
-		{"highlighted tier", &openfiles.Entry{Tier: preview.TierHighlighted}, textFileView{}},
-		{"plain text tier", &openfiles.Entry{Tier: preview.TierPlainText}, textFileView{}},
-		{"binary tier", &openfiles.Entry{Tier: preview.TierBinary}, hexFileView{}},
+		{"highlighted tier", &entry.TextEntry{EntryInfo: entry.EntryInfo{Tier: preview.TierHighlighted}}, textFileView{}},
+		{"plain text tier", &entry.TextEntry{EntryInfo: entry.EntryInfo{Tier: preview.TierPlainText}}, textFileView{}},
+		{"binary tier", &entry.HexEntry{EntryInfo: entry.EntryInfo{Tier: preview.TierBinary}}, hexFileView{}},
 	}
 	for _, c := range cases {
 		if got := fileViewFor(c.e); got != c.want {
@@ -100,13 +101,14 @@ func TestTextFileViewJumpToSetsScrollByLine(t *testing.T) {
 	waitEntryReady(t, res.Entry)
 
 	textFileView{}.jumpTo(v, "20")
-	row, ok := res.Entry.Text.FirstRow[19]
+	te := res.Entry.(*entry.TextEntry)
+	row, ok := te.FirstRow[19]
 	if !ok {
 		t.Fatal("expected line 20's row to be in FirstRow after jumpTo")
 	}
-	want := clamp(row, 0, v.maxScroll(res.Entry, v.viewportHeight()))
-	if res.Entry.Text.Scroll != want {
-		t.Fatalf("after jumpTo(20), Scroll = %d, want %d", res.Entry.Text.Scroll, want)
+	want := clamp(row, 0, v.maxScroll(te, v.viewportHeight()))
+	if te.Scroll != want {
+		t.Fatalf("after jumpTo(20), Scroll = %d, want %d", te.Scroll, want)
 	}
 	if want == 0 {
 		t.Fatal("test fixture didn't actually exercise a nonzero scroll — widen it")
@@ -132,10 +134,11 @@ func TestHexFileViewJumpToSetsHexOffsetByByte(t *testing.T) {
 	}
 
 	hexFileView{}.jumpTo(v, "64") // hex 64 == decimal 100
-	n := v.hexBytesPerRow(res.Entry)
-	want := clampHexOffset(0x64, res.Entry.Size, n, v.viewportHeight())
-	if res.Entry.Hex.HexOffset != want {
-		t.Fatalf("after jumpTo(\"64\"), HexOffset = %d, want %d", res.Entry.Hex.HexOffset, want)
+	he := res.Entry.(*entry.HexEntry)
+	n := v.hexBytesPerRow(he)
+	want := clampHexOffset(0x64, he.Size, n, v.viewportHeight())
+	if he.HexOffset != want {
+		t.Fatalf("after jumpTo(\"64\"), HexOffset = %d, want %d", he.HexOffset, want)
 	}
 }
 
@@ -179,11 +182,11 @@ func TestHandleGotoPromptKeyRejectsWrongTierDigits(t *testing.T) {
 func TestTextFileViewGotoRangeHint(t *testing.T) {
 	cases := []struct {
 		name string
-		e    *openfiles.Entry
+		e    entry.Entry
 		want string
 	}{
-		{"highlighted tier, 3 lines", &openfiles.Entry{Tier: preview.TierHighlighted, Text: &openfiles.TextState{Lines: []string{"a", "b", "c"}}}, "1-3"},
-		{"highlighted tier, empty file (floors at 1 line)", &openfiles.Entry{Tier: preview.TierHighlighted, Text: &openfiles.TextState{}}, "1-1"},
+		{"highlighted tier, 3 lines", &entry.TextEntry{EntryInfo: entry.EntryInfo{Tier: preview.TierHighlighted}, Lines: []string{"a", "b", "c"}}, "1-3"},
+		{"highlighted tier, empty file (floors at 1 line)", &entry.TextEntry{EntryInfo: entry.EntryInfo{Tier: preview.TierHighlighted}}, "1-1"},
 	}
 	for _, c := range cases {
 		if got := (textFileView{}).gotoRangeHint(c.e); got != c.want {
@@ -203,7 +206,7 @@ func TestHexFileViewGotoRangeHint(t *testing.T) {
 		{"empty file (floors at 0 rather than going negative)", 0, "0-0"},
 	}
 	for _, c := range cases {
-		e := &openfiles.Entry{Tier: preview.TierBinary, Size: c.size}
+		e := &entry.HexEntry{EntryInfo: entry.EntryInfo{Tier: preview.TierBinary, Size: c.size}}
 		if got := (hexFileView{}).gotoRangeHint(e); got != c.want {
 			t.Errorf("%s: gotoRangeHint() = %q, want %q", c.name, got, c.want)
 		}
@@ -215,19 +218,19 @@ func TestHexFileViewGotoRangeHint(t *testing.T) {
 // outside this package) dispatches through fileViewFor the same way
 // the title bar's own rendering does.
 func TestGotoLabelDispatchesOnTier(t *testing.T) {
-	textEntry := &openfiles.Entry{Tier: preview.TierHighlighted, Text: &openfiles.TextState{Lines: []string{"a"}}}
-	hexEntry := &openfiles.Entry{Tier: preview.TierBinary, Size: 10}
+	textEntry := &entry.TextEntry{EntryInfo: entry.EntryInfo{Tier: preview.TierHighlighted}, Lines: []string{"a"}}
+	hexEntry := &entry.HexEntry{EntryInfo: entry.EntryInfo{Tier: preview.TierBinary, Size: 10}}
 
 	files := openfiles.New()
 	v := &Preview{Shared: &Shared{Files: files}}
 
-	files.Entries = []*openfiles.Entry{textEntry}
+	files.Entries = []entry.Entry{textEntry}
 	files.Displayed = 0
 	if got, want := v.GotoLabel(), "goto line: "; got != want {
 		t.Errorf("GotoLabel() with text entry = %q, want %q", got, want)
 	}
 
-	files.Entries = []*openfiles.Entry{hexEntry}
+	files.Entries = []entry.Entry{hexEntry}
 	files.Displayed = 0
 	if got, want := v.GotoLabel(), "goto offset: 0x"; got != want {
 		t.Errorf("GotoLabel() with hex entry = %q, want %q", got, want)
@@ -237,19 +240,19 @@ func TestGotoLabelDispatchesOnTier(t *testing.T) {
 // TestToggleCopyModeDispatchesOnTier guards #114's final cleanup stage:
 // textFileView.ToggleCopyMode actually toggles the entry's copy mode,
 // while hexFileView.ToggleCopyMode is a genuine no-op (SPEC.md §2.1a —
-// copy mode does not apply to a hex view). HexState has no CopyMode
+// copy mode does not apply to a hex view). HexEntry has no CopyMode
 // field at all, so the only thing to verify on the hex side is that it
 // doesn't panic reaching for one.
 func TestToggleCopyModeDispatchesOnTier(t *testing.T) {
-	textEntry := &openfiles.Entry{Tier: preview.TierHighlighted, Text: &openfiles.TextState{}}
-	hexEntry := &openfiles.Entry{Tier: preview.TierBinary, Hex: &openfiles.HexState{}}
+	textEntry := &entry.TextEntry{EntryInfo: entry.EntryInfo{Tier: preview.TierHighlighted}}
+	hexEntry := &entry.HexEntry{EntryInfo: entry.EntryInfo{Tier: preview.TierBinary}}
 
 	textFileView{}.ToggleCopyMode(nil, textEntry)
-	if !textEntry.Text.CopyMode {
+	if !textEntry.CopyMode {
 		t.Fatal("expected textFileView.ToggleCopyMode to toggle CopyMode on")
 	}
 	textFileView{}.ToggleCopyMode(nil, textEntry)
-	if textEntry.Text.CopyMode {
+	if textEntry.CopyMode {
 		t.Fatal("expected a second call to toggle CopyMode back off")
 	}
 

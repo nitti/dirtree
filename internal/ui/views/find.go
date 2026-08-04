@@ -5,8 +5,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/find"
-	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/ui/canvas"
@@ -47,19 +47,19 @@ func (v *Preview) handleFindPromptKey(ev *tcell.EventKey) {
 // PerformFind's synchronous (TierHighlighted) path and textFileView.
 // SyncFindScan's asynchronous (TierPlainText) one, once a match set
 // actually exists either way.
-func (v *Preview) seedFindCurrent(e *openfiles.Entry) {
+func (v *Preview) seedFindCurrent(e *entry.TextEntry) {
 	startLine := currentTopLine(e) - 1
 	idx := 0
-	for i, m := range e.Text.FindMatches {
+	for i, m := range e.FindMatches {
 		if m.Line >= startLine {
 			idx = i
 			break
 		}
 	}
-	if e.Text.FindMatches[idx].Line < startLine {
-		e.Text.FindWrapNote = "wrapped to top"
+	if e.FindMatches[idx].Line < startLine {
+		e.FindWrapNote = "wrapped to top"
 	}
-	e.Text.FindCurrent = idx
+	e.FindCurrent = idx
 	v.scrollToFindMatch(e)
 }
 
@@ -70,11 +70,11 @@ func (v *Preview) seedFindCurrent(e *openfiles.Entry) {
 // (absolute) source line may fall outside the currently-loaded window
 // (docs/STREAMING_PREVIEW_DESIGN.md §8, §9) — the window is fetched to
 // cover it first, the same way goto-line already does.
-func (v *Preview) scrollToFindMatch(e *openfiles.Entry) {
-	if e.Text.FindCurrent < 0 || e.Text.FindCurrent >= len(e.Text.FindMatches) {
+func (v *Preview) scrollToFindMatch(e *entry.TextEntry) {
+	if e.FindCurrent < 0 || e.FindCurrent >= len(e.FindMatches) {
 		return
 	}
-	m := e.Text.FindMatches[e.Text.FindCurrent]
+	m := e.FindMatches[e.FindCurrent]
 	if e.Tier == preview.TierPlainText {
 		v.ensureWindow(e, v.computedWidth(), m.Line+1)
 	}
@@ -83,32 +83,32 @@ func (v *Preview) scrollToFindMatch(e *openfiles.Entry) {
 		return
 	}
 	h := v.viewportHeight()
-	if row < e.Text.Scroll {
-		e.Text.Scroll = row
+	if row < e.Scroll {
+		e.Scroll = row
 	}
-	if row >= e.Text.Scroll+h {
-		e.Text.Scroll = row - h + 1
+	if row >= e.Scroll+h {
+		e.Scroll = row - h + 1
 	}
-	e.Text.Scroll = clamp(e.Text.Scroll, 0, v.maxScroll(e, h))
+	e.Scroll = clamp(e.Scroll, 0, v.maxScroll(e, h))
 }
 
-// findMatchRow returns the index into e.Text.Rows of the specific wrapped
+// findMatchRow returns the index into e.Rows of the specific wrapped
 // row m falls in (not just its source line's first row, since a long
 // line's match may land in a continuation row) — ensureWrapped/
 // ensureWindow must already have been called. m.Line is an absolute
-// source line number; e.Text.Rows' SourceLine is relative to e.Text.WindowStartLine
+// source line number; e.Rows' SourceLine is relative to e.WindowStartLine
 // (always 0 for TierHighlighted, so this is a no-op subtraction there).
 // Falls back to the line's first row if m's column can't be located in
 // any of its rows (shouldn't happen for a match found against the same
 // content, but degrades safely rather than losing the jump entirely).
-func findMatchRow(e *openfiles.Entry, m find.Match) int {
-	line := m.Line - e.Text.WindowStartLine
-	start, ok := e.Text.FirstRow[line]
+func findMatchRow(e *entry.TextEntry, m find.Match) int {
+	line := m.Line - e.WindowStartLine
+	start, ok := e.FirstRow[line]
 	if !ok {
 		return -1
 	}
-	for i := start; i < len(e.Text.Rows); i++ {
-		r := e.Text.Rows[i]
+	for i := start; i < len(e.Rows); i++ {
+		r := e.Rows[i]
 		if r.SourceLine != line {
 			break
 		}
@@ -137,21 +137,21 @@ func withStatus(status string, legend []canvas.LegendEntry) []canvas.LegendEntry
 // query, how many matches it found and which one is current, and a
 // transient note when the most recent next/previous step wrapped
 // around either end of the match list.
-func findStatusText(e *openfiles.Entry) string {
-	if e.Text.FindScan != nil {
-		elapsed := e.Text.FindScan.Elapsed()
+func findStatusText(e *entry.TextEntry) string {
+	if e.FindScan != nil {
+		elapsed := e.FindScan.Elapsed()
 		if elapsed < canvas.SpinnerThreshold {
-			return "/" + e.Text.FindQuery
+			return "/" + e.FindQuery
 		}
 		frame := spinner.Frame(elapsed, canvas.SpinnerFPS, spinner.DefaultFrames)
-		return fmt.Sprintf("/%s  searching %c", e.Text.FindQuery, frame)
+		return fmt.Sprintf("/%s  searching %c", e.FindQuery, frame)
 	}
-	if len(e.Text.FindMatches) == 0 {
-		return "/" + e.Text.FindQuery + "  no matches"
+	if len(e.FindMatches) == 0 {
+		return "/" + e.FindQuery + "  no matches"
 	}
-	status := fmt.Sprintf("/%s  %d/%d", e.Text.FindQuery, e.Text.FindCurrent+1, len(e.Text.FindMatches))
-	if e.Text.FindWrapNote != "" {
-		status += " (" + e.Text.FindWrapNote + ")"
+	status := fmt.Sprintf("/%s  %d/%d", e.FindQuery, e.FindCurrent+1, len(e.FindMatches))
+	if e.FindWrapNote != "" {
+		status += " (" + e.FindWrapNote + ")"
 	}
 	return status
 }
