@@ -5,7 +5,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/nitti/dirtree/internal/openfiles"
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/ui/canvas"
 )
@@ -32,22 +32,20 @@ const windowMargin = 200
 // line number (decimal digits only), a TierBinary entry's jumps to a
 // byte offset, always interpreted as hexadecimal (hex digits only —
 // the prompt itself shows a literal "0x" ahead of the typed input,
-// drawHexContent, so there's no decimal/hex ambiguity to resolve and
-// no "0x" for the user to type themselves). Backspace, Ctrl+U (clear),
-// and Escape (cancel without changing the viewport) behave the same
-// either way.
+// hexFileView.DrawTitleBar, so there's no decimal/hex ambiguity to
+// resolve and no "0x" for the user to type themselves). Backspace,
+// Ctrl+U (clear), and Escape (cancel without changing the viewport)
+// behave the same either way. Which digits are accepted and what
+// Enter jumps to are
+// the two tier-specific pieces, dispatched through fileViewFor
+// (fileview.go) rather than branched here directly.
 func (v *Preview) handleGotoPromptKey(ev *tcell.EventKey) {
-	e := v.Files.DisplayedEntry()
-	isHex := e != nil && e.Tier == preview.TierBinary
+	fv := fileViewFor(v.Files.DisplayedEntry())
 	switch {
 	case ev.Key() == tcell.KeyEscape:
 		v.GotoPromptOpen = false
 	case ev.Key() == tcell.KeyEnter:
-		if isHex {
-			v.gotoOffset(v.GotoInput)
-		} else {
-			v.gotoLine(v.GotoInput)
-		}
+		fv.jumpTo(v, v.GotoInput)
 		v.GotoPromptOpen = false
 	case ev.Key() == tcell.KeyBackspace, ev.Key() == tcell.KeyBackspace2:
 		if len(v.GotoInput) > 0 {
@@ -55,88 +53,36 @@ func (v *Preview) handleGotoPromptKey(ev *tcell.EventKey) {
 		}
 	case ev.Key() == tcell.KeyCtrlU:
 		v.GotoInput = ""
-	case isHex && isHexOffsetRune(ev.Rune()):
-		v.GotoInput += string(ev.Rune())
-	case !isHex && ev.Rune() >= '0' && ev.Rune() <= '9':
+	case fv.acceptGotoRune(ev.Rune()):
 		v.GotoInput += string(ev.Rune())
 	}
 }
 
 // isHexOffsetRune reports whether r is acceptable input for the
 // goto-offset prompt (SPEC.md §2.1a): only hex digits — the prompt's
-// input is always interpreted as hexadecimal (drawHexContent shows the
-// "0x" ahead of it as a fixed label, not something the user types), so
-// there's nothing else valid to accept here, unlike goto-line's
-// broader "accept while typing, reject on submit" prompts elsewhere.
+// input is always interpreted as hexadecimal (hexFileView.DrawContent
+// shows the "0x" ahead of it as a fixed label, not something the user
+// types), so there's nothing else valid to accept here, unlike
+// goto-line's broader "accept while typing, reject on submit" prompts
+// elsewhere.
 func isHexOffsetRune(r rune) bool {
 	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 }
 
-// scroll scrolls the currently-displayed entry by delta display rows
-// (SPEC.md §2.1), clamped so it never goes negative or past the point
-// where the last display row would leave the viewport. A no-op at the
-// empty state (no displayed entry) or while its content isn't ready yet
-// (docs/STREAMING_PREVIEW_DESIGN.md §4, §8).
-//
-// For a TierPlainText entry, delta is instead treated as a number of
-// source lines rather than display rows (§8's "a real change to the
-// preview view's scroll model," flagged and accepted here as a
-// deliberate simplification, since that tier's window only ever holds a
-// slice of the file rather than a whole-file wrap cache to walk display
-// rows against) — Up/Down and Page Up/Page Down all move by source line
-// count for that tier.
-func (v *Preview) scroll(delta int) {
-	e := v.Files.DisplayedEntry()
-	if e == nil || !contentReady(e) {
-		return
-	}
-	width := v.computedWidth()
-	if e.Tier == preview.TierPlainText {
-		cur := currentTopLine(e)
-		target := clamp(cur+delta, 1, bestLineCount(e))
-		if target == cur {
-			v.bumpEdge(e, delta)
-		}
-		v.ensureWindow(e, width, target)
-		v.setScrollToLine(e, target)
-		return
-	}
-	v.ensureWrapped(e, width)
-	old := e.Scroll
-	e.Scroll = clamp(e.Scroll+delta, 0, v.maxScroll(e, v.viewportHeight()))
-	if e.Scroll == old {
-		v.bumpEdge(e, delta)
-	}
-}
-
-// bumpEdge records a scroll attempt (from scroll, above) that pushed
-// further than e's content allows, in the direction delta indicates:
-// negative means already at the top, positive means already at the
-// bottom. A no-op for delta == 0, which scroll never actually passes.
-func (v *Preview) bumpEdge(e *openfiles.Entry, delta int) {
+// bumpEdge records a scroll attempt (from textFileView.Scroll or
+// hexFileView.Scroll) that pushed further than e's content allows, in
+// the direction delta indicates: negative means already at the top,
+// positive means already at the bottom. A no-op for delta == 0, which
+// neither Scroll implementation ever actually passes.
+func (v *Preview) bumpEdge(e fileEntry, delta int) {
 	switch {
 	case delta < 0:
-		v.TopBumpPath = e.Path
+		v.TopBumpPath = e.Path()
 		v.TopBumpFlashStart = time.Now()
 	case delta > 0:
-		v.BottomBumpPath = e.Path
+		v.BottomBumpPath = e.Path()
 		v.BottomBumpFlashStart = time.Now()
 	}
-}
-
-// gotoLine jumps the currently-displayed entry's scroll to the source
-// line's first display row (SPEC.md §2.1), clamped to [1, total source
-// lines]. A no-op if input is empty or there's no displayed entry.
-func (v *Preview) gotoLine(input string) {
-	e := v.Files.DisplayedEntry()
-	if input == "" || e == nil {
-		return
-	}
-	n := 0
-	for _, r := range input {
-		n = n*10 + int(r-'0')
-	}
-	v.ScrollToLine(e, n)
 }
 
 // ScrollToLine jumps e's scroll to source line n's first display row
@@ -147,18 +93,19 @@ func (v *Preview) gotoLine(input string) {
 // itself. A no-op while e's content isn't ready yet (goto-line's own
 // gating already prevents this for the goto-line prompt itself, SPEC.md
 // §2.1; this guards the same for a jump arriving some other way).
-func (v *Preview) ScrollToLine(e *openfiles.Entry, n int) {
-	if !contentReady(e) {
+func (v *Preview) ScrollToLine(e fileEntry, n int) {
+	te, ok := e.(*entry.TextEntry)
+	if !ok || !te.ContentReady() {
 		return
 	}
 	width := v.computedWidth()
-	n = clamp(n, 1, bestLineCount(e))
-	if e.Tier == preview.TierPlainText {
-		v.ensureWindow(e, width, n)
+	n = clamp(n, 1, bestLineCount(te))
+	if te.Tier == preview.TierPlainText {
+		v.ensureWindow(te, width, n)
 	} else {
-		v.ensureWrapped(e, width)
+		v.ensureWrapped(te, width)
 	}
-	v.setScrollToLine(e, n)
+	v.setScrollToLine(te, n)
 }
 
 // setScrollToLine sets e.Scroll to source line n's first display row
@@ -166,13 +113,13 @@ func (v *Preview) ScrollToLine(e *openfiles.Entry, n int) {
 // TierHighlighted, e's current window for TierPlainText — WindowStartLine
 // is always 0 for the former, so this is n-1 there, matching the
 // pre-windowing behavior exactly).
-func (v *Preview) setScrollToLine(e *openfiles.Entry, n int) {
+func (v *Preview) setScrollToLine(e *entry.TextEntry, n int) {
 	if row, ok := e.FirstRow[n-1-e.WindowStartLine]; ok {
 		e.Scroll = clamp(row, 0, v.maxScroll(e, v.viewportHeight()))
 	}
 }
 
-func (v *Preview) maxScroll(e *openfiles.Entry, viewportHeight int) int {
+func (v *Preview) maxScroll(e *entry.TextEntry, viewportHeight int) int {
 	return max(len(e.Rows)-viewportHeight, 0)
 }
 
@@ -180,7 +127,7 @@ func (v *Preview) maxScroll(e *openfiles.Entry, viewportHeight int) int {
 // e's viewport, derived from e.Scroll's row within e's currently-loaded
 // window — used to compute a TierPlainText entry's scroll target in
 // source-line units (§8).
-func currentTopLine(e *openfiles.Entry) int {
+func currentTopLine(e *entry.TextEntry) int {
 	if e.Rows != nil && e.Scroll >= 0 && e.Scroll < len(e.Rows) {
 		return e.WindowStartLine + e.Rows[e.Scroll].SourceLine + 1
 	}
@@ -192,7 +139,7 @@ func currentTopLine(e *openfiles.Entry) int {
 // stream's line count for TierPlainText — exact once done, which is the
 // only time this is consulted for that tier (content isn't considered
 // ready, and so isn't scrolled/goto-lined, before then — §4, §8).
-func bestLineCount(e *openfiles.Entry) int {
+func bestLineCount(e *entry.TextEntry) int {
 	if e.Tier == preview.TierHighlighted {
 		return max(len(e.Lines), 1)
 	}
@@ -200,32 +147,12 @@ func bestLineCount(e *openfiles.Entry) int {
 	return max(lineCount, 1)
 }
 
-// contentReady syncs a TierHighlighted entry's content from its
-// background stream if not already done (a cheap no-op once synced, or
-// while the pass is still running) and reports whether e's
-// tier-appropriate content is available to render, scroll, goto-line, or
-// find against: for TierHighlighted, once Lines is populated; for
-// TierPlainText, once the background pass has finished. This stage
-// gates TierPlainText's windowed reading on that same "pass fully done"
-// signal goto-line already gates on (SPEC.md §2.1, docs/STREAMING_
-// PREVIEW_DESIGN.md §4), rather than the design's more ambitious
-// progressive-availability aspiration ("a jump ahead of where the pass
-// has reached can still show plain-text content immediately") — a
-// deliberate simplification for this stage, flagged in SPEC.md.
-func contentReady(e *openfiles.Entry) bool {
-	if e.Tier == preview.TierHighlighted {
-		e.SyncContent()
-		return e.Lines != nil
-	}
-	return e.Stream != nil && e.Stream.Done()
-}
-
 // ensureWindow fetches (or reuses) a TierPlainText entry's on-screen
 // window so it covers targetLine, then wraps it at width (§8). A no-op
 // if targetLine is already within the currently-loaded window and width
 // hasn't changed; if only width changed, the existing window is
 // rewrapped without a fresh disk read.
-func (v *Preview) ensureWindow(e *openfiles.Entry, width, targetLine int) {
+func (v *Preview) ensureWindow(e *entry.TextEntry, width, targetLine int) {
 	offsets, lineCount, done := e.Stream.Snapshot()
 	if !done {
 		return
@@ -246,7 +173,7 @@ func (v *Preview) ensureWindow(e *openfiles.Entry, width, targetLine int) {
 		start = max(0, lineCount-windowLines)
 	}
 	count := min(windowLines, lineCount-start)
-	lines, err := preview.ReadWindow(e.Path, offsets, start, count)
+	lines, err := preview.ReadWindow(e.Path(), offsets, start, count)
 	if err != nil {
 		lines = nil
 	}
@@ -267,9 +194,6 @@ func (v *Preview) viewportHeight() int {
 	if v.Files.DisplayedEntry() != nil {
 		height-- // file title bar row, shown whenever a file is displayed
 	}
-	if v.GotoPromptOpen {
-		height--
-	}
 	return height
 }
 
@@ -280,11 +204,11 @@ func (v *Preview) viewportHeight() int {
 // context.
 func (v *Preview) computedWidth() int {
 	w, _ := v.Canvas.Size()
-	e := v.Files.DisplayedEntry()
-	if e == nil {
+	te, ok := v.Files.DisplayedEntry().(*entry.TextEntry)
+	if !ok {
 		return w
 	}
-	return max(w-gutterWidth(e), 1)
+	return max(w-gutterWidth(te), 1)
 }
 
 // gutterWidth returns the line-number gutter's width for e:
@@ -299,7 +223,7 @@ func (v *Preview) computedWidth() int {
 // bound instead (docs/STREAMING_PREVIEW_DESIGN.md §4), floored at a
 // minimum width of 4 digits so the large majority of files (which end up
 // under 10,000 lines) never visibly resize their gutter at all.
-func gutterWidth(e *openfiles.Entry) int {
+func gutterWidth(e *entry.TextEntry) int {
 	if e.CopyMode {
 		return 0
 	}
@@ -326,7 +250,7 @@ func gutterWidth(e *openfiles.Entry) int {
 // avoiding the extra line break a multi-row selection can pick up at a
 // wrap point — an inherent limitation of any fixed-width terminal grid,
 // not something copy mode can fully solve either way.
-func (v *Preview) ensureWrapped(e *openfiles.Entry, width int) {
+func (v *Preview) ensureWrapped(e *entry.TextEntry, width int) {
 	if e.RowsWidth == width && e.Rows != nil {
 		return
 	}

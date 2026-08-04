@@ -10,6 +10,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/find"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
@@ -48,6 +49,33 @@ func TestHandleKeyQReturnsActionQuitKey(t *testing.T) {
 	ev := tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone)
 	if got := v.HandleKey(ev); got != ActionQuitKey {
 		t.Fatalf("HandleKey('q') = %v, want ActionQuitKey", got)
+	}
+}
+
+// TestHandleKeyTogglesCopyMode exercises 'c' end to end through
+// Preview.HandleKey for a text-tier entry (SPEC.md §2.1), now dispatched
+// through fileView.ToggleCopyMode rather than an inline isHex check.
+func TestHandleKeyTogglesCopyMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(path, []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := openfiles.New()
+	v := newTestPreview(files, 60, 10)
+	res := files.Open(path, 1<<20)
+	if res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %s", res.Message)
+	}
+	e := res.Entry.(*entry.TextEntry)
+
+	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+	if !e.CopyMode {
+		t.Fatal("expected 'c' to toggle copy mode on")
+	}
+	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+	if e.CopyMode {
+		t.Fatal("expected a second 'c' to toggle copy mode back off")
 	}
 }
 
@@ -121,7 +149,7 @@ func TestDrawContentEmptyStateHintMatchesLegendOrder(t *testing.T) {
 	sim.SetSize(w, h)
 
 	v := &Preview{Shared: &Shared{Files: openfiles.New(), Canvas: canvas.New(sim)}}
-	v.drawContent(0, 0, w, h)
+	v.drawEmptyState(0, 0, w, h)
 	sim.Show()
 
 	row := strings.TrimSpace(rowText(sim, h/2, w))
@@ -136,7 +164,12 @@ func TestDrawContentEmptyStateHintMatchesLegendOrder(t *testing.T) {
 	}
 }
 
-func TestDrawPreviewShowsGotoLegend(t *testing.T) {
+// TestDrawFileTitleBarShowsGotoPrompt guards #114's title-bar placement
+// fix: the goto-line prompt now renders in the file title bar (same row
+// as the find prompt) instead of its own row at the bottom of the
+// content area, and shows the file's valid line range alongside the
+// typed input while typing.
+func TestDrawFileTitleBarShowsGotoPrompt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
 	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
@@ -147,7 +180,10 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 	if err := sim.Init(); err != nil {
 		t.Fatal(err)
 	}
-	w, h := 60, 10
+	// Wide enough that "goto line: 2 (1-3)" plus the full legend both
+	// fit without the fit/drop rule (SPEC.md §5.2) dropping the left
+	// side in favor of the legend.
+	w, h := 70, 10
 	sim.SetSize(w, h)
 
 	files := openfiles.New()
@@ -159,26 +195,26 @@ func TestDrawPreviewShowsGotoLegend(t *testing.T) {
 	v.GotoPromptOpen = true
 	v.GotoInput = "2"
 
-	v.drawContent(0, 0, w, h)
+	textFileView{}.DrawTitleBar(v, files.DisplayedEntry(), 0, 0, w, true)
 	sim.Show()
 
-	row := rowText(sim, h-1, w)
-	if !strings.HasPrefix(row, "goto line: 2") {
-		t.Fatalf("goto-line row = %q, want it to start with the prompt text", row)
+	row := rowText(sim, 0, w)
+	if !strings.HasPrefix(row, "goto line: 2 (1-3)") {
+		t.Fatalf("file title bar row = %q, want it to start with the prompt text and range hint", row)
 	}
 	for _, want := range []string{"[return] jump", "[esc] cancel"} {
 		if !strings.Contains(row, want) {
-			t.Errorf("goto-line row = %q, missing legend entry %q", row, want)
+			t.Errorf("file title bar row = %q, missing legend entry %q", row, want)
 		}
 	}
 }
 
-// TestDrawContentSuppressesGotoLegendWhenHelpVisible guards SPEC.md
-// §5.4: while the help overlay is showing, the goto-line prompt row
-// keeps its own left-hand content (the typed digits) but drops its
-// trailing keybinding legend, since the help overlay is the one place
-// that legend now lives.
-func TestDrawContentSuppressesGotoLegendWhenHelpVisible(t *testing.T) {
+// TestDrawFileTitleBarSuppressesGotoLegendWhenHelpVisible guards
+// SPEC.md §5.4: while the help overlay is showing, the goto prompt
+// keeps its own left-hand content (the typed digits and range hint)
+// but drops its trailing keybinding legend, since the help overlay is
+// the one place that legend now lives.
+func TestDrawFileTitleBarSuppressesGotoLegendWhenHelpVisible(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
 	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
@@ -201,22 +237,22 @@ func TestDrawContentSuppressesGotoLegendWhenHelpVisible(t *testing.T) {
 	v.GotoPromptOpen = true
 	v.GotoInput = "2"
 
-	v.drawContent(0, 0, w, h)
+	textFileView{}.DrawTitleBar(v, files.DisplayedEntry(), 0, 0, w, true)
 	sim.Show()
 
-	row := rowText(sim, h-1, w)
-	if !strings.HasPrefix(row, "goto line: 2") {
-		t.Fatalf("goto-line row = %q, want it to still start with the prompt text", row)
+	row := rowText(sim, 0, w)
+	if !strings.HasPrefix(row, "goto line: 2 (1-3)") {
+		t.Fatalf("file title bar row = %q, want it to still start with the prompt text and range hint", row)
 	}
 	if strings.Contains(row, "[return]") || strings.Contains(row, "[esc]") {
-		t.Errorf("goto-line row = %q, want no keybinding legend while HelpVisible", row)
+		t.Errorf("file title bar row = %q, want no keybinding legend while HelpVisible", row)
 	}
 }
 
 // TestPreviewCurrentFileLegendPrecedence guards CurrentFileLegend's
 // state precedence (SPEC.md §5.4), which must exactly mirror
-// drawFileTitleBar's own switch so the help overlay never shows a
-// legend the title bar itself isn't actually offering.
+// textFileView.DrawTitleBar's own switch so the help overlay never
+// shows a legend the title bar itself isn't actually offering.
 func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
@@ -236,9 +272,10 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 		t.Fatalf("Open failed: %s", res.Message)
 	}
 	waitEntryReady(t, files.DisplayedEntry())
-	e := files.DisplayedEntry()
+	e := files.DisplayedEntry().(*entry.TextEntry)
 
 	reset := func() {
+		v.GotoPromptOpen = false
 		v.FindPromptOpen = false
 		e.CopyMode = false
 		e.FindQuery = ""
@@ -258,6 +295,19 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 		got, ok := v.CurrentFileLegend()
 		if !ok || &got[0] != &fileLegend[0] {
 			t.Errorf("CurrentFileLegend() = (%v, %v), want fileLegend", got, ok)
+		}
+	})
+
+	// #114: the goto prompt now renders in the file title bar (same as
+	// find), so CurrentFileLegend must offer its legend too, taking
+	// precedence over every other title-bar state the same way
+	// textFileView.DrawTitleBar's own switch does.
+	t.Run("goto prompt open", func(t *testing.T) {
+		reset()
+		v.GotoPromptOpen = true
+		got, ok := v.CurrentFileLegend()
+		if !ok || &got[0] != &gotoLegend[0] {
+			t.Errorf("CurrentFileLegend() = (%v, %v), want gotoLegend", got, ok)
 		}
 	})
 
@@ -308,20 +358,6 @@ func TestPreviewCurrentFileLegendPrecedence(t *testing.T) {
 	})
 
 	reset()
-}
-
-// TestPreviewGotoPromptLegend guards GotoPromptLegend's simple on/off
-// gating: ok=false while the prompt is closed, gotoLegend while open.
-func TestPreviewGotoPromptLegend(t *testing.T) {
-	v := &Preview{Shared: &Shared{Files: openfiles.New()}}
-	if _, ok := v.GotoPromptLegend(); ok {
-		t.Error("expected ok=false while GotoPromptOpen is false")
-	}
-	v.GotoPromptOpen = true
-	got, ok := v.GotoPromptLegend()
-	if !ok || &got[0] != &gotoLegend[0] {
-		t.Errorf("GotoPromptLegend() = (%v, %v), want gotoLegend", got, ok)
-	}
 }
 
 func TestDrawFileTitleBarShowsLineCount(t *testing.T) {
@@ -425,7 +461,7 @@ func TestDrawFileTitleBarPathAlignsWithContent(t *testing.T) {
 		t.Fatalf("test setup: %q not found in content row %q", "one", contentRow)
 	}
 	if pathStart != contentStart {
-		t.Fatalf("path starts at column %d, content starts at column %d, want equal (gutterWidth=%d)", pathStart, contentStart, gutterWidth(e))
+		t.Fatalf("path starts at column %d, content starts at column %d, want equal (gutterWidth=%d)", pathStart, contentStart, gutterWidth(e.(*entry.TextEntry)))
 	}
 }
 
@@ -480,11 +516,15 @@ func TestDrawFileTitleBarBoldsPath(t *testing.T) {
 // prompt or scrolls before this point either (contentReady/gotoLineBlocked
 // gate on the same signal), so tests exercising rendering/scrolling
 // against a freshly-opened entry wait for it the same way.
-func waitEntryReady(t *testing.T, e *openfiles.Entry) {
+func waitEntryReady(t *testing.T, e fileEntry) {
 	t.Helper()
+	te, ok := e.(*entry.TextEntry)
+	if !ok {
+		return
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if contentReady(e) {
+		if te.ContentReady() {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -499,7 +539,7 @@ func waitEntryReady(t *testing.T, e *openfiles.Entry) {
 // own tier tests use, so Tier B's windowed-read/scroll logic can be
 // exercised without a real multi-megabyte fixture. Restores the ceiling
 // via t.Cleanup.
-func openTierPlainText(t *testing.T, numLines int) (*openfiles.List, *openfiles.Entry) {
+func openTierPlainText(t *testing.T, numLines int) (*openfiles.List, *entry.TextEntry) {
 	t.Helper()
 	orig := preview.HighlightCeiling
 	preview.HighlightCeiling = 0
@@ -519,7 +559,7 @@ func openTierPlainText(t *testing.T, numLines int) (*openfiles.List, *openfiles.
 	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %s", res.Message)
 	}
-	e := files.DisplayedEntry()
+	e := files.DisplayedEntry().(*entry.TextEntry)
 	if e.Tier != preview.TierPlainText {
 		t.Fatalf("expected TierPlainText, got %v", e.Tier)
 	}
@@ -540,7 +580,7 @@ func TestTierPlainTextWindowStartsAtFirstLine(t *testing.T) {
 	files, e := openTierPlainText(t, 10)
 	v := newTestPreview(files, 60, 10)
 
-	v.drawContent(0, 0, 60, 10)
+	textFileView{}.DrawContent(v, e, 0, 0, 60, 10)
 	if e.WindowStartLine != 0 {
 		t.Fatalf("expected window to start at line 0, got %d", e.WindowStartLine)
 	}
@@ -552,9 +592,9 @@ func TestTierPlainTextWindowStartsAtFirstLine(t *testing.T) {
 func TestTierPlainTextScrollMovesBySourceLine(t *testing.T) {
 	files, e := openTierPlainText(t, 50)
 	v := newTestPreview(files, 60, 10)
-	v.drawContent(0, 0, 60, 10)
+	textFileView{}.DrawContent(v, e, 0, 0, 60, 10)
 
-	v.scroll(3)
+	textFileView{}.Scroll(v, e, 3)
 	if got := currentTopLine(e); got != 4 {
 		t.Fatalf("expected top line 4 after scrolling 3, got %d", got)
 	}
@@ -583,10 +623,10 @@ func TestScrollBumpsAtRestEdges(t *testing.T) {
 	e := files.DisplayedEntry()
 	waitEntryReady(t, e)
 	v := newTestPreview(files, 60, 5)
-	v.drawContent(0, 0, 60, 5)
+	textFileView{}.DrawContent(v, e, 0, 0, 60, 5)
 
-	v.scroll(-1) // already at the top: pushing further up bumps
-	if v.TopBumpPath != e.Path {
+	textFileView{}.Scroll(v, e, -1) // already at the top: pushing further up bumps
+	if v.TopBumpPath != e.Path() {
 		t.Fatalf("expected top bump after scrolling up from the top, got TopBumpPath=%q", v.TopBumpPath)
 	}
 	if v.BottomBumpPath != "" {
@@ -594,17 +634,17 @@ func TestScrollBumpsAtRestEdges(t *testing.T) {
 	}
 
 	v.TopBumpPath = ""
-	v.scroll(1) // ordinary downward scroll within bounds: no bump
+	textFileView{}.Scroll(v, e, 1) // ordinary downward scroll within bounds: no bump
 	if v.TopBumpPath != "" || v.BottomBumpPath != "" {
 		t.Fatalf("expected no bump from an in-bounds scroll, got top=%q bottom=%q", v.TopBumpPath, v.BottomBumpPath)
 	}
 
-	v.scroll(100) // reaches the bottom for the first time: no bump yet
+	textFileView{}.Scroll(v, e, 100) // reaches the bottom for the first time: no bump yet
 	if v.BottomBumpPath != "" {
 		t.Fatalf("expected no bottom bump on first reaching the bottom, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
-	v.scroll(1) // pushes past the bottom again: bumps
-	if v.BottomBumpPath != e.Path {
+	textFileView{}.Scroll(v, e, 1) // pushes past the bottom again: bumps
+	if v.BottomBumpPath != e.Path() {
 		t.Fatalf("expected bottom bump after scrolling past the last line, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
 }
@@ -617,10 +657,10 @@ func TestScrollBumpsAtRestEdges(t *testing.T) {
 func TestScrollBumpsAtRestEdgesForTierPlainText(t *testing.T) {
 	files, e := openTierPlainText(t, 20)
 	v := newTestPreview(files, 60, 5)
-	v.drawContent(0, 0, 60, 5)
+	textFileView{}.DrawContent(v, e, 0, 0, 60, 5)
 
-	v.scroll(-1)
-	if v.TopBumpPath != e.Path {
+	textFileView{}.Scroll(v, e, -1)
+	if v.TopBumpPath != e.Path() {
 		t.Fatalf("expected top bump for TierPlainText already at line 1, got TopBumpPath=%q", v.TopBumpPath)
 	}
 }
@@ -644,7 +684,8 @@ func TestDrawContentFlashesEdgeRowOnBump(t *testing.T) {
 	if res := files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %s", res.Message)
 	}
-	waitEntryReady(t, files.DisplayedEntry())
+	e := files.DisplayedEntry()
+	waitEntryReady(t, e)
 
 	sim := tcell.NewSimulationScreen("")
 	if err := sim.Init(); err != nil {
@@ -654,9 +695,9 @@ func TestDrawContentFlashesEdgeRowOnBump(t *testing.T) {
 	sim.SetSize(w, h)
 	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
 
-	v.drawContent(0, 0, w, h)
-	v.scroll(-1) // already at the top: bumps
-	v.drawContent(0, 0, w, h)
+	textFileView{}.DrawContent(v, e, 0, 0, w, h)
+	textFileView{}.Scroll(v, e, -1) // already at the top: bumps
+	textFileView{}.DrawContent(v, e, 0, 0, w, h)
 	sim.Show()
 
 	_, _, attr := cellStyle(sim, 0, 0).Decompose()
@@ -689,13 +730,14 @@ func TestTierPlainTextFindKeyOpensPrompt(t *testing.T) {
 }
 
 // waitFindScanDone blocks until e's in-progress find scan has been
-// picked up by syncFindScan (i.e. FindScan cleared back to nil), the
-// same signal the real Draw loop's per-frame sync relies on.
-func waitFindScanDone(t *testing.T, v *Preview, e *openfiles.Entry) {
+// picked up by textFileView.SyncFindScan (i.e. FindScan cleared back
+// to nil), the same signal the real Draw loop's per-frame sync relies
+// on.
+func waitFindScanDone(t *testing.T, v *Preview, e *entry.TextEntry) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		v.syncFindScan(e)
+		textFileView{}.SyncFindScan(v, e)
 		if e.FindScan == nil {
 			return
 		}
@@ -708,9 +750,9 @@ func TestTierPlainTextFindStartsBackgroundScan(t *testing.T) {
 	files, e := openTierPlainText(t, 10)
 	v := newTestPreview(files, 60, 10)
 
-	v.performFind("line 7")
+	textFileView{}.PerformFind(v, e, "line 7")
 	if e.FindScan == nil {
-		t.Fatal("expected performFind to start a background scan for a TierPlainText entry")
+		t.Fatal("expected PerformFind to start a background scan for a TierPlainText entry")
 	}
 	if len(e.FindMatches) != 0 || e.FindCurrent != -1 {
 		t.Fatalf("expected no matches yet while the scan is in flight, got FindMatches=%v FindCurrent=%d", e.FindMatches, e.FindCurrent)
@@ -721,7 +763,7 @@ func TestTierPlainTextFindScanResultsSyncOnceDone(t *testing.T) {
 	files, e := openTierPlainText(t, 10)
 	v := newTestPreview(files, 60, 10)
 
-	v.performFind("line 7")
+	textFileView{}.PerformFind(v, e, "line 7")
 	waitFindScanDone(t, v, e)
 
 	if len(e.FindMatches) != 1 || e.FindMatches[0].Line != 6 {
@@ -743,13 +785,13 @@ func TestTierPlainTextFindClearCancelsInFlightScan(t *testing.T) {
 	files, e := openTierPlainText(t, 10)
 	v := newTestPreview(files, 60, 10)
 
-	v.performFind("line 7")
+	textFileView{}.PerformFind(v, e, "line 7")
 	if e.FindScan == nil {
 		t.Fatal("expected a scan to be in flight")
 	}
-	v.clearFind()
+	textFileView{}.ClearFind(v, e)
 	if e.FindScan != nil || e.FindQuery != "" {
-		t.Fatalf("expected clearFind to cancel and clear the in-flight scan, got FindScan=%v FindQuery=%q", e.FindScan, e.FindQuery)
+		t.Fatalf("expected ClearFind to cancel and clear the in-flight scan, got FindScan=%v FindQuery=%q", e.FindScan, e.FindQuery)
 	}
 }
 

@@ -5,7 +5,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/nitti/dirtree/internal/preview"
+	"github.com/nitti/dirtree/internal/entry"
 )
 
 // Action is a one-shot signal Preview.HandleKey returns for the
@@ -37,9 +37,9 @@ const (
 
 // Preview holds the primary preview view's own state (SPEC.md §2.1,
 // §2.4): the goto-line prompt and in-file find prompt. The displayed
-// entry's scroll position and wrapped-row cache live per-entry on
-// openfiles.Entry instead, since they're tracked per open file rather
-// than per view.
+// entry's scroll position and wrapped-row cache live on the concrete
+// *entry.TextEntry itself instead, since they're tracked per open file
+// rather than per view.
 type Preview struct {
 	*Shared
 
@@ -63,9 +63,10 @@ type Preview struct {
 	// TopBumpPath/TopBumpFlashStart and BottomBumpPath/BottomBumpFlashStart
 	// track a scroll attempt (Up/Page Up past the first line, or
 	// Down/Page Down past the last) that pushed further than the
-	// currently-displayed entry's content allows (SPEC.md §2.1):
-	// drawContent briefly reverses the corresponding edge row's video as a
-	// "you've hit the end" cue. Same self-expiring time.Time-field pattern
+	// currently-displayed entry's content allows (SPEC.md §2.1): the
+	// fileView's DrawContent implementation briefly reverses the
+	// corresponding edge row's video as a "you've hit the end" cue.
+	// Same self-expiring time.Time-field pattern
 	// as GotoBlockedPath/GotoBlockedFlashStart above, path-keyed for the
 	// same reason — so switching to a different entry within the flash
 	// window doesn't carry a stale flash over onto it.
@@ -96,8 +97,8 @@ type Preview struct {
 // not quit and there is no overlay to back out of here (holding `q` is
 // the only way to quit, so an accidental Escape press, or a stray tap
 // of `q`, can't lose the session's open-files state) — its only effect
-// at this view is clearFind, clearing an active in-file find if there
-// is one, and otherwise remaining a no-op. Reaching another view
+// at this view is fileView.ClearFind, clearing an active in-file find
+// if there is one, and otherwise remaining a no-op. Reaching another view
 // (`b`/Tab/`o`/`s`) and progressing the hold-to-quit gesture (`q`) are
 // reported via the returned Action so App's dispatcher, which owns
 // Overlay transitions, QuickOpen/Search's own Open() setup, and the
@@ -117,7 +118,8 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 	}
 
 	e := v.Files.DisplayedEntry()
-	isHex := e != nil && e.Tier == preview.TierBinary
+	_, isHex := e.(*entry.HexEntry)
+	fv := fileViewFor(e)
 
 	switch {
 	case ev.Rune() == 'b':
@@ -130,34 +132,27 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 		return ActionOpenSearch
 	case ev.Rune() == 'q':
 		return ActionQuitKey
-	case isHex && ev.Key() == tcell.KeyUp:
-		v.hexScroll(-1)
-	case isHex && ev.Key() == tcell.KeyDown:
-		v.hexScroll(1)
-	case isHex && ev.Key() == tcell.KeyPgUp:
-		v.hexScroll(-v.viewportHeight())
-	case isHex && ev.Key() == tcell.KeyPgDn:
-		v.hexScroll(v.viewportHeight())
-	case isHex && ev.Key() == tcell.KeyHome:
-		v.hexJumpStart()
-	case isHex && ev.Key() == tcell.KeyEnd:
-		v.hexJumpEnd()
 	case ev.Key() == tcell.KeyUp:
-		v.scroll(-1)
+		fv.Scroll(v, e, -1)
 	case ev.Key() == tcell.KeyDown:
-		v.scroll(1)
+		fv.Scroll(v, e, 1)
 	case ev.Key() == tcell.KeyPgUp:
-		v.scroll(-v.viewportHeight())
+		fv.Scroll(v, e, -v.viewportHeight())
 	case ev.Key() == tcell.KeyPgDn:
-		v.scroll(v.viewportHeight())
+		fv.Scroll(v, e, v.viewportHeight())
+	case ev.Key() == tcell.KeyHome:
+		fv.JumpStart(v, e)
+	case ev.Key() == tcell.KeyEnd:
+		fv.JumpEnd(v, e)
 	case ev.Rune() == 'g':
 		switch {
 		case isHex:
 			v.GotoPromptOpen = true
 			v.GotoInput = ""
 		case e != nil:
-			if gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done()) {
-				v.GotoBlockedPath = e.Path
+			te := e.(*entry.TextEntry)
+			if gotoLineBlocked(te.Stream != nil, te.Stream != nil && te.Stream.Done()) {
+				v.GotoBlockedPath = te.Path()
 				v.GotoBlockedFlashStart = time.Now()
 			} else {
 				v.GotoPromptOpen = true
@@ -174,27 +169,13 @@ func (v *Preview) HandleKey(ev *tcell.EventKey) Action {
 			v.FindInput = ""
 		}
 	case ev.Rune() == 'c':
-		if !isHex && e != nil {
-			e.CopyMode = !e.CopyMode
-		}
+		fv.ToggleCopyMode(v, e)
 	case ev.Rune() == 'n':
-		if isHex {
-			v.hexFindStep(1)
-		} else {
-			v.findStep(1)
-		}
+		fv.FindStep(v, e, 1)
 	case ev.Rune() == 'N':
-		if isHex {
-			v.hexFindStep(-1)
-		} else {
-			v.findStep(-1)
-		}
+		fv.FindStep(v, e, -1)
 	case ev.Key() == tcell.KeyEscape:
-		if isHex {
-			v.clearHexFind()
-		} else {
-			v.clearFind()
-		}
+		fv.ClearFind(v, e)
 	}
 	return ActionNone
 }

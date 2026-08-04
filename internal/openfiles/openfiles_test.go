@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nitti/dirtree/internal/find"
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/preview"
 )
 
@@ -17,7 +17,7 @@ import (
 func newListWithN(n int) *List {
 	l := New()
 	for i := range n {
-		l.Entries = append(l.Entries, &Entry{Path: fmt.Sprintf("/entry%02d", i)})
+		l.Entries = append(l.Entries, &entry.TextEntry{EntryInfo: entry.EntryInfo{Path: fmt.Sprintf("/entry%02d", i)}})
 	}
 	return l
 }
@@ -26,12 +26,13 @@ func newListWithN(n int) *List {
 // content has been pulled into Lines/Segs (SyncContent), for tests that
 // need to observe a TierHighlighted entry's actual content rather than
 // just that Open/Reload started the background pass.
-func waitSynced(t *testing.T, e *Entry) {
+func waitSynced(t *testing.T, e entryHandle) {
 	t.Helper()
+	te := e.(*entry.TextEntry)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		e.SyncContent()
-		if e.Lines != nil {
+		te.SyncContent()
+		if te.Lines != nil {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -51,37 +52,12 @@ func writeFile(t *testing.T, dir, name string, content []byte) string {
 // --- Open-failure detection at open time (TESTING.md "Open-failure
 // detection at open time (§2.2)") ---
 //
-// Opening a binary file no longer fails — it opens as a
-// preview.TierBinary entry (hex view, SPEC.md §2.1a) instead. The actual
-// hex-view rendering/keybindings (issue #112) aren't implemented yet;
-// this covers only the tier/entry data model.
-
-func TestOpenBinaryFileOpensAsTierBinary(t *testing.T) {
-	dir := t.TempDir()
-	content := []byte("abc\x00def")
-	path := writeFile(t, dir, "bin", content)
-
-	l := New()
-	res := l.Open(path, preview.DefaultByteCap)
-	if res.Outcome != Opened {
-		t.Fatalf("expected opened result, got %+v", res)
-	}
-	if res.Entry.Tier != preview.TierBinary {
-		t.Fatalf("expected TierBinary, got %v", res.Entry.Tier)
-	}
-	if res.Entry.Size != int64(len(content)) {
-		t.Fatalf("expected Size %d, got %d", len(content), res.Entry.Size)
-	}
-	if res.Entry.Stream != nil {
-		t.Fatalf("expected no background stream for a TierBinary entry, got %+v", res.Entry.Stream)
-	}
-	if len(l.Entries) != 1 {
-		t.Fatalf("expected one entry created, got %d", len(l.Entries))
-	}
-	if l.Displayed != 0 {
-		t.Fatalf("expected the new entry displayed, got %d", l.Displayed)
-	}
-}
+// Tier-deciding specifics (binary/size decisions, background stream
+// starting) are covered directly against internal/entry.Open/Reload
+// now (internal/entry/entry_test.go) — List itself no longer knows
+// about tiers at all, so what's left here is genuine list mechanics:
+// dedup-by-path, ordering, displayed-index tracking, and the
+// resident-content LRU policy.
 
 func TestOpenNonexistentFileFails(t *testing.T) {
 	l := New()
@@ -129,149 +105,13 @@ func TestOpenOrdinaryFileSucceeds(t *testing.T) {
 	}
 }
 
-func TestOpenStartsBackgroundStreamForNewEntry(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "ok.txt", []byte("hello\n"))
-
-	l := New()
-	l.Open(path, preview.DefaultByteCap)
-	if l.Entries[0].Stream == nil {
-		t.Fatal("expected a background stream to be started for a newly-opened entry")
-	}
-}
-
-func TestOpenAtOrUnderCeilingIsTierHighlighted(t *testing.T) {
-	orig := preview.HighlightCeiling
-	defer func() { preview.HighlightCeiling = orig }()
-	preview.HighlightCeiling = 100
-
-	dir := t.TempDir()
-	path := writeFile(t, dir, "small.txt", []byte("hello\n"))
-
-	l := New()
-	l.Open(path, preview.DefaultByteCap)
-	if got := l.Entries[0].Tier; got != preview.TierHighlighted {
-		t.Fatalf("expected TierHighlighted for a file under the ceiling, got %v", got)
-	}
-}
-
-func TestOpenOverCeilingIsTierPlainText(t *testing.T) {
-	orig := preview.HighlightCeiling
-	defer func() { preview.HighlightCeiling = orig }()
-	preview.HighlightCeiling = 4
-
-	dir := t.TempDir()
-	path := writeFile(t, dir, "big.txt", []byte("hello\n"))
-
-	l := New()
-	l.Open(path, preview.DefaultByteCap)
-	if got := l.Entries[0].Tier; got != preview.TierPlainText {
-		t.Fatalf("expected TierPlainText for a file over the ceiling, got %v", got)
-	}
-}
-
-func TestReloadPromotesEntryWhenShrunkUnderCeiling(t *testing.T) {
-	orig := preview.HighlightCeiling
-	defer func() { preview.HighlightCeiling = orig }()
-	preview.HighlightCeiling = 4
-
-	dir := t.TempDir()
-	// Opened over the ceiling (TierPlainText)...
-	path := writeFile(t, dir, "a.txt", []byte("hello\n"))
-	l := New()
-	l.Open(path, preview.DefaultByteCap)
-	if l.Entries[0].Tier != preview.TierPlainText {
-		t.Fatalf("expected TierPlainText at open, got %v", l.Entries[0].Tier)
-	}
-
-	// ...then rewritten small enough to now be under the ceiling.
-	rewriteWithNewerMtime(t, path, []byte("hi\n"))
-	l.Reload(preview.DefaultByteCap)
-	if l.Entries[0].Tier != preview.TierHighlighted {
-		t.Fatalf("expected reload to re-decide tier from the new size (promotion to TierHighlighted), got %v", l.Entries[0].Tier)
-	}
-}
-
-func TestReloadDemotesEntryWhenGrownOverCeiling(t *testing.T) {
-	orig := preview.HighlightCeiling
-	defer func() { preview.HighlightCeiling = orig }()
-	preview.HighlightCeiling = 4
-
-	dir := t.TempDir()
-	// Opened at/under the ceiling (TierHighlighted)...
-	path := writeFile(t, dir, "a.txt", []byte("hi\n"))
-	l := New()
-	l.Open(path, preview.DefaultByteCap)
-	if l.Entries[0].Tier != preview.TierHighlighted {
-		t.Fatalf("expected TierHighlighted at open, got %v", l.Entries[0].Tier)
-	}
-
-	// ...then rewritten large enough to now be over the ceiling.
-	rewriteWithNewerMtime(t, path, []byte("hello world\n"))
-	l.Reload(preview.DefaultByteCap)
-	if l.Entries[0].Tier != preview.TierPlainText {
-		t.Fatalf("expected reload to re-decide tier from the new size (demotion to TierPlainText), got %v", l.Entries[0].Tier)
-	}
-}
-
-func TestReloadResetsScrollWhenTierFlips(t *testing.T) {
-	orig := preview.HighlightCeiling
-	defer func() { preview.HighlightCeiling = orig }()
-	preview.HighlightCeiling = 4
-
-	dir := t.TempDir()
-	path := writeFile(t, dir, "a.txt", []byte("hello\n"))
-	l := New()
-	l.Open(path, preview.DefaultByteCap)
-	l.Entries[0].Scroll = 42
-
-	rewriteWithNewerMtime(t, path, []byte("hi\n"))
-	l.Reload(preview.DefaultByteCap)
-	if l.Entries[0].Scroll != 0 {
-		t.Fatalf("expected scroll reset to 0 across a tier flip, got %d", l.Entries[0].Scroll)
-	}
-}
-
-func TestReloadLeavesScrollAloneWhenTierUnchanged(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "a.txt", []byte("old\n"))
-	l := New()
-	l.Open(path, preview.DefaultByteCap)
-	l.Entries[0].Scroll = 7
-
-	rewriteWithNewerMtime(t, path, []byte("new\n"))
-	l.Reload(preview.DefaultByteCap)
-	if l.Entries[0].Scroll != 7 {
-		t.Fatalf("expected scroll left as-is when tier doesn't change, got %d", l.Entries[0].Scroll)
-	}
-}
-
-func TestReloadRestartsBackgroundStream(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "a.txt", []byte("old\n"))
-
-	l := New()
-	l.Open(path, preview.DefaultByteCap)
-	streamBefore := l.Entries[0].Stream
-
-	rewriteWithNewerMtime(t, path, []byte("new\n"))
-	l.Reload(preview.DefaultByteCap)
-
-	if l.Entries[0].Stream == nil {
-		t.Fatal("expected a background stream after reload")
-	}
-	if l.Entries[0].Stream == streamBefore {
-		t.Fatal("expected reload to start a fresh stream rather than reuse the stale one")
-	}
-}
-
 func TestOpenReusesExistingEntryWithoutRereading(t *testing.T) {
 	dir := t.TempDir()
 	path := writeFile(t, dir, "ok.txt", []byte("hello\n"))
 
 	l := New()
 	first := l.Open(path, preview.DefaultByteCap)
-	first.Entry.Scroll = 7
+	first.Entry.(*entry.TextEntry).Scroll = 7
 
 	// Mutate the file on disk so a re-read would behave differently
 	// (it would fail entirely, since the file is now gone) — proving
@@ -288,8 +128,8 @@ func TestOpenReusesExistingEntryWithoutRereading(t *testing.T) {
 	if second.Entry != first.Entry {
 		t.Fatal("expected the same entry object to be reused, not a new one")
 	}
-	if second.Entry.Scroll != 7 {
-		t.Fatalf("expected scroll state preserved across reuse, got %d", second.Entry.Scroll)
+	if second.Entry.(*entry.TextEntry).Scroll != 7 {
+		t.Fatalf("expected scroll state preserved across reuse, got %d", second.Entry.(*entry.TextEntry).Scroll)
 	}
 	if len(l.Entries) != 1 {
 		t.Fatalf("expected no duplicate entry, got %d", len(l.Entries))
@@ -321,14 +161,14 @@ func TestOpenAppendsNewEntryAtEndWithScrollReset(t *testing.T) {
 
 	l := New()
 	l.Open(a, preview.DefaultByteCap)
-	l.DisplayedEntry().Scroll = 3
+	l.DisplayedEntry().(*entry.TextEntry).Scroll = 3
 	res := l.Open(b, preview.DefaultByteCap)
 
-	if len(l.Entries) != 2 || l.Entries[1].Path != b {
+	if len(l.Entries) != 2 || l.Entries[1].Path() != b {
 		t.Fatalf("expected new entry appended at end, got %+v", l.Entries)
 	}
-	if res.Entry.Scroll != 0 {
-		t.Fatalf("expected new entry's scroll reset to top, got %d", res.Entry.Scroll)
+	if res.Entry.(*entry.TextEntry).Scroll != 0 {
+		t.Fatalf("expected new entry's scroll reset to top, got %d", res.Entry.(*entry.TextEntry).Scroll)
 	}
 	if l.Displayed != 1 {
 		t.Fatalf("expected new entry displayed, got %d", l.Displayed)
@@ -345,7 +185,7 @@ func TestDisplayingExistingEntryNeverChangesOrder(t *testing.T) {
 	l.Open(b, preview.DefaultByteCap)
 	l.Display(0)
 
-	if l.Entries[0].Path != a || l.Entries[1].Path != b {
+	if l.Entries[0].Path() != a || l.Entries[1].Path() != b {
 		t.Fatalf("expected order unchanged, got %+v", l.Entries)
 	}
 	if l.Displayed != 0 {
@@ -361,10 +201,10 @@ func TestEachEntryScrollIsIndependent(t *testing.T) {
 	l := New()
 	l.Open(a, preview.DefaultByteCap)
 	l.Open(b, preview.DefaultByteCap)
-	l.Entries[1].Scroll = 5
+	l.Entries[1].(*entry.TextEntry).Scroll = 5
 
-	if l.Entries[0].Scroll != 0 {
-		t.Fatalf("expected entry 0's scroll unaffected, got %d", l.Entries[0].Scroll)
+	if l.Entries[0].(*entry.TextEntry).Scroll != 0 {
+		t.Fatalf("expected entry 0's scroll unaffected, got %d", l.Entries[0].(*entry.TextEntry).Scroll)
 	}
 }
 
@@ -405,8 +245,8 @@ func TestRemoveDisplayedEntryPromotesNext(t *testing.T) {
 
 	newSel := l.Remove(1) // remove b
 
-	if l.DisplayedEntry().Path != c {
-		t.Fatalf("expected c promoted to displayed, got %s", l.DisplayedEntry().Path)
+	if l.DisplayedEntry().Path() != c {
+		t.Fatalf("expected c promoted to displayed, got %s", l.DisplayedEntry().Path())
 	}
 	if newSel != 1 {
 		t.Fatalf("expected overlay selection to follow to index 1, got %d", newSel)
@@ -425,8 +265,8 @@ func TestRemoveDisplayedLastEntryPromotesPrevious(t *testing.T) {
 
 	newSel := l.Remove(1)
 
-	if l.DisplayedEntry().Path != a {
-		t.Fatalf("expected a promoted to displayed, got %s", l.DisplayedEntry().Path)
+	if l.DisplayedEntry().Path() != a {
+		t.Fatalf("expected a promoted to displayed, got %s", l.DisplayedEntry().Path())
 	}
 	if newSel != 0 {
 		t.Fatalf("expected overlay selection to follow to index 0, got %d", newSel)
@@ -480,10 +320,10 @@ func TestMoveDownSwapsWithSuccessorAndFollowsSelection(t *testing.T) {
 
 	newSel := l.MoveDown(0)
 
-	if newSel != 1 || l.Entries[1].Path != a || l.Entries[0].Path != b {
+	if newSel != 1 || l.Entries[1].Path() != a || l.Entries[0].Path() != b {
 		t.Fatalf("expected a moved to index 1, got sel=%d entries=%+v", newSel, l.Entries)
 	}
-	if l.DisplayedEntry().Path != a {
+	if l.DisplayedEntry().Path() != a {
 		t.Fatal("expected displayed entry to still be a after reorder")
 	}
 }
@@ -500,10 +340,10 @@ func TestMoveUpSwapsWithPredecessorAndFollowsSelection(t *testing.T) {
 
 	newSel := l.MoveUp(1)
 
-	if newSel != 0 || l.Entries[0].Path != b || l.Entries[1].Path != a {
+	if newSel != 0 || l.Entries[0].Path() != b || l.Entries[1].Path() != a {
 		t.Fatalf("expected b moved to index 0, got sel=%d entries=%+v", newSel, l.Entries)
 	}
-	if l.DisplayedEntry().Path != b {
+	if l.DisplayedEntry().Path() != b {
 		t.Fatal("expected displayed entry to still be b after reorder")
 	}
 }
@@ -519,7 +359,7 @@ func TestMoveDownOnLastIsNoOp(t *testing.T) {
 
 	newSel := l.MoveDown(1)
 
-	if newSel != 1 || l.Entries[0].Path != a || l.Entries[1].Path != b {
+	if newSel != 1 || l.Entries[0].Path() != a || l.Entries[1].Path() != b {
 		t.Fatalf("expected no-op, got sel=%d entries=%+v", newSel, l.Entries)
 	}
 }
@@ -535,7 +375,7 @@ func TestMoveUpOnFirstIsNoOp(t *testing.T) {
 
 	newSel := l.MoveUp(0)
 
-	if newSel != 0 || l.Entries[0].Path != a || l.Entries[1].Path != b {
+	if newSel != 0 || l.Entries[0].Path() != a || l.Entries[1].Path() != b {
 		t.Fatalf("expected no-op, got sel=%d entries=%+v", newSel, l.Entries)
 	}
 }
@@ -548,12 +388,12 @@ func TestReorderDoesNotResetMovedEntryScrollState(t *testing.T) {
 	l := New()
 	l.Open(a, preview.DefaultByteCap)
 	l.Open(b, preview.DefaultByteCap)
-	l.Entries[0].Scroll = 4
+	l.Entries[0].(*entry.TextEntry).Scroll = 4
 
 	l.MoveDown(0)
 
-	if l.Entries[1].Scroll != 4 {
-		t.Fatalf("expected moved entry's scroll preserved, got %d", l.Entries[1].Scroll)
+	if l.Entries[1].(*entry.TextEntry).Scroll != 4 {
+		t.Fatalf("expected moved entry's scroll preserved, got %d", l.Entries[1].(*entry.TextEntry).Scroll)
 	}
 }
 
@@ -570,7 +410,7 @@ func TestOpeningAfterReorderStillAppendsAtEnd(t *testing.T) {
 
 	l.Open(c, preview.DefaultByteCap)
 
-	if len(l.Entries) != 3 || l.Entries[2].Path != c {
+	if len(l.Entries) != 3 || l.Entries[2].Path() != c {
 		t.Fatalf("expected c appended at end regardless of reordering, got %+v", l.Entries)
 	}
 }
@@ -628,13 +468,13 @@ func TestDisplayingBeyondResidentCapEvictsLeastRecentlyDisplayed(t *testing.T) {
 	// time, and never touched again) and is now the least-recently-
 	// displayed of ResidentCap+1 entries — it should have been evicted
 	// the moment the (ResidentCap+1)th entry was displayed.
-	if l.Entries[0].Lines != nil {
+	if l.Entries[0].(*entry.TextEntry).Lines != nil {
 		t.Fatal("expected entry 0's content evicted once more than ResidentCap entries were displayed")
 	}
 	// The ResidentCap entries displayed most recently (1..ResidentCap)
 	// should still be resident.
 	for i := 1; i <= ResidentCap; i++ {
-		if l.Entries[i].Lines == nil {
+		if l.Entries[i].(*entry.TextEntry).Lines == nil {
 			t.Fatalf("expected entry %d's content still resident, got evicted", i)
 		}
 	}
@@ -646,16 +486,16 @@ func TestDisplayingEvictedEntryRepopulatesContent(t *testing.T) {
 	openAndSyncN(t, l, dir, ResidentCap+1)
 
 	evicted := l.Entries[0]
-	if evicted.Lines != nil {
+	if evicted.(*entry.TextEntry).Lines != nil {
 		t.Fatal("expected entry 0 evicted as setup for this test")
 	}
 
 	l.Display(0)
 	waitSynced(t, evicted)
-	if evicted.Lines == nil {
+	if evicted.(*entry.TextEntry).Lines == nil {
 		t.Fatal("expected evicted entry's content transparently rebuilt after being displayed again")
 	}
-	if got := evicted.Lines[0]; got != "content 0" {
+	if got := evicted.(*entry.TextEntry).Lines[0]; got != "content 0" {
 		t.Fatalf("expected rebuilt content to match the file's actual content, got %q", got)
 	}
 }
@@ -665,7 +505,7 @@ func TestEvictionLeavesOtherEntryStateUntouched(t *testing.T) {
 	l := New()
 	openAndSyncN(t, l, dir, ResidentCap+1)
 
-	evicted := l.Entries[0]
+	evicted := l.Entries[0].(*entry.TextEntry)
 	evicted.Scroll = 3
 	evicted.CopyMode = true
 	evicted.FindQuery = "needle"
@@ -699,7 +539,7 @@ func TestCurrentlyDisplayedEntryIsNeverEvicted(t *testing.T) {
 		waitSynced(t, l.DisplayedEntry())
 		l.Display(0)
 	}
-	if first.Lines == nil {
+	if first.(*entry.TextEntry).Lines == nil {
 		t.Fatal("expected the currently-displayed entry to never be evicted")
 	}
 }
@@ -714,7 +554,7 @@ func TestTierPlainTextEntryIsNeverEvicted(t *testing.T) {
 
 	l := New()
 	l.Open(big, preview.DefaultByteCap)
-	if l.Entries[0].Tier != preview.TierPlainText {
+	if l.Entries[0].(*entry.TextEntry).Tier != preview.TierPlainText {
 		t.Fatal("expected the fixture to land in TierPlainText")
 	}
 
@@ -725,7 +565,7 @@ func TestTierPlainTextEntryIsNeverEvicted(t *testing.T) {
 		path := writeFile(t, dir, fmt.Sprintf("small%02d.txt", i), []byte("s\n"))
 		l.Open(path, preview.DefaultByteCap)
 	}
-	if l.Entries[0].Lines != nil {
+	if l.Entries[0].(*entry.TextEntry).Lines != nil {
 		t.Fatal("expected TierPlainText entry's Lines to remain nil throughout")
 	}
 }
@@ -825,10 +665,10 @@ func TestMoveDownPageMovesUpToPageSizePositions(t *testing.T) {
 	if newSel != 10 {
 		t.Fatalf("MoveDownPage(0, 10) = %d, want 10", newSel)
 	}
-	if l.Entries[10].Path != "/entry00" {
+	if l.Entries[10].Path() != "/entry00" {
 		t.Fatalf("expected entry00 to land at index 10, got %+v", l.Entries[10])
 	}
-	if l.DisplayedEntry().Path != "/entry00" {
+	if l.DisplayedEntry().Path() != "/entry00" {
 		t.Fatal("expected displayed entry to follow the bulk move")
 	}
 }
@@ -839,7 +679,7 @@ func TestMoveDownPageClampsAtLastEntryRatherThanWrapping(t *testing.T) {
 	if newSel != 4 {
 		t.Fatalf("MoveDownPage clamped = %d, want 4 (last index)", newSel)
 	}
-	if l.Entries[4].Path != "/entry00" {
+	if l.Entries[4].Path() != "/entry00" {
 		t.Fatalf("expected entry00 to land at the last index, got %+v", l.Entries)
 	}
 }
@@ -851,10 +691,10 @@ func TestMoveUpPageMovesUpToPageSizePositions(t *testing.T) {
 	if newSel != 4 {
 		t.Fatalf("MoveUpPage(14, 10) = %d, want 4", newSel)
 	}
-	if l.Entries[4].Path != "/entry14" {
+	if l.Entries[4].Path() != "/entry14" {
 		t.Fatalf("expected entry14 to land at index 4, got %+v", l.Entries[4])
 	}
-	if l.DisplayedEntry().Path != "/entry14" {
+	if l.DisplayedEntry().Path() != "/entry14" {
 		t.Fatal("expected displayed entry to follow the bulk move")
 	}
 }
@@ -865,13 +705,20 @@ func TestMoveUpPageClampsAtFirstEntryRatherThanWrapping(t *testing.T) {
 	if newSel != 0 {
 		t.Fatalf("MoveUpPage clamped = %d, want 0 (first index)", newSel)
 	}
-	if l.Entries[0].Path != "/entry04" {
+	if l.Entries[0].Path() != "/entry04" {
 		t.Fatalf("expected entry04 to land at the first index, got %+v", l.Entries)
 	}
 }
 
 // --- Live reload of open files on disk change (TESTING.md "Live
 // reload of open files (§6.1a)") ---
+//
+// Reload's own tier-deciding/invalidation specifics are covered
+// directly against internal/entry.Reload (internal/entry/entry_test.go)
+// now — what's left here is List.Reload's own contract: which entries
+// it reports as reloaded, and that it leaves everything else (order,
+// displayed index, entry identity on a non-flipping reload, untouched
+// files, unreadable/deleted files) alone.
 
 // rewriteWithNewerMtime overwrites path's content and forces its mtime
 // to be strictly after whatever it was before, sidestepping any
@@ -905,7 +752,7 @@ func TestReloadPicksUpChangedContentOnDisk(t *testing.T) {
 		t.Fatalf("expected [\"a.txt\"] reloaded, got %v", reloaded)
 	}
 	waitSynced(t, l.Entries[0])
-	if got := l.Entries[0].Lines; len(got) != 1 || got[0] != "new" {
+	if got := l.Entries[0].(*entry.TextEntry).Lines; len(got) != 1 || got[0] != "new" {
 		t.Fatalf("expected reloaded content, got %v", got)
 	}
 }
@@ -926,7 +773,7 @@ func TestReloadLeavesUnchangedFilesAlone(t *testing.T) {
 		t.Fatalf("expected only changed.txt reloaded, got %v", reloaded)
 	}
 	waitSynced(t, l.Entries[1])
-	if got := l.Entries[1].Lines; len(got) != 1 || got[0] != "stays" {
+	if got := l.Entries[1].(*entry.TextEntry).Lines; len(got) != 1 || got[0] != "stays" {
 		t.Fatalf("expected untouched entry's content unchanged, got %v", got)
 	}
 }
@@ -958,9 +805,9 @@ func TestReloadPreservesEntryIdentityListOrderAndDisplayed(t *testing.T) {
 	l.Reload(preview.DefaultByteCap)
 
 	if l.Entries[0] != entryBefore {
-		t.Fatal("expected the same *Entry object to be mutated in place, not replaced")
+		t.Fatal("expected the same Entry object to be mutated in place, not replaced")
 	}
-	if l.Entries[0].Path != first || l.Entries[1].Path != second {
+	if l.Entries[0].Path() != first || l.Entries[1].Path() != second {
 		t.Fatalf("expected list order unchanged, got %+v", l.Entries)
 	}
 	if l.Displayed != 0 {
@@ -975,7 +822,7 @@ func TestReloadLeavesDeletedFileEntryStale(t *testing.T) {
 	l := New()
 	l.Open(path, preview.DefaultByteCap)
 	waitSynced(t, l.Entries[0])
-	linesBefore := l.Entries[0].Lines
+	linesBefore := l.Entries[0].(*entry.TextEntry).Lines
 
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
@@ -985,51 +832,7 @@ func TestReloadLeavesDeletedFileEntryStale(t *testing.T) {
 	if reloaded != nil {
 		t.Fatalf("expected no reload reported for a deleted file, got %v", reloaded)
 	}
-	if got := l.Entries[0].Lines; len(got) != len(linesBefore) || got[0] != linesBefore[0] {
+	if got := l.Entries[0].(*entry.TextEntry).Lines; len(got) != len(linesBefore) || got[0] != linesBefore[0] {
 		t.Fatalf("expected last-known content left untouched, got %v want %v", got, linesBefore)
-	}
-}
-
-func TestReloadInvalidatesWrapCacheAndFindState(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "a.txt", []byte("old\n"))
-
-	l := New()
-	l.Open(path, preview.DefaultByteCap)
-	e := l.Entries[0]
-	e.RowsWidth = 80
-	e.Rows = []preview.DisplayRow{{}}
-	e.FirstRow = map[int]int{0: 0}
-	e.FindQuery = "old"
-	e.FindMatches = []find.Match{{Line: 0}}
-	e.FindCurrent = 0
-	e.FindWrapNote = "wrapped to top"
-
-	rewriteWithNewerMtime(t, path, []byte("new\n"))
-	l.Reload(preview.DefaultByteCap)
-
-	if e.RowsWidth != 0 || e.Rows != nil || e.FirstRow != nil {
-		t.Fatalf("expected wrap cache invalidated after reload, got RowsWidth=%d Rows=%v FirstRow=%v", e.RowsWidth, e.Rows, e.FirstRow)
-	}
-	if e.FindQuery != "" || e.FindMatches != nil || e.FindCurrent != -1 || e.FindWrapNote != "" {
-		t.Fatalf("expected find state cleared after reload, got query=%q matches=%v current=%d wrapNote=%q",
-			e.FindQuery, e.FindMatches, e.FindCurrent, e.FindWrapNote)
-	}
-}
-
-func TestReloadCancelsAndClearsInFlightFindScan(t *testing.T) {
-	dir := t.TempDir()
-	path := writeFile(t, dir, "a.txt", []byte("old\n"))
-
-	l := New()
-	l.Open(path, preview.DefaultByteCap)
-	e := l.Entries[0]
-	e.FindScan = find.StartScan(path, "old")
-
-	rewriteWithNewerMtime(t, path, []byte("new\n"))
-	l.Reload(preview.DefaultByteCap)
-
-	if e.FindScan != nil {
-		t.Fatalf("expected reload to cancel and clear an in-flight find scan, got %v", e.FindScan)
 	}
 }

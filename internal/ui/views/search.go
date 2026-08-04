@@ -102,7 +102,7 @@ type Search struct {
 	// one frame between a successful open and the coordinator consuming
 	// it.
 	LastOpenedPath  string
-	LastOpenedEntry *openfiles.Entry
+	LastOpenedEntry fileEntry
 	LastOpenedLine  int
 }
 

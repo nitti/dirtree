@@ -1,16 +1,13 @@
 package views
 
 import (
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/nitti/dirtree/internal/openfiles"
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/spinner"
-	"github.com/nitti/dirtree/internal/tree"
 	"github.com/nitti/dirtree/internal/ui/canvas"
 )
 
@@ -91,153 +88,47 @@ var findLegendNoMatches = []canvas.LegendEntry{
 // read-only, accepting neither scrolling nor goto-line — in which case
 // file-specific action keys like goto-line don't apply and their
 // legend is omitted rather than advertising a key that won't do
-// anything right now. The goto-line prompt, when open, occupies the
-// bottom row — reachable only when this is the primary (non-overlaid)
-// view, since no overlay leaves the goto-line key handled while this is
-// showing.
+// anything right now. The goto-line prompt, when open, replaces the
+// title bar's own left/right content the same way the find prompt does
+// (fileView.DrawTitleBar) — reachable only when this is the primary
+// (non-overlaid) view, since no overlay leaves the goto-line key
+// handled while this is showing. Find-scan syncing, title bar drawing,
+// and content drawing are all dispatched through fileViewFor now — this
+// function itself has no remaining `e.Tier == preview.TierBinary`
+// branch of its own (#114).
 func (v *Preview) Draw(x0, y0, w, h int, interactive bool) {
 	e := v.Files.DisplayedEntry()
-	v.syncFindScan(e)
-	v.syncHexFindScan(e)
-	titleRows := v.drawFileTitleBar(x0, y0, w, interactive)
-	if e != nil && e.Tier == preview.TierBinary {
-		v.drawHexContent(x0, y0+titleRows, w, h-titleRows)
+	fv := fileViewFor(e)
+	fv.SyncFindScan(v, e)
+	if e == nil {
+		v.drawEmptyState(x0, y0, w, h)
 		return
 	}
-	v.drawContent(x0, y0+titleRows, w, h-titleRows)
+	titleRows := fv.DrawTitleBar(v, e, x0, y0, w, interactive)
+	fv.DrawContent(v, e, x0, y0+titleRows, w, h-titleRows)
+}
+
+// drawEmptyState renders the primary preview view's "no files open"
+// placeholder (SPEC.md §2.1) — tier-agnostic, since there is no
+// displayed entry at all in this state, so it's Draw's own
+// responsibility rather than either fileView implementation's.
+func (v *Preview) drawEmptyState(x0, y0, w, h int) {
+	msg := "no files open — press o to quick open, b to browse, s to search contents"
+	row := y0 + max(h/2, 1)
+	v.Canvas.DrawText(x0, row, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
 }
 
 // CurrentFileLegend returns the keybinding legend the file title bar
-// is currently showing, mirroring drawFileTitleBar's own state
-// precedence exactly (find prompt, an async plain-text-tier scan, an
-// active find with or without matches, copy mode, else idle) — for the
-// help overlay (§5.4) to reuse. Returns ok=false when there is no
-// displayed entry, or when the title bar is showing a transient state
-// with no keybinding legend of its own (blocked-on-indexing), since
-// there is nothing meaningful to list in either case.
+// is currently showing, dispatched through fileViewFor to mirror
+// DrawTitleBar's own state precedence exactly (fileView interface doc)
+// — for the help overlay (§5.4) to reuse. Returns ok=false when there
+// is no displayed entry.
 func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
 		return nil, false
 	}
-	if e.Tier == preview.TierBinary {
-		switch {
-		case v.HexFindPromptOpen:
-			return hexFindPromptLegend, true
-		case e.HexFindScan != nil:
-			return hexFindLegendNoMatches, true
-		case e.HexFindQuery != "" && len(e.HexFindMatches) > 0:
-			return hexFindLegend, true
-		case e.HexFindQuery != "":
-			return hexFindLegendNoMatches, true
-		default:
-			return hexFileLegend, true
-		}
-	}
-	gotoBlocked := v.GotoBlockedPath == e.Path && gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done())
-	switch {
-	case v.FindPromptOpen:
-		return findPromptLegend, true
-	case gotoBlocked:
-		return nil, false
-	case e.FindScan != nil:
-		return findLegendNoMatches, true
-	case e.FindQuery != "" && len(e.FindMatches) > 0:
-		return findLegend, true
-	case e.FindQuery != "":
-		return findLegendNoMatches, true
-	case e.CopyMode:
-		return fileLegendCopyModeOn, true
-	default:
-		return fileLegend, true
-	}
-}
-
-// GotoPromptLegend returns the goto-line prompt's own legend while
-// it's open, for the help overlay (§5.4) to reuse — it renders on its
-// own bottom row (drawContent), independent of the file title bar.
-func (v *Preview) GotoPromptLegend() (entries []canvas.LegendEntry, ok bool) {
-	if !v.GotoPromptOpen {
-		return nil, false
-	}
-	return gotoLegend, true
-}
-
-// drawFileTitleBar renders the currently-displayed file's own title bar
-// (its root-relative path) in the row above the preview content, when a
-// file is displayed. Returns the number of rows it occupied (0 or 1) so
-// Draw can shrink the content rectangle accordingly.
-func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
-	e := v.Files.DisplayedEntry()
-	if e == nil {
-		return 0
-	}
-	if e.Tier == preview.TierBinary {
-		return v.drawHexFileTitleBar(x0, y0, w, interactive, e)
-	}
-	path := tree.RelativeDisplayPath(v.RootPath, e.Path)
-	rel := path
-
-	lineCount := bestLineCount(e)
-	lineTag := fmt.Sprintf("%dL", lineCount)
-	// One space, not two: unlike the gutter's own numField+"  " (draw-
-	// Content, below), lineTag already carries a trailing "L" in place of
-	// the gutter's second padding column, so a single space here lines
-	// the path up with content starting at x0+gutterWidth(e).
-	rel = lineTag + " " + rel
-
-	// copyModeTag prefixes rel whenever e is in copy mode, so that state
-	// is always legible in this row regardless of which case below fires
-	// (find status/prompt text otherwise has no room to also mention
-	// it) — the row's own distinct style (below) reinforces this further.
-	left := rel
-	if e.CopyMode {
-		left = "[copy mode] " + rel
-	}
-
-	gotoBlocked := interactive && v.GotoBlockedPath == e.Path && gotoLineBlocked(e.Stream != nil, e.Stream != nil && e.Stream.Done())
-
-	// legend suppresses entries entirely while the help overlay (§5.4)
-	// is showing, so this row's own legend doesn't compete with the
-	// full keybinding reference drawn separately — the left-hand
-	// content (path, find/goto status text) is untouched either way.
-	legend := func(entries []canvas.LegendEntry) []canvas.LegendEntry {
-		if v.HelpVisible {
-			return nil
-		}
-		return entries
-	}
-
-	var text string
-	switch {
-	case interactive && v.FindPromptOpen:
-		text = canvas.LegendText(w, "/"+v.FindInput, legend(findPromptLegend))
-	case !interactive:
-		text = left
-	case gotoBlocked:
-		text = canvas.LegendText(w, left, withStatus("still indexing, try again shortly", nil))
-	case e.FindScan != nil:
-		text = canvas.LegendText(w, left, withStatus(findStatusText(e), legend(findLegendNoMatches)))
-	case e.FindQuery != "" && len(e.FindMatches) > 0:
-		text = canvas.LegendText(w, left, withStatus(findStatusText(e), legend(findLegend)))
-	case e.FindQuery != "":
-		text = canvas.LegendText(w, left, withStatus(findStatusText(e), legend(findLegendNoMatches)))
-	case e.CopyMode:
-		text = canvas.LegendText(w, left, legend(fileLegendCopyModeOn))
-	default:
-		text = canvas.LegendText(w, rel, legend(v.fileLegendForIdle(e)))
-	}
-
-	style := canvas.StyleFileTitle
-	switch {
-	case e.CopyMode:
-		style = canvas.StyleCopyModeTitle
-	case gotoBlocked && time.Since(v.GotoBlockedFlashStart) < canvas.FlashDuration:
-		style = canvas.StyleFlashError
-	}
-	v.Canvas.DrawText(x0, y0, w, text, style)
-	v.boldPathInFileTitleBar(x0, y0, text, path, style)
-	return 1
+	return fileViewFor(e).CurrentLegend(v, e)
 }
 
 // boldPathInFileTitleBar re-draws path (the displayed entry's own
@@ -264,7 +155,7 @@ func (v *Preview) boldPathInFileTitleBar(x0, y0 int, text, path string, style tc
 // (docs/STREAMING_PREVIEW_DESIGN.md §7) — reusing the corner badge's own
 // threshold/minimum-display-duration discipline (SPEC.md §5.3) rather
 // than inventing new timing rules for this second indicator.
-func (v *Preview) fileLegendForIdle(e *openfiles.Entry) []canvas.LegendEntry {
+func (v *Preview) fileLegendForIdle(e *entry.TextEntry) []canvas.LegendEntry {
 	if e.Stream == nil {
 		return fileLegend
 	}
@@ -317,88 +208,6 @@ func streamBuildingVisible(elapsed, sinceDone time.Duration, done bool, threshol
 	return elapsed < doneAt
 }
 
-// drawContent renders the primary preview view's content (SPEC.md
-// §2.1) into the (x0, y0)-(x0+w, y0+h) rectangle: a line-number gutter
-// plus wrapped, highlighted rows for the currently-displayed entry, or
-// an explanatory empty-state message if none is displayed. The
-// goto-line prompt, when open, occupies the bottom row.
-func (v *Preview) drawContent(x0, y0, w, h int) {
-	e := v.Files.DisplayedEntry()
-	if e == nil {
-		msg := "no files open — press o to quick open, b to browse, s to search contents"
-		row := y0 + max(h/2, 1)
-		v.Canvas.DrawText(x0, row, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
-		return
-	}
-	if !contentReady(e) {
-		msg := "building preview…"
-		if e.Stream != nil {
-			elapsed := e.Stream.Elapsed()
-			if spinner.ShouldShow(e.Stream.Done(), elapsed, canvas.SpinnerThreshold) {
-				frame := spinner.Frame(elapsed, canvas.SpinnerFPS, spinner.DefaultFrames)
-				msg = "building preview " + string(frame)
-			}
-		}
-		row := y0 + max(h/2, 1)
-		v.Canvas.DrawText(x0, row, w, canvas.CenterPad(msg, w), canvas.StyleNormal)
-		return
-	}
-
-	gw := gutterWidth(e)
-	contentWidth := max(w-gw, 1)
-	if e.Tier == preview.TierPlainText {
-		v.ensureWindow(e, contentWidth, currentTopLine(e))
-	} else {
-		v.ensureWrapped(e, contentWidth)
-	}
-
-	viewportHeight := h
-	if v.GotoPromptOpen {
-		viewportHeight--
-	}
-	digits := gw - 2
-
-	topFlash := e.Path == v.TopBumpPath && time.Since(v.TopBumpFlashStart) < canvas.FlashDuration
-	bottomFlash := e.Path == v.BottomBumpPath && time.Since(v.BottomBumpFlashStart) < canvas.FlashDuration
-	lastDrawnY := -1
-
-	for row := range viewportHeight {
-		y := y0 + row
-		i := e.Scroll + row
-		if i >= len(e.Rows) {
-			break
-		}
-		dr := e.Rows[i]
-		if gw > 0 {
-			numField := strings.Repeat(" ", digits)
-			if dr.HasNumber {
-				numField = fmt.Sprintf("%*d", digits, e.WindowStartLine+dr.SourceLine+1)
-			}
-			v.Canvas.DrawText(x0, y, gw, numField+"  ", canvas.StyleNormal)
-		}
-		v.drawSegments(x0+gw, y, contentWidth, dr.Segments, findHighlightsForRow(e, dr), e.CopyMode)
-		lastDrawnY = y
-	}
-	if topFlash {
-		v.Canvas.FlashRow(x0, y0, w)
-	}
-	if bottomFlash && lastDrawnY >= 0 && lastDrawnY != y0 {
-		// lastDrawnY == y0 means the document is short enough that its
-		// only visible row is both the top and bottom edge; skip so a
-		// simultaneous top+bottom flash doesn't reverse the same row
-		// twice and cancel itself back out.
-		v.Canvas.FlashRow(x0, lastDrawnY, w)
-	}
-
-	if v.GotoPromptOpen {
-		gotoRowLegend := gotoLegend
-		if v.HelpVisible {
-			gotoRowLegend = nil
-		}
-		v.Canvas.DrawText(x0, y0+h-1, w, canvas.LegendText(w, "goto line: "+v.GotoInput, gotoRowLegend), canvas.StyleNormal)
-	}
-}
-
 // findHighlight is one in-file find match's column range within a
 // single wrapped display row, in row-relative rune columns (SPEC.md
 // §2.4) — Current picks canvas.StyleFindCurrent over canvas.StyleFindMatch
@@ -414,7 +223,7 @@ type findHighlight struct {
 // row-relative columns via the row's ColStart — a match split across
 // two wrapped rows by a mid-token wrap naturally yields one highlight
 // per row it touches.
-func findHighlightsForRow(e *openfiles.Entry, row preview.DisplayRow) []findHighlight {
+func findHighlightsForRow(e *entry.TextEntry, row preview.DisplayRow) []findHighlight {
 	if len(e.FindMatches) == 0 {
 		return nil
 	}

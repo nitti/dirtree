@@ -154,7 +154,7 @@ func (v *OpenFiles) Draw(x0, y0, w, h int, preview *Preview) {
 	// narrow-terminal tiering (LegendText below) rarely has to kick in.
 	longest := len([]rune(counter)) + 1 + len([]rune(canvas.LegendString(legendEntries))) + 2
 	for i := start; i < end; i++ {
-		label := openFilesRowLabel(i-start, i == v.Files.Displayed, tree.RelativeDisplayPath(v.RootPath, entries[i].Path))
+		label := openFilesRowLabel(i-start, i == v.Files.Displayed, tree.RelativeDisplayPath(v.RootPath, entries[i].Path()))
 		if n := len([]rune(label)) + 4; n > longest {
 			longest = n
 		}
@@ -177,7 +177,7 @@ func (v *OpenFiles) Draw(x0, y0, w, h int, preview *Preview) {
 		if i == v.Selected {
 			style = canvas.StyleSelected
 		}
-		label := openFilesRowLabel(row, i == v.Files.Displayed, tree.RelativeDisplayPath(v.RootPath, entries[i].Path))
+		label := openFilesRowLabel(row, i == v.Files.Displayed, tree.RelativeDisplayPath(v.RootPath, entries[i].Path()))
 		v.Canvas.DrawText(bx0+1, y0+2+row, innerW, label, style)
 	}
 }

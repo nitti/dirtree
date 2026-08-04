@@ -9,6 +9,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/tree"
@@ -285,8 +286,8 @@ func TestFormatSize(t *testing.T) {
 // never runs past the width budget it was given (SPEC.md §2.1a's "the
 // size indicator should always be sized to fit within the gutter").
 // Widths below 5 aren't exercised here — hexGutterWidth's own 4-hex-
-// digit floor means drawHexFileTitleBar never actually offers formatSize
-// a budget narrower than that in practice.
+// digit floor means hexFileView.DrawTitleBar never actually offers
+// formatSize a budget narrower than that in practice.
 func TestFormatSizeNeverExceedsWidth(t *testing.T) {
 	sizes := []int64{1, 1023, 1024, 1025, 1536, 999_999, 1 << 20, 1 << 30, 1<<40 + 12345}
 	for _, n := range sizes {
@@ -324,7 +325,7 @@ func TestDrawHexFileTitleBarAlignsPathWithHexGrid(t *testing.T) {
 		if res.Outcome != openfiles.Opened {
 			t.Fatalf("size %d: Open failed: %+v", size, res)
 		}
-		e := res.Entry
+		he := res.Entry.(*entry.HexEntry)
 
 		v.Draw(0, 1, w, h-1, true)
 		sim.Show()
@@ -336,9 +337,50 @@ func TestDrawHexFileTitleBarAlignsPathWithHexGrid(t *testing.T) {
 			t.Fatalf("size %d: path %q not found in title bar row %q", size, relPath, titleRow)
 		}
 
-		wantCol := hexGutterWidth(e.Size)
+		wantCol := hexGutterWidth(he.Size)
 		if pathCol != wantCol {
 			t.Errorf("size %d: path starts at column %d, want %d (the hex grid's own start column)", size, pathCol, wantCol)
+		}
+	}
+}
+
+// TestDrawHexFileTitleBarShowsGotoPrompt guards #114's title-bar
+// placement fix for the hex view: the goto-offset prompt renders in the
+// file title bar (same as hex-find) instead of its own row at the
+// bottom of the content area, and shows the file's valid hex offset
+// range alongside the typed input while typing.
+func TestDrawHexFileTitleBarShowsGotoPrompt(t *testing.T) {
+	dir := t.TempDir()
+	content := append([]byte{0}, make([]byte, 999)...) // size 1000, last valid offset 0x3e7
+	path := writeBinaryFile(t, dir, content)
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	w, h := 80, 10
+	sim.SetSize(w, h)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
+	res := files.Open(path, preview.DefaultByteCap)
+	if res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %+v", res)
+	}
+	e := res.Entry
+	v.GotoPromptOpen = true
+	v.GotoInput = "64"
+
+	hexFileView{}.DrawTitleBar(v, e, 0, 0, w, true)
+	sim.Show()
+
+	row := rowText(sim, 0, w)
+	if !strings.HasPrefix(row, "goto offset: 0x64 (0-3e7)") {
+		t.Fatalf("file title bar row = %q, want it to start with the prompt text and range hint", row)
+	}
+	for _, want := range []string{"[return] jump", "[esc] cancel"} {
+		if !strings.Contains(row, want) {
+			t.Errorf("file title bar row = %q, missing legend entry %q", row, want)
 		}
 	}
 }
@@ -369,9 +411,10 @@ func TestHexScrollBumpsAtRestEdges(t *testing.T) {
 		t.Fatalf("Open failed: %+v", res)
 	}
 	e := res.Entry
+	he := e.(*entry.HexEntry)
 
-	v.hexScroll(-1) // already at the top: pushing further up bumps
-	if v.TopBumpPath != e.Path {
+	hexFileView{}.Scroll(v, e, -1) // already at the top: pushing further up bumps
+	if v.TopBumpPath != he.Path() {
 		t.Fatalf("expected top bump after scrolling up from the top, got TopBumpPath=%q", v.TopBumpPath)
 	}
 	if v.BottomBumpPath != "" {
@@ -379,19 +422,19 @@ func TestHexScrollBumpsAtRestEdges(t *testing.T) {
 	}
 
 	v.TopBumpPath = ""
-	v.hexScroll(1) // ordinary downward scroll within bounds: no bump
+	hexFileView{}.Scroll(v, e, 1) // ordinary downward scroll within bounds: no bump
 	if v.TopBumpPath != "" || v.BottomBumpPath != "" {
 		t.Fatalf("expected no bump from an ordinary in-bounds scroll, got TopBumpPath=%q BottomBumpPath=%q", v.TopBumpPath, v.BottomBumpPath)
 	}
 
-	e.HexOffset = 0
+	he.HexOffset = 0
 	v.BottomBumpPath = ""
-	v.hexScroll(1000) // scroll far past the bottom: first landing on the last row doesn't bump
+	hexFileView{}.Scroll(v, e, 1000) // scroll far past the bottom: first landing on the last row doesn't bump
 	if v.BottomBumpPath != "" {
 		t.Fatalf("expected no bottom bump on first reaching the last row, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
-	v.hexScroll(1) // already at the bottom: pushing further down bumps
-	if v.BottomBumpPath != e.Path {
+	hexFileView{}.Scroll(v, e, 1) // already at the bottom: pushing further down bumps
+	if v.BottomBumpPath != he.Path() {
 		t.Fatalf("expected bottom bump after scrolling down from the bottom, got BottomBumpPath=%q", v.BottomBumpPath)
 	}
 }
@@ -419,10 +462,11 @@ func TestDrawHexContentFlashesEdgeRowOnBump(t *testing.T) {
 	if res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %+v", res)
 	}
+	e := res.Entry
 
-	v.drawHexContent(0, 0, w, h)
-	v.hexScroll(-1) // already at the top: bumps
-	v.drawHexContent(0, 0, w, h)
+	hexFileView{}.DrawContent(v, e, 0, 0, w, h)
+	hexFileView{}.Scroll(v, e, -1) // already at the top: bumps
+	hexFileView{}.DrawContent(v, e, 0, 0, w, h)
 	sim.Show()
 
 	_, _, attr := cellStyle(sim, 0, 0).Decompose()
@@ -460,31 +504,31 @@ func TestHandleKeyHexNavigation(t *testing.T) {
 	files := openfiles.New()
 	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
 	res := files.Open(path, preview.DefaultByteCap)
-	if res.Outcome != openfiles.Opened || res.Entry.Tier != preview.TierBinary {
+	he, ok := res.Entry.(*entry.HexEntry)
+	if res.Outcome != openfiles.Opened || !ok {
 		t.Fatalf("expected an opened TierBinary entry, got %+v", res)
 	}
-	e := res.Entry
 
-	n := v.hexBytesPerRow(e)
+	n := v.hexBytesPerRow(he)
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
-	if e.HexOffset != int64(n) {
-		t.Fatalf("after Down, HexOffset = %d, want %d", e.HexOffset, n)
+	if he.HexOffset != int64(n) {
+		t.Fatalf("after Down, HexOffset = %d, want %d", he.HexOffset, n)
 	}
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone))
-	if e.HexOffset != 0 {
-		t.Fatalf("after Up, HexOffset = %d, want 0", e.HexOffset)
+	if he.HexOffset != 0 {
+		t.Fatalf("after Up, HexOffset = %d, want 0", he.HexOffset)
 	}
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
-	if want := hexMaxOffset(e.Size, n, v.viewportHeight()); e.HexOffset != want {
-		t.Fatalf("after End, HexOffset = %d, want %d", e.HexOffset, want)
+	if want := hexMaxOffset(he.Size, n, v.viewportHeight()); he.HexOffset != want {
+		t.Fatalf("after End, HexOffset = %d, want %d", he.HexOffset, want)
 	}
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyHome, 0, tcell.ModNone))
-	if e.HexOffset != 0 {
-		t.Fatalf("after Home, HexOffset = %d, want 0", e.HexOffset)
+	if he.HexOffset != 0 {
+		t.Fatalf("after Home, HexOffset = %d, want 0", he.HexOffset)
 	}
 }
 
@@ -493,6 +537,33 @@ func TestHandleKeyHexNavigation(t *testing.T) {
 // digits (no "0x" — the prompt supplies that itself) and Enter jumps
 // the viewport, interpreting the input as hexadecimal, and closes the
 // prompt.
+// TestHandleKeyCIsNoOpOnHexTier guards SPEC.md §2.1a: copy mode does
+// not apply to a hex view, so pressing 'c' while one is displayed has
+// no effect — now dispatched through fileView.ToggleCopyMode
+// (hexFileView's own implementation is a genuine no-op) rather than an
+// inline isHex check, and must not panic reaching for a CopyMode field
+// HexState doesn't have.
+func TestHandleKeyCIsNoOpOnHexTier(t *testing.T) {
+	dir := t.TempDir()
+	content := append([]byte{0}, make([]byte, 99)...)
+	path := writeBinaryFile(t, dir, content)
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatal(err)
+	}
+	sim.SetSize(80, 10)
+
+	files := openfiles.New()
+	v := &Preview{Shared: &Shared{Files: files, Canvas: canvas.New(sim)}}
+	res := files.Open(path, preview.DefaultByteCap)
+	if res.Outcome != openfiles.Opened {
+		t.Fatalf("Open failed: %+v", res)
+	}
+
+	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+}
+
 func TestHandleKeyHexGotoOffset(t *testing.T) {
 	dir := t.TempDir()
 	content := append([]byte{0}, make([]byte, 999)...)
@@ -510,7 +581,7 @@ func TestHandleKeyHexGotoOffset(t *testing.T) {
 	if res.Outcome != openfiles.Opened {
 		t.Fatalf("Open failed: %+v", res)
 	}
-	e := res.Entry
+	he := res.Entry.(*entry.HexEntry)
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, 'g', tcell.ModNone))
 	if !v.GotoPromptOpen {
@@ -524,17 +595,17 @@ func TestHandleKeyHexGotoOffset(t *testing.T) {
 		t.Fatal("expected goto prompt closed after Enter")
 	}
 
-	n := v.hexBytesPerRow(e)
-	want := clampHexOffset(0x64, e.Size, n, v.viewportHeight())
-	if e.HexOffset != want {
-		t.Fatalf("HexOffset = %d, want %d", e.HexOffset, want)
+	n := v.hexBytesPerRow(he)
+	want := clampHexOffset(0x64, he.Size, n, v.viewportHeight())
+	if he.HexOffset != want {
+		t.Fatalf("HexOffset = %d, want %d", he.HexOffset, want)
 	}
 }
 
 // TestHandleKeyHexFindEndToEnd exercises the hex-find prompt through
-// Preview.HandleKey and syncHexFindScan (SPEC.md §2.1a): '/' opens the
-// prompt, typing a query and Enter starts a background scan, and once
-// it finishes the match is found and seeded as current.
+// Preview.HandleKey and hexFileView.SyncFindScan (SPEC.md §2.1a): '/'
+// opens the prompt, typing a query and Enter starts a background scan,
+// and once it finishes the match is found and seeded as current.
 func TestHandleKeyHexFindEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	content := append([]byte{0, 0, 0}, []byte("NEEDLE")...)
@@ -554,6 +625,7 @@ func TestHandleKeyHexFindEndToEnd(t *testing.T) {
 		t.Fatalf("Open failed: %+v", res)
 	}
 	e := res.Entry
+	he := e.(*entry.HexEntry)
 
 	v.HandleKey(tcell.NewEventKey(tcell.KeyRune, '/', tcell.ModNone))
 	if !v.HexFindPromptOpen {
@@ -566,23 +638,23 @@ func TestHandleKeyHexFindEndToEnd(t *testing.T) {
 	if v.HexFindPromptOpen {
 		t.Fatal("expected hex-find prompt closed after Enter")
 	}
-	if e.HexFindScan == nil {
+	if he.HexFindScan == nil {
 		t.Fatal("expected a background hex-find scan to have started")
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
-	for e.HexFindScan != nil && time.Now().Before(deadline) {
-		v.syncHexFindScan(e)
+	for he.HexFindScan != nil && time.Now().Before(deadline) {
+		hexFileView{}.SyncFindScan(v, e)
 		time.Sleep(time.Millisecond)
 	}
-	if e.HexFindScan != nil {
+	if he.HexFindScan != nil {
 		t.Fatal("hex-find scan did not finish in time")
 	}
-	if len(e.HexFindMatches) != 1 || e.HexFindMatches[0].Offset != 3 {
-		t.Fatalf("expected one match at offset 3, got %v", e.HexFindMatches)
+	if len(he.HexFindMatches) != 1 || he.HexFindMatches[0].Offset != 3 {
+		t.Fatalf("expected one match at offset 3, got %v", he.HexFindMatches)
 	}
-	if e.HexFindCurrent != 0 {
-		t.Fatalf("expected HexFindCurrent = 0, got %d", e.HexFindCurrent)
+	if he.HexFindCurrent != 0 {
+		t.Fatalf("expected HexFindCurrent = 0, got %d", he.HexFindCurrent)
 	}
 }
 

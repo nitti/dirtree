@@ -49,12 +49,13 @@ func (a *App) helpTitleRows() int {
 // helpLegendGroups returns every keybinding legend currently live in
 // the app, in the same top-to-bottom order their title bars occupy on
 // screen (SPEC.md §5.4): the main title bar first, then whatever
-// secondary title bar the current context has (the file title bar
-// and/or the goto-line prompt row in the primary preview view, the
-// open-files popup's own header in that overlay). Each view's
-// CurrentLegend (or equivalent accessor) mirrors the exact same state
-// precedence its own Draw method uses to pick a legend, so this can
-// never drift out of sync with what's actually bound right now.
+// secondary title bar the current context has (the primary preview
+// view's file title bar — which the goto-line/goto-offset prompt now
+// renders in too, rather than its own row, #114 — or the open-files
+// popup's own header in that overlay). Each view's CurrentLegend (or
+// equivalent accessor) mirrors the exact same state precedence its own
+// Draw method uses to pick a legend, so this can never drift out of
+// sync with what's actually bound right now.
 func (a *App) helpLegendGroups() [][]canvas.LegendEntry {
 	switch a.overlay {
 	case views.OverlayBrowser:
@@ -68,9 +69,6 @@ func (a *App) helpLegendGroups() [][]canvas.LegendEntry {
 	default: // OverlayNone
 		groups := [][]canvas.LegendEntry{previewLegend}
 		if entries, ok := a.Preview.CurrentFileLegend(); ok {
-			groups = append(groups, entries)
-		}
-		if entries, ok := a.Preview.GotoPromptLegend(); ok {
 			groups = append(groups, entries)
 		}
 		return groups

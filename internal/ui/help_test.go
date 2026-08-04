@@ -189,19 +189,23 @@ func TestHelpLegendGroupsOrderAndCount(t *testing.T) {
 		}
 	})
 
-	t.Run("primary preview, file displayed, goto prompt open: three groups", func(t *testing.T) {
+	// #114: the goto prompt now renders in the file title bar (same as
+	// find) rather than its own row, so opening it still produces just
+	// two groups — the file title bar group's own contents change to
+	// the goto legend, but no third group appears for it.
+	t.Run("primary preview, file displayed, goto prompt open: still two groups", func(t *testing.T) {
 		a := newTestApp(t, 60, 15)
 		if res := a.files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
 			t.Fatalf("Open failed: %s", res.Message)
 		}
 		a.Preview.GotoPromptOpen = true
 		groups := a.helpLegendGroups()
-		if len(groups) != 3 {
-			t.Fatalf("got %d groups, want 3 (main, file title bar, goto prompt)", len(groups))
+		if len(groups) != 2 {
+			t.Fatalf("got %d groups, want 2 (main, file title bar)", len(groups))
 		}
-		gotoLegend, ok := a.Preview.GotoPromptLegend()
-		if !ok || &groups[2][0] != &gotoLegend[0] {
-			t.Error("groups[2] should be GotoPromptLegend")
+		fileLegend, ok := a.Preview.CurrentFileLegend()
+		if !ok || &groups[1][0] != &fileLegend[0] {
+			t.Error("groups[1] should be the file title bar's CurrentFileLegend, now showing the goto prompt's legend")
 		}
 	})
 
