@@ -21,7 +21,7 @@ import (
 func TestFileViewForDispatchesOnTier(t *testing.T) {
 	cases := []struct {
 		name string
-		e    entry.Entry
+		e    fileEntry
 		want fileView
 	}{
 		{"nil entry", nil, textFileView{}},
@@ -182,7 +182,7 @@ func TestHandleGotoPromptKeyRejectsWrongTierDigits(t *testing.T) {
 func TestTextFileViewGotoRangeHint(t *testing.T) {
 	cases := []struct {
 		name string
-		e    entry.Entry
+		e    fileEntry
 		want string
 	}{
 		{"highlighted tier, 3 lines", &entry.TextEntry{EntryInfo: entry.EntryInfo{Tier: preview.TierHighlighted}, Lines: []string{"a", "b", "c"}}, "1-3"},
@@ -224,13 +224,13 @@ func TestGotoLabelDispatchesOnTier(t *testing.T) {
 	files := openfiles.New()
 	v := &Preview{Shared: &Shared{Files: files}}
 
-	files.Entries = []entry.Entry{textEntry}
+	files.Entries = append(files.Entries[:0], textEntry)
 	files.Displayed = 0
 	if got, want := v.GotoLabel(), "goto line: "; got != want {
 		t.Errorf("GotoLabel() with text entry = %q, want %q", got, want)
 	}
 
-	files.Entries = []entry.Entry{hexEntry}
+	files.Entries = append(files.Entries[:0], hexEntry)
 	files.Displayed = 0
 	if got, want := v.GotoLabel(), "goto offset: 0x"; got != want {
 		t.Errorf("GotoLabel() with hex entry = %q, want %q", got, want)

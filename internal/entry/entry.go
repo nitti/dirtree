@@ -2,13 +2,19 @@
 // that decides/re-decides which tier it belongs to (SPEC.md §2.1,
 // §2.1a, §2.2, §6.1a) — reading the file, checking for binary content,
 // comparing size against the highlighting ceiling, and constructing or
-// reloading the right concrete Entry accordingly. Kept free of any
+// reloading the right concrete entry accordingly. Kept free of any
 // terminal-rendering dependency, same as internal/openfiles, so it's
-// unit-testable without a terminal: internal/openfiles.List (list
-// order, paging, displayed index, dedup-by-path, residency LRU policy)
-// deliberately knows nothing about tiers at all, only the minimal Entry
-// interface this package defines — that's the whole point of this
-// package existing separately from openfiles.
+// unit-testable without a terminal.
+//
+// This package deliberately exports no interface: TextEntry/HexEntry
+// are concrete types, and Open/Reload return any rather than a
+// producer-declared abstraction, so that every consumer (internal/
+// openfiles.List, internal/ui/views) declares its own interface sized
+// to exactly what it needs and asserts down to it — "accept
+// interfaces, return structs," not the other way around. That's the
+// whole point of this package existing separately from openfiles: it
+// owns tier-deciding logic and the tier-specific data, but never
+// dictates how a consumer is allowed to talk about it.
 package entry
 
 import (
@@ -26,42 +32,20 @@ import (
 // HexEntry so same-package code and a type-asserted caller in
 // internal/ui/views read these fields directly (te.Tier, te.ModTime,
 // te.Size). Path is the one exception: TextEntry/HexEntry both define a
-// Path() method to satisfy the Entry interface, which — per Go's
-// embedding rules — shadows EntryInfo's own Path field for direct
-// promoted access (te.Path means the method, not the field); reach the
-// field itself via the method, or via the whole embedded EntryInfo
-// value (te.EntryInfo) when constructing/replacing it wholesale, never
-// via a single te.EntryInfo.Path assignment mixed with the promoted
-// name elsewhere — this file's Open/Reload always replace EntryInfo as
-// one unit for exactly that reason.
+// Path() method (to satisfy whichever small interface a consumer
+// package declares for itself — see the package doc comment) which,
+// per Go's embedding rules, shadows EntryInfo's own Path field for
+// direct promoted access (te.Path means the method, not the field);
+// reach the field itself via the method, or via the whole embedded
+// EntryInfo value (te.EntryInfo) when constructing/replacing it
+// wholesale, never via a single te.EntryInfo.Path assignment mixed
+// with the promoted name elsewhere — this file's Open/Reload always
+// replace EntryInfo as one unit for exactly that reason.
 type EntryInfo struct {
 	Path    string
 	Tier    preview.Tier
 	ModTime time.Time
 	Size    int64
-}
-
-// Entry is the interface openfiles.List operates on — deliberately
-// minimal, so List never needs to know which concrete type backs a
-// given entry or reach into its tier-specific state at all. Everything
-// tier-aware (internal/ui/views' fileView dispatch, and this package's
-// own Open/Reload) instead type-asserts to the concrete TextEntry/
-// HexEntry to reach EntryInfo's fields or either one's own state.
-type Entry interface {
-	// Path is the entry's resolved absolute path — List's own dedup-by-
-	// path lookups (Open, IsOpen) and residency tracking need exactly
-	// this much and nothing more about what the entry actually holds.
-	Path() string
-	// Close cancels any in-flight background work (a find/hex-find
-	// scan) an entry might be holding — called by List.Remove so a
-	// removed entry doesn't leak a still-running goroutine.
-	Close()
-	// Evict frees resident content if any is held — a no-op for
-	// HexEntry and a TierPlainText TextEntry, which never hold full
-	// content resident to begin with. Called by List's residency LRU
-	// policy (ResidentCap) without it needing to know which entries are
-	// actually eviction-eligible.
-	Evict()
 }
 
 // TextEntry is the state of a text-tier (TierHighlighted or
@@ -263,10 +247,13 @@ func (e *TextEntry) Evict() {
 func (e *HexEntry) Evict() {}
 
 // Open reads path (capBytes bounds the check, SPEC.md §2.1), decides
-// tier from content/size, and returns the right concrete Entry.
-// Callers (openfiles.List.Open) are responsible for dedup-by-path —
-// this always reads and constructs fresh.
-func Open(path string, capBytes int64) (Entry, error) {
+// tier from content/size, and returns the right concrete entry — a
+// *TextEntry or *HexEntry, boxed as any since this package declares no
+// shared interface for a caller to name; callers assert the returned
+// value down to whatever minimal interface (or concrete type) they
+// need. Callers (openfiles.List.Open) are responsible for dedup-by-path
+// — this always reads and constructs fresh.
+func Open(path string, capBytes int64) (any, error) {
 	_, binary, err := preview.ReadCapped(path, capBytes)
 	if err != nil {
 		return nil, err
@@ -337,27 +324,35 @@ func Open(path string, capBytes int64) (Entry, error) {
 // itself was mutated. Any other code holding an older reference across
 // such a reload (internal/ui/views/search.go's LastOpenedEntry, for
 // instance) goes stale until it independently re-fetches from the
-// list — a narrow, accepted consequence of Entry being two genuinely
-// separate concrete types now rather than one mutable struct.
-func Reload(e Entry, capBytes int64) (updated Entry, changed bool, err error) {
-	info, statErr := os.Stat(e.Path())
-	if statErr != nil {
-		return e, false, nil
-	}
-
+// list — a narrow, accepted consequence of an entry being two
+// genuinely separate concrete types now rather than one mutable
+// struct.
+//
+// e is any (see the package doc comment) — the caller passes back
+// whatever Open (or a previous Reload) gave it; this function is the
+// one place that actually knows how to inspect it, via the same
+// type-switch-to-concrete-type idiom used throughout this package,
+// never via a shared interface.
+func Reload(e any, capBytes int64) (updated any, changed bool, err error) {
+	var path string
 	var curModTime time.Time
 	var curTier preview.Tier
 	switch ent := e.(type) {
 	case *TextEntry:
-		curModTime, curTier = ent.ModTime, ent.Tier
+		path, curModTime, curTier = ent.Path(), ent.ModTime, ent.Tier
 	case *HexEntry:
-		curModTime, curTier = ent.ModTime, ent.Tier
+		path, curModTime, curTier = ent.Path(), ent.ModTime, ent.Tier
+	}
+
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return e, false, nil
 	}
 	if info.ModTime().Equal(curModTime) {
 		return e, false, nil
 	}
 
-	_, binary, readErr := preview.ReadCapped(e.Path(), capBytes)
+	_, binary, readErr := preview.ReadCapped(path, capBytes)
 	if readErr != nil {
 		return e, false, nil
 	}
@@ -367,7 +362,7 @@ func Reload(e Entry, capBytes int64) (updated Entry, changed bool, err error) {
 		newTier = preview.TierFor(info.Size())
 	}
 	flipped := newTier != curTier
-	newInfo := EntryInfo{Path: e.Path(), Tier: newTier, ModTime: info.ModTime(), Size: info.Size()}
+	newInfo := EntryInfo{Path: path, Tier: newTier, ModTime: info.ModTime(), Size: info.Size()}
 
 	if binary {
 		he, ok := e.(*HexEntry)
@@ -387,7 +382,7 @@ func Reload(e Entry, capBytes int64) (updated Entry, changed bool, err error) {
 		return he, true, nil
 	}
 
-	stream := preview.StartStream(e.Path(), newTier)
+	stream := preview.StartStream(path, newTier)
 	te, ok := e.(*TextEntry)
 	if flipped || !ok {
 		te = &TextEntry{FindCurrent: -1}

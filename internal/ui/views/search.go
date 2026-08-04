@@ -8,7 +8,6 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/openfiles"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/search"
@@ -103,7 +102,7 @@ type Search struct {
 	// one frame between a successful open and the coordinator consuming
 	// it.
 	LastOpenedPath  string
-	LastOpenedEntry entry.Entry
+	LastOpenedEntry fileEntry
 	LastOpenedLine  int
 }
 

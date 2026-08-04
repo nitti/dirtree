@@ -30,14 +30,16 @@ import (
 // drawHexContent/scroll/hexScroll/hexJumpStart/hexJumpEnd/performFind/
 // performHexFind/findStep/hexFindStep/clearFind/clearHexFind functions.
 //
-// e is always the internal/entry.Entry interface now, not a pointer to
-// a single flat struct (a follow-up to #114 extracting internal/entry:
-// openfiles.List operates only through Entry's minimal Path/Close/Evict
-// contract, and every tier-specific field this package needs lives on
-// the concrete *entry.TextEntry/*entry.HexEntry instead). Every method
-// below type-asserts e to the concrete type it expects once, at the
-// top, exactly the same shape the prior Entry.Text/Entry.Hex-pointer
-// design already used — only what's being asserted against changed.
+// e is always fileEntry (below) now, not a pointer to a single flat
+// struct (a follow-up to #114 extracting internal/entry: that package
+// exports no interface of its own — TextEntry/HexEntry are concrete
+// types, and this package declares fileEntry itself, sized to exactly
+// what it needs, the same "accept interfaces, return structs" pattern
+// internal/openfiles.entryHandle uses for its own, differently-shaped
+// needs). Every method below type-asserts e to the concrete
+// *entry.TextEntry/*entry.HexEntry it expects once, at the top, exactly
+// the same shape the prior Entry.Text/Entry.Hex-pointer design already
+// used — only what's being asserted against changed.
 //
 // This completes #114's core ask: after this, fileViewFor itself is
 // the only remaining tier-branch point in this package for behavior
@@ -51,6 +53,19 @@ import (
 // fields into one (making `/`'s branch removable the same way copy
 // mode's was) is a smaller, opportunistic follow-up, not folded in
 // here.
+// fileEntry is the minimal contract this package needs from an entry
+// before dispatching to its concrete tier — declared here, by the
+// consumer, mirroring internal/openfiles.entryHandle's same rationale:
+// ask for exactly what's needed rather than programming against a
+// producer-blessed abstraction. entry.TextEntry/entry.HexEntry satisfy
+// this structurally; internal/entry never declares or knows about it.
+// This package never calls Close()/Evict() (those are internal/
+// openfiles.List's own bookkeeping), so unlike entryHandle, Path() is
+// all this side needs.
+type fileEntry interface {
+	Path() string
+}
+
 type fileView interface {
 	// acceptGotoRune reports whether r is valid input for the goto
 	// prompt while this tier's entry is displayed.
@@ -69,7 +84,7 @@ type fileView interface {
 	// alongside the prompt while typing (#114), so a user doesn't have
 	// to already know the file's length/size to know what a reasonable
 	// target is.
-	gotoRangeHint(e entry.Entry) string
+	gotoRangeHint(e fileEntry) string
 	// gotoLegend is the goto prompt's own keybinding legend.
 	gotoLegend() []canvas.LegendEntry
 
@@ -83,14 +98,14 @@ type fileView interface {
 	// need a tier check of their own to know how much vertical space it
 	// used, mirroring the pre-interface drawFileTitleBar/
 	// drawHexFileTitleBar functions this replaces.
-	DrawTitleBar(v *Preview, e entry.Entry, x0, y0, w int, interactive bool) int
+	DrawTitleBar(v *Preview, e fileEntry, x0, y0, w int, interactive bool) int
 
 	// CurrentLegend returns the keybinding legend e's file title bar is
 	// currently showing, mirroring DrawTitleBar's own state precedence
 	// exactly — for the help overlay (§5.4) to reuse. ok is false when
 	// the title bar is showing a transient state with no keybinding
 	// legend of its own (e.g. text-tier's blocked-on-indexing case).
-	CurrentLegend(v *Preview, e entry.Entry) (entries []canvas.LegendEntry, ok bool)
+	CurrentLegend(v *Preview, e fileEntry) (entries []canvas.LegendEntry, ok bool)
 
 	// SyncFindScan picks up a finished background find scan's result
 	// for e, if any (docs/STREAMING_PREVIEW_DESIGN.md §9, SPEC.md
@@ -99,24 +114,24 @@ type fileView interface {
 	// "searching…" spinner and, once ready, match highlighting/status
 	// both reflect current state without any caller needing to poll
 	// for it explicitly.
-	SyncFindScan(v *Preview, e entry.Entry)
+	SyncFindScan(v *Preview, e fileEntry)
 
 	// DrawContent renders e's content into the (x0, y0)-(x0+w, y0+h)
 	// rectangle (SPEC.md §2.1, §2.1a) — assumes e is non-nil; Draw's own
 	// empty-state message (drawEmptyState) handles the no-entry case
 	// directly rather than either implementation needing to.
-	DrawContent(v *Preview, e entry.Entry, x0, y0, w, h int)
+	DrawContent(v *Preview, e fileEntry, x0, y0, w, h int)
 
 	// Scroll moves e's viewport by delta (SPEC.md §2.1, §2.1a) — display
 	// rows for TierHighlighted, source lines for TierPlainText, or hex
 	// rows for TierBinary. A no-op at the empty state or while e's
 	// content isn't ready yet.
-	Scroll(v *Preview, e entry.Entry, delta int)
+	Scroll(v *Preview, e fileEntry, delta int)
 
 	// JumpStart moves e's viewport to its very start (Home binding).
-	JumpStart(v *Preview, e entry.Entry)
+	JumpStart(v *Preview, e fileEntry)
 	// JumpEnd moves e's viewport to its very end (End binding).
-	JumpEnd(v *Preview, e entry.Entry)
+	JumpEnd(v *Preview, e fileEntry)
 
 	// PerformFind executes an in-file find for query against e (SPEC.md
 	// §2.4, §2.1a), replacing any previous find state — synchronous or a
@@ -124,20 +139,20 @@ type fileView interface {
 	// tier's content addresses (line/rune vs. byte offset), per the
 	// implementation. An empty query clears any existing find state
 	// instead of searching. A no-op if e is nil.
-	PerformFind(v *Preview, e entry.Entry, query string)
+	PerformFind(v *Preview, e fileEntry, query string)
 	// FindStep moves e's current find match by delta (+1/-1), wrapping
 	// around at either end and noting the wrap. A no-op if e is nil or
 	// has no matches.
-	FindStep(v *Preview, e entry.Entry, delta int)
+	FindStep(v *Preview, e fileEntry, delta int)
 	// ClearFind clears e's find state (query, matches, current index,
 	// wrap note), canceling a still-running scan first. A no-op if
 	// there's nothing to clear.
-	ClearFind(v *Preview, e entry.Entry)
+	ClearFind(v *Preview, e fileEntry)
 
 	// ToggleCopyMode toggles e's copy mode (SPEC.md §2.1) — a no-op for
 	// a TierBinary entry, which copy mode does not apply to (SPEC.md
 	// §2.1a). A no-op if e is nil.
-	ToggleCopyMode(v *Preview, e entry.Entry)
+	ToggleCopyMode(v *Preview, e fileEntry)
 }
 
 // textFileView is the fileView for every tier except TierBinary
@@ -200,7 +215,7 @@ func (textFileView) gotoLabel() string { return "goto line: " }
 // prompt itself is already gated/clamped against (gotoLineBlocked,
 // ScrollToLine), so the hint never promises a target the prompt would
 // then reject.
-func (textFileView) gotoRangeHint(e entry.Entry) string {
+func (textFileView) gotoRangeHint(e fileEntry) string {
 	te := e.(*entry.TextEntry)
 	return fmt.Sprintf("1-%d", bestLineCount(te))
 }
@@ -214,7 +229,7 @@ func (hexFileView) gotoLabel() string { return "goto offset: 0x" }
 // (parseOffset) and the file title bar's hex offset gutter. An empty
 // (zero-size) file has no valid offset at all; the hint floors at 0
 // rather than showing a negative range in that edge case.
-func (hexFileView) gotoRangeHint(e entry.Entry) string {
+func (hexFileView) gotoRangeHint(e fileEntry) string {
 	he := e.(*entry.HexEntry)
 	last := he.Size - 1
 	if last < 0 {
@@ -234,7 +249,7 @@ func (hexFileView) gotoLegend() []canvas.LegendEntry { return hexGotoLegend }
 // background stream pass is still running and perceptible,
 // fileLegendForIdle) — see the fileView interface doc for the overall
 // state-precedence shape this and hexFileView.DrawTitleBar share.
-func (textFileView) DrawTitleBar(v *Preview, e entry.Entry, x0, y0, w int, interactive bool) int {
+func (textFileView) DrawTitleBar(v *Preview, e fileEntry, x0, y0, w int, interactive bool) int {
 	te := e.(*entry.TextEntry)
 	path := tree.RelativeDisplayPath(v.RootPath, te.Path())
 	rel := path
@@ -311,7 +326,7 @@ func (textFileView) DrawTitleBar(v *Preview, e entry.Entry, x0, y0, w int, inter
 // precedence, minus the goto-blocked/copy-mode cases, neither of which
 // apply to a TierBinary entry (it starts no background stream to block
 // on, and copy mode does not apply to a hex view, SPEC.md §2.1a).
-func (hexFileView) DrawTitleBar(v *Preview, e entry.Entry, x0, y0, w int, interactive bool) int {
+func (hexFileView) DrawTitleBar(v *Preview, e fileEntry, x0, y0, w int, interactive bool) int {
 	he := e.(*entry.HexEntry)
 	path := tree.RelativeDisplayPath(v.RootPath, he.Path())
 	// sizeField is sized to gutterWidth-1 columns: formatSize spends
@@ -372,7 +387,7 @@ func (hexFileView) DrawTitleBar(v *Preview, e entry.Entry, x0, y0, w int, intera
 // precedence exactly (goto prompt, find prompt, blocked-on-indexing,
 // an async plain-text-tier scan, an active find with or without
 // matches, copy mode, else idle).
-func (textFileView) CurrentLegend(v *Preview, e entry.Entry) (entries []canvas.LegendEntry, ok bool) {
+func (textFileView) CurrentLegend(v *Preview, e fileEntry) (entries []canvas.LegendEntry, ok bool) {
 	te := e.(*entry.TextEntry)
 	gotoBlocked := v.GotoBlockedPath == te.Path() && gotoLineBlocked(te.Stream != nil, te.Stream != nil && te.Stream.Done())
 	switch {
@@ -398,7 +413,7 @@ func (textFileView) CurrentLegend(v *Preview, e entry.Entry) (entries []canvas.L
 // CurrentLegend returns the keybinding legend the hex-tier file title
 // bar is currently showing, mirroring DrawTitleBar's own state
 // precedence exactly.
-func (hexFileView) CurrentLegend(v *Preview, e entry.Entry) (entries []canvas.LegendEntry, ok bool) {
+func (hexFileView) CurrentLegend(v *Preview, e fileEntry) (entries []canvas.LegendEntry, ok bool) {
 	he := e.(*entry.HexEntry)
 	switch {
 	case v.GotoPromptOpen:
@@ -423,7 +438,7 @@ func (hexFileView) CurrentLegend(v *Preview, e entry.Entry) (entries []canvas.Le
 // would be, then FindScan is cleared so this only ever runs once per
 // scan. A no-op while e isn't a text-tier entry, or no scan is running,
 // or it hasn't finished yet.
-func (textFileView) SyncFindScan(v *Preview, e entry.Entry) {
+func (textFileView) SyncFindScan(v *Preview, e fileEntry) {
 	te, ok := e.(*entry.TextEntry)
 	if !ok || te.FindScan == nil {
 		return
@@ -446,7 +461,7 @@ func (textFileView) SyncFindScan(v *Preview, e entry.Entry) {
 // current match is seeded, then HexFindScan is cleared so this only
 // ever runs once per scan. A no-op while e isn't a hex-tier entry, or
 // no scan is running, or it hasn't finished yet.
-func (hexFileView) SyncFindScan(v *Preview, e entry.Entry) {
+func (hexFileView) SyncFindScan(v *Preview, e fileEntry) {
 	he, ok := e.(*entry.HexEntry)
 	if !ok || he.HexFindScan == nil {
 		return
@@ -469,7 +484,7 @@ func (hexFileView) SyncFindScan(v *Preview, e entry.Entry) {
 // still running. Assumes e is non-nil — Draw's own empty-state message
 // (drawEmptyState) handles the no-entry case before this is ever
 // reached.
-func (textFileView) DrawContent(v *Preview, e entry.Entry, x0, y0, w, h int) {
+func (textFileView) DrawContent(v *Preview, e fileEntry, x0, y0, w, h int) {
 	te := e.(*entry.TextEntry)
 	if !te.ContentReady() {
 		msg := "building preview…"
@@ -535,7 +550,7 @@ func (textFileView) DrawContent(v *Preview, e entry.Entry, x0, y0, w, h int) {
 // (preview.ReadRange) rather than holding the file's content resident.
 // Assumes e is non-nil — Draw's own empty-state message (drawEmptyState)
 // handles the no-entry case before this is ever reached.
-func (hexFileView) DrawContent(v *Preview, e entry.Entry, x0, y0, w, h int) {
+func (hexFileView) DrawContent(v *Preview, e fileEntry, x0, y0, w, h int) {
 	he := e.(*entry.HexEntry)
 	gw := hexGutterWidth(he.Size)
 	n := bytesPerRowFor(w, gw)
@@ -591,7 +606,7 @@ func (hexFileView) DrawContent(v *Preview, e entry.Entry, x0, y0, w, h int) {
 // slice of the file rather than a whole-file wrap cache to walk display
 // rows against) — Up/Down and Page Up/Page Down all move by source line
 // count for that tier.
-func (textFileView) Scroll(v *Preview, e entry.Entry, delta int) {
+func (textFileView) Scroll(v *Preview, e fileEntry, delta int) {
 	te, ok := e.(*entry.TextEntry)
 	if !ok || !te.ContentReady() {
 		return
@@ -625,7 +640,7 @@ func (textFileView) Scroll(v *Preview, e entry.Entry, delta int) {
 // "you've hit the end" cue there — reused as-is rather than duplicated,
 // since it already operates in terms of the entry and a signed delta,
 // neither of which is tier-specific.
-func (hexFileView) Scroll(v *Preview, e entry.Entry, delta int) {
+func (hexFileView) Scroll(v *Preview, e fileEntry, delta int) {
 	he, ok := e.(*entry.HexEntry)
 	if !ok {
 		return
@@ -644,14 +659,14 @@ func (hexFileView) Scroll(v *Preview, e entry.Entry, delta int) {
 // text-tier equivalent. Kept as an explicit no-op now that the
 // key-to-action mapping is unified across tiers, preserving that
 // existing behavior rather than silently changing it.
-func (textFileView) JumpStart(v *Preview, e entry.Entry) {}
+func (textFileView) JumpStart(v *Preview, e fileEntry) {}
 
 // JumpEnd is a no-op for the text tiers; see JumpStart.
-func (textFileView) JumpEnd(v *Preview, e entry.Entry) {}
+func (textFileView) JumpEnd(v *Preview, e fileEntry) {}
 
 // JumpStart jumps e's hex-view viewport to offset 0 (SPEC.md §2.1a's
 // Home binding).
-func (hexFileView) JumpStart(v *Preview, e entry.Entry) {
+func (hexFileView) JumpStart(v *Preview, e fileEntry) {
 	if he, ok := e.(*entry.HexEntry); ok {
 		he.HexOffset = 0
 	}
@@ -660,7 +675,7 @@ func (hexFileView) JumpStart(v *Preview, e entry.Entry) {
 // JumpEnd jumps e's hex-view viewport to hexMaxOffset — the file's last
 // row at the bottom of a full viewport, rather than just its own start
 // with the rest of the screen left blank (SPEC.md §2.1a's End binding).
-func (hexFileView) JumpEnd(v *Preview, e entry.Entry) {
+func (hexFileView) JumpEnd(v *Preview, e fileEntry) {
 	he, ok := e.(*entry.HexEntry)
 	if !ok {
 		return
@@ -685,7 +700,7 @@ func (hexFileView) JumpEnd(v *Preview, e entry.Entry) {
 // a later frame; the file title bar's status area shows a "searching…"
 // spinner in the meantime (findStatusText) rather than blocking this
 // keystroke.
-func (textFileView) PerformFind(v *Preview, e entry.Entry, query string) {
+func (textFileView) PerformFind(v *Preview, e fileEntry, query string) {
 	te, ok := e.(*entry.TextEntry)
 	if !ok {
 		return
@@ -723,7 +738,7 @@ func (textFileView) PerformFind(v *Preview, e entry.Entry, query string) {
 // (textFileView.PerformFind). A no-op if e isn't a hex-tier entry; an
 // empty query clears any existing hex-find state instead of searching,
 // mirroring textFileView.PerformFind's own empty-query behavior.
-func (hexFileView) PerformFind(v *Preview, e entry.Entry, query string) {
+func (hexFileView) PerformFind(v *Preview, e fileEntry, query string) {
 	he, ok := e.(*entry.HexEntry)
 	if !ok {
 		return
@@ -747,7 +762,7 @@ func (hexFileView) PerformFind(v *Preview, e entry.Entry, query string) {
 // (SPEC.md §2.4) — the same wraparound stepper the browser and finder
 // overlays already use (internal/tree.MoveSelection). A no-op if e
 // isn't a text-tier entry or has no matches.
-func (textFileView) FindStep(v *Preview, e entry.Entry, delta int) {
+func (textFileView) FindStep(v *Preview, e fileEntry, delta int) {
 	te, ok := e.(*entry.TextEntry)
 	if !ok || len(te.FindMatches) == 0 {
 		return
@@ -769,7 +784,7 @@ func (textFileView) FindStep(v *Preview, e entry.Entry, delta int) {
 // around at either end and noting the wrap (SPEC.md §2.1a), mirroring
 // textFileView.FindStep. A no-op if e isn't a hex-tier entry or has no
 // matches.
-func (hexFileView) FindStep(v *Preview, e entry.Entry, delta int) {
+func (hexFileView) FindStep(v *Preview, e fileEntry, delta int) {
 	he, ok := e.(*entry.HexEntry)
 	if !ok || len(he.HexFindMatches) == 0 {
 		return
@@ -800,7 +815,7 @@ func (hexFileView) FindStep(v *Preview, e entry.Entry, delta int) {
 // Also cancels a still-running TierPlainText find scan
 // (docs/STREAMING_PREVIEW_DESIGN.md §9) rather than leaving it to
 // finish unread.
-func (textFileView) ClearFind(v *Preview, e entry.Entry) {
+func (textFileView) ClearFind(v *Preview, e fileEntry) {
 	te, ok := e.(*entry.TextEntry)
 	if !ok || (te.FindQuery == "" && te.FindScan == nil) {
 		return
@@ -819,7 +834,7 @@ func (textFileView) ClearFind(v *Preview, e entry.Entry) {
 // canceling a still-running scan first — the hex view's analog of
 // textFileView.ClearFind. A no-op if e isn't a hex-tier entry, or
 // there's no active query or in-progress scan.
-func (hexFileView) ClearFind(v *Preview, e entry.Entry) {
+func (hexFileView) ClearFind(v *Preview, e fileEntry) {
 	he, ok := e.(*entry.HexEntry)
 	if !ok || (he.HexFindQuery == "" && he.HexFindScan == nil) {
 		return
@@ -839,7 +854,7 @@ func (hexFileView) ClearFind(v *Preview, e entry.Entry) {
 // specifically, so a terminal mouse selection over its content grabs
 // exactly the file's own characters. A no-op if e isn't a text-tier
 // entry.
-func (textFileView) ToggleCopyMode(v *Preview, e entry.Entry) {
+func (textFileView) ToggleCopyMode(v *Preview, e fileEntry) {
 	if te, ok := e.(*entry.TextEntry); ok {
 		te.CopyMode = !te.CopyMode
 	}
@@ -848,7 +863,7 @@ func (textFileView) ToggleCopyMode(v *Preview, e entry.Entry) {
 // ToggleCopyMode is a no-op for the hex tier: copy mode does not apply
 // to a hex view (SPEC.md §2.1a) — pressing `c` while one is displayed
 // has no effect.
-func (hexFileView) ToggleCopyMode(v *Preview, e entry.Entry) {}
+func (hexFileView) ToggleCopyMode(v *Preview, e fileEntry) {}
 
 // fileViewFor returns the fileView implementation for e's tier —
 // hexFileView for a *entry.HexEntry, textFileView otherwise —
@@ -858,7 +873,7 @@ func (hexFileView) ToggleCopyMode(v *Preview, e entry.Entry) {}
 // a harmless default, since the goto prompt is never opened without a
 // displayed entry (preview.go's HandleKey only sets GotoPromptOpen when
 // e != nil).
-func fileViewFor(e entry.Entry) fileView {
+func fileViewFor(e fileEntry) fileView {
 	if _, ok := e.(*entry.HexEntry); ok {
 		return hexFileView{}
 	}

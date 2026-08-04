@@ -3,11 +3,14 @@
 // of files opened during the session, plus which one (if any) is
 // currently displayed, kept free of any terminal-rendering dependency
 // so it's unit-testable. List itself knows nothing about tiers or an
-// entry's own content/state — it operates purely through the minimal
-// internal/entry.Entry interface (Path/Close/Evict), delegating all
-// per-file tier-deciding/reload logic to that package. What List does
-// own is genuine list mechanics: order, paging, displayed index,
-// dedup-by-path, and the resident-content LRU policy (below).
+// entry's own content/state — it operates purely through entryHandle,
+// a small interface declared right here by this package (the
+// consumer), not by internal/entry (the producer of the concrete
+// TextEntry/HexEntry types) — see entryHandle's own doc comment for
+// why that direction matters. Per-file tier-deciding/reload logic is
+// delegated to internal/entry entirely; what List owns is genuine list
+// mechanics: order, paging, displayed index, dedup-by-path, and the
+// resident-content LRU policy (below).
 package openfiles
 
 import (
@@ -16,6 +19,31 @@ import (
 	"github.com/nitti/dirtree/internal/entry"
 	"github.com/nitti/dirtree/internal/preview"
 )
+
+// entryHandle is the minimal contract List needs from an open file's
+// entry — declared here, by the consumer, rather than by
+// internal/entry: List asks for exactly what it needs (enough to
+// track it in the list, get its path, and clean it up), and
+// entry.TextEntry/entry.HexEntry satisfy this structurally without
+// internal/entry needing to know or declare any such contract exists.
+// "Accept interfaces, return structs" — this is the accept-interfaces
+// half; internal/entry's Open/Reload are the return-structs half.
+type entryHandle interface {
+	// Path is the entry's resolved absolute path — List's own dedup-by-
+	// path lookups (Open, IsOpen) and residency tracking need exactly
+	// this much and nothing more about what the entry actually holds.
+	Path() string
+	// Close cancels any in-flight background work (a find/hex-find
+	// scan) an entry might be holding — called by List.Remove so a
+	// removed entry doesn't leak a still-running goroutine.
+	Close()
+	// Evict frees resident content if any is held — a no-op for
+	// HexEntry and a TierPlainText TextEntry, which never hold full
+	// content resident to begin with. Called by List's residency LRU
+	// policy (ResidentCap) without it needing to know which entries are
+	// actually eviction-eligible.
+	Evict()
+}
 
 // Outcome is the result of an open attempt (SPEC.md §2.2).
 type Outcome int
@@ -31,13 +59,13 @@ const (
 type OpenResult struct {
 	Outcome Outcome
 	Message string
-	Entry   entry.Entry
+	Entry   entryHandle
 }
 
 // List is the ordered open-files list plus which entry, if any, is
 // currently displayed.
 type List struct {
-	Entries   []entry.Entry
+	Entries   []entryHandle
 	Displayed int // index into Entries, or -1 if none
 
 	// resident tracks which entries currently hold resident content
@@ -47,7 +75,7 @@ type List struct {
 	// first, capped at ResidentCap (below) — the LRU eviction
 	// bookkeeping behind the memory-footprint bound entry.TextEntry's
 	// own SyncContent/Evict implement.
-	resident []entry.Entry
+	resident []entryHandle
 }
 
 // ResidentCap bounds how many entries' fully-decoded/highlighted content
@@ -70,14 +98,14 @@ const ResidentCap = 4
 // displayed. Called every time an entry becomes displayed — newly
 // opened, reused by path, or switched to — so the resident set always
 // reflects actual recent viewing, not list order or open order.
-func (l *List) touchResident(e entry.Entry) {
+func (l *List) touchResident(e entryHandle) {
 	for i, r := range l.resident {
 		if r == e {
 			l.resident = append(l.resident[:i], l.resident[i+1:]...)
 			break
 		}
 	}
-	l.resident = append([]entry.Entry{e}, l.resident...)
+	l.resident = append([]entryHandle{e}, l.resident...)
 	for len(l.resident) > ResidentCap {
 		last := len(l.resident) - 1
 		l.resident[last].Evict()
@@ -90,7 +118,7 @@ func (l *List) touchResident(e entry.Entry) {
 // nothing left to evict content *from*, but the stale reference must not
 // be left in l.resident or it would keep e (and its content) reachable,
 // and thus never collected, for as long as the list itself lives.
-func (l *List) forgetResident(e entry.Entry) {
+func (l *List) forgetResident(e entryHandle) {
 	for i, r := range l.resident {
 		if r == e {
 			l.resident = append(l.resident[:i], l.resident[i+1:]...)
@@ -105,7 +133,7 @@ func New() *List {
 }
 
 // DisplayedEntry returns the currently-displayed entry, or nil.
-func (l *List) DisplayedEntry() entry.Entry {
+func (l *List) DisplayedEntry() entryHandle {
 	if l.Displayed < 0 || l.Displayed >= len(l.Entries) {
 		return nil
 	}
@@ -130,10 +158,11 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 		}
 	}
 
-	e, err := entry.Open(path, capBytes)
+	raw, err := entry.Open(path, capBytes)
 	if err != nil {
 		return OpenResult{Outcome: Failed, Message: preview.ErrText(err)}
 	}
+	e := raw.(entryHandle)
 
 	l.Entries = append(l.Entries, e)
 	l.Displayed = len(l.Entries) - 1
@@ -158,10 +187,11 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 func (l *List) Reload(capBytes int64) []string {
 	var reloaded []string
 	for i, e := range l.Entries {
-		updated, changed, err := entry.Reload(e, capBytes)
+		raw, changed, err := entry.Reload(e, capBytes)
 		if err != nil || !changed {
 			continue
 		}
+		updated := raw.(entryHandle)
 		l.Entries[i] = updated
 		reloaded = append(reloaded, filepath.Base(updated.Path()))
 	}

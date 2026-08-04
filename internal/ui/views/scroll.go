@@ -74,7 +74,7 @@ func isHexOffsetRune(r rune) bool {
 // the direction delta indicates: negative means already at the top,
 // positive means already at the bottom. A no-op for delta == 0, which
 // neither Scroll implementation ever actually passes.
-func (v *Preview) bumpEdge(e entry.Entry, delta int) {
+func (v *Preview) bumpEdge(e fileEntry, delta int) {
 	switch {
 	case delta < 0:
 		v.TopBumpPath = e.Path()
@@ -93,7 +93,7 @@ func (v *Preview) bumpEdge(e entry.Entry, delta int) {
 // itself. A no-op while e's content isn't ready yet (goto-line's own
 // gating already prevents this for the goto-line prompt itself, SPEC.md
 // §2.1; this guards the same for a jump arriving some other way).
-func (v *Preview) ScrollToLine(e entry.Entry, n int) {
+func (v *Preview) ScrollToLine(e fileEntry, n int) {
 	te, ok := e.(*entry.TextEntry)
 	if !ok || !te.ContentReady() {
 		return

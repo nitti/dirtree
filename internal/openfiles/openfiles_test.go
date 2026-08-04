@@ -26,7 +26,7 @@ func newListWithN(n int) *List {
 // content has been pulled into Lines/Segs (SyncContent), for tests that
 // need to observe a TierHighlighted entry's actual content rather than
 // just that Open/Reload started the background pass.
-func waitSynced(t *testing.T, e entry.Entry) {
+func waitSynced(t *testing.T, e entryHandle) {
 	t.Helper()
 	te := e.(*entry.TextEntry)
 	deadline := time.Now().Add(2 * time.Second)

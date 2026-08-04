@@ -37,8 +37,8 @@ const (
 
 // Preview holds the primary preview view's own state (SPEC.md §2.1,
 // §2.4): the goto-line prompt and in-file find prompt. The displayed
-// entry's scroll position and wrapped-row cache live on the
-// entry.Entry itself instead, since they're tracked per open file
+// entry's scroll position and wrapped-row cache live on the concrete
+// *entry.TextEntry itself instead, since they're tracked per open file
 // rather than per view.
 type Preview struct {
 	*Shared

@@ -516,7 +516,7 @@ func TestDrawFileTitleBarBoldsPath(t *testing.T) {
 // prompt or scrolls before this point either (contentReady/gotoLineBlocked
 // gate on the same signal), so tests exercising rendering/scrolling
 // against a freshly-opened entry wait for it the same way.
-func waitEntryReady(t *testing.T, e entry.Entry) {
+func waitEntryReady(t *testing.T, e fileEntry) {
 	t.Helper()
 	te, ok := e.(*entry.TextEntry)
 	if !ok {
