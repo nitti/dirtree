@@ -344,6 +344,13 @@ Wherever these tests reference "the tree," they mean the pure navigation/model l
 - The quitting variant renders immediately on the very first `q` event (`TestDrawPreviewHeaderShowsQuitVariantOnFirstQEvent`), and stays rendered across a substantial-but-ordinary gap since the last `q` event — well under `quitHoldReleaseGap`, so the gesture is still considered held — rather than flickering off between repeat events on a threshold of its own (`TestDrawPreviewHeaderStaysVisibleAcrossOrdinaryRepeatGap`, both `internal/ui/render_test.go`): the header tracks `quitHoldStart` directly, the same state `checkQuitHoldRelease` maintains, rather than computing its own independent recency check.
 - The primary preview view's header legend's priority-1 quit entry reads `[HOLD q] quit`, and the legend's overall left-to-right order is unaffected by the wording change (`TestPreviewLegendOrder`, `internal/ui/render_test.go`; `TestLegendTier1FitsMinTerminalWidth` confirms the longer text still fits the minimum terminal width, §6.4).
 
+## Main-loop tick cadence (§6.2)
+
+- With nothing time-driven on screen and the background index done, the main loop ticks at the idle rate.
+- The main loop ticks at the animation rate while any one of these holds: the index is still building, a toast is showing, or a hold-to-quit gesture is in progress.
+- A view's flash makes the loop tick at the animation rate only while that view is the one currently showing, and only until the flash's duration has elapsed (checked with synthetic timestamps, for each of the preview, browser, quick open, and content search views).
+- Content search ticks at the animation rate while a scan is in flight. The preview does so while its displayed entry has an in-file find scan running.
+
 ## Manual / rendering-layer verification (not unit-testable)
 
 The following require a real terminal (ideally inside a multiplexer like Zellij or tmux) and should be explicitly confirmed, and their status stated, whenever a change touching them is reported complete:
