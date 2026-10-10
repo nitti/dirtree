@@ -512,6 +512,8 @@ func (v *Preview) drawHexFileTitleBar(x0, y0, w int, interactive bool, e *openfi
 	switch {
 	case interactive && v.HexFindPromptOpen:
 		text = canvas.LegendText(w, "/"+v.HexFindInput, legend(hexFindPromptLegend))
+	case interactive && v.GotoPromptOpen:
+		text = canvas.LegendText(w, "goto offset: 0x"+v.GotoInput, legend(hexGotoLegend))
 	case !interactive:
 		text = left
 	case e.HexFindScan != nil:
@@ -633,9 +635,7 @@ func (v *Preview) drawHexRow(x0, y, rowWidth, gutterWidth, bytesPerRow int, rowO
 // the (x0, y0)-(x0+w, y0+h) rectangle: the offset gutter, hex-byte grid,
 // and ASCII column for the currently-displayed TierBinary entry's
 // viewport, reading only the bytes actually needed for it (preview.
-// ReadRange) rather than holding the file's content resident. The
-// goto-offset prompt, when open, occupies the bottom row, the same as
-// drawContent's goto-line prompt row.
+// ReadRange) rather than holding the file's content resident.
 func (v *Preview) drawHexContent(x0, y0, w, h int) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
@@ -645,9 +645,6 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 	n := bytesPerRowFor(w, gw)
 
 	viewportHeight := h
-	if v.GotoPromptOpen {
-		viewportHeight--
-	}
 	if viewportHeight < 0 {
 		viewportHeight = 0
 	}
@@ -682,13 +679,5 @@ func (v *Preview) drawHexContent(x0, y0, w, h int) {
 		// same row twice and cancel itself back out (drawContent, above,
 		// guards the same case for the text tiers).
 		v.Canvas.FlashRow(x0, lastDrawnY, w)
-	}
-
-	if v.GotoPromptOpen {
-		gotoRowLegend := hexGotoLegend
-		if v.HelpVisible {
-			gotoRowLegend = nil
-		}
-		v.Canvas.DrawText(x0, y0+h-1, w, canvas.LegendText(w, "goto offset: 0x"+v.GotoInput, gotoRowLegend), canvas.StyleNormal)
 	}
 }
