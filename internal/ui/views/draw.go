@@ -91,10 +91,10 @@ var findLegendNoMatches = []canvas.LegendEntry{
 // read-only, accepting neither scrolling nor goto-line — in which case
 // file-specific action keys like goto-line don't apply and their
 // legend is omitted rather than advertising a key that won't do
-// anything right now. The goto-line prompt, when open, occupies the
-// bottom row — reachable only when this is the primary (non-overlaid)
-// view, since no overlay leaves the goto-line key handled while this is
-// showing.
+// anything right now. The goto-line prompt, when open, replaces the
+// file title bar's content the same way the find prompt does —
+// reachable only when this is the primary (non-overlaid) view, since no
+// overlay leaves the goto-line key handled while this is showing.
 func (v *Preview) Draw(x0, y0, w, h int, interactive bool) {
 	e := v.Files.DisplayedEntry()
 	v.syncFindScan(e)
@@ -109,7 +109,7 @@ func (v *Preview) Draw(x0, y0, w, h int, interactive bool) {
 
 // CurrentFileLegend returns the keybinding legend the file title bar
 // is currently showing, mirroring drawFileTitleBar's own state
-// precedence exactly (find prompt, an async plain-text-tier scan, an
+// precedence exactly (find/goto prompt, an async plain-text-tier scan, an
 // active find with or without matches, copy mode, else idle) — for the
 // help overlay (§5.4) to reuse. Returns ok=false when there is no
 // displayed entry, or when the title bar is showing a transient state
@@ -124,6 +124,8 @@ func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
 		switch {
 		case v.HexFindPromptOpen:
 			return hexFindPromptLegend, true
+		case v.GotoPromptOpen:
+			return hexGotoLegend, true
 		case e.HexFindScan != nil:
 			return hexFindLegendNoMatches, true
 		case e.HexFindQuery != "" && len(e.HexFindMatches) > 0:
@@ -138,6 +140,8 @@ func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
 	switch {
 	case v.FindPromptOpen:
 		return findPromptLegend, true
+	case v.GotoPromptOpen:
+		return gotoLegend, true
 	case gotoBlocked:
 		return nil, false
 	case e.FindScan != nil:
@@ -151,16 +155,6 @@ func (v *Preview) CurrentFileLegend() (entries []canvas.LegendEntry, ok bool) {
 	default:
 		return fileLegend, true
 	}
-}
-
-// GotoPromptLegend returns the goto-line prompt's own legend while
-// it's open, for the help overlay (§5.4) to reuse — it renders on its
-// own bottom row (drawContent), independent of the file title bar.
-func (v *Preview) GotoPromptLegend() (entries []canvas.LegendEntry, ok bool) {
-	if !v.GotoPromptOpen {
-		return nil, false
-	}
-	return gotoLegend, true
 }
 
 // drawFileTitleBar renders the currently-displayed file's own title bar
@@ -212,6 +206,8 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 	switch {
 	case interactive && v.FindPromptOpen:
 		text = canvas.LegendText(w, "/"+v.FindInput, legend(findPromptLegend))
+	case interactive && v.GotoPromptOpen:
+		text = canvas.LegendText(w, "goto line: "+v.GotoInput, legend(gotoLegend))
 	case !interactive:
 		text = left
 	case gotoBlocked:
@@ -242,7 +238,7 @@ func (v *Preview) drawFileTitleBar(x0, y0, w int, interactive bool) int {
 
 // boldPathInFileTitleBar re-draws path (the displayed entry's own
 // root-relative path) in style.Bold(true), if it appears in text — it
-// may not: the find prompt's own input replaces the path in this row
+// may not: the find/goto prompt's own input replaces the path in this row
 // while open, and left-hand content (including the path) can be
 // dropped entirely for width under the fit/drop rule (SPEC.md §5.2),
 // in either of which cases this is a no-op rather than styling the
@@ -320,8 +316,7 @@ func streamBuildingVisible(elapsed, sinceDone time.Duration, done bool, threshol
 // drawContent renders the primary preview view's content (SPEC.md
 // §2.1) into the (x0, y0)-(x0+w, y0+h) rectangle: a line-number gutter
 // plus wrapped, highlighted rows for the currently-displayed entry, or
-// an explanatory empty-state message if none is displayed. The
-// goto-line prompt, when open, occupies the bottom row.
+// an explanatory empty-state message if none is displayed.
 func (v *Preview) drawContent(x0, y0, w, h int) {
 	e := v.Files.DisplayedEntry()
 	if e == nil {
@@ -353,9 +348,6 @@ func (v *Preview) drawContent(x0, y0, w, h int) {
 	}
 
 	viewportHeight := h
-	if v.GotoPromptOpen {
-		viewportHeight--
-	}
 	digits := gw - 2
 
 	topFlash := e.Path == v.TopBumpPath && time.Since(v.TopBumpFlashStart) < canvas.FlashDuration
@@ -388,14 +380,6 @@ func (v *Preview) drawContent(x0, y0, w, h int) {
 		// simultaneous top+bottom flash doesn't reverse the same row
 		// twice and cancel itself back out.
 		v.Canvas.FlashRow(x0, lastDrawnY, w)
-	}
-
-	if v.GotoPromptOpen {
-		gotoRowLegend := gotoLegend
-		if v.HelpVisible {
-			gotoRowLegend = nil
-		}
-		v.Canvas.DrawText(x0, y0+h-1, w, canvas.LegendText(w, "goto line: "+v.GotoInput, gotoRowLegend), canvas.StyleNormal)
 	}
 }
 
