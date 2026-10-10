@@ -273,7 +273,7 @@ func shellAbbreviate(path string) string {
 func (a *App) drawPreviewHeader(w int) {
 	// The quitting variant shows for exactly as long as quitHoldStart is
 	// non-zero (SPEC.md §5.2) — the same "is `q` still down" state
-	// checkQuitHoldRelease itself maintains via quitHoldReleaseGap, not a
+	// checkQuitHoldRelease itself maintains via quitHoldReleaseGapFor, not a
 	// separate, shorter threshold computed independently here. An earlier
 	// attempt at a shorter, visual-only recency check made the header
 	// flicker throughout an entire genuine hold whenever the terminal's
