@@ -30,7 +30,20 @@ import (
 )
 
 const (
+	// resizePollInterval and animationFrameInterval are the main loop's
+	// two tick cadences (SPEC.md §6.2). Key events always redraw
+	// immediately, so neither affects input latency; the tick only
+	// covers what changes with no input. Idle, that's terminal
+	// resizes the multiplexer didn't announce, for which 100ms reads as
+	// prompt. While anything on screen is animating (App.animating),
+	// the loop ticks at ~30fps instead, so fades and spinners advance
+	// smoothly and expiring flashes clear on time. That rate is plenty
+	// for a cell grid whose fades step one character at a time, and
+	// terminal emulators and multiplexers batch output well below a
+	// display's refresh rate anyway. Animations are elapsed-time-driven
+	// (§5.3), so this changes their smoothness, never their speed.
 	resizePollInterval        = 100 * time.Millisecond
+	animationFrameInterval    = 33 * time.Millisecond
 	spinnerThreshold          = 250 * time.Millisecond
 	spinnerMinDisplayDuration = 1 * time.Second
 	spinnerFPS                = 10.0
@@ -75,9 +88,10 @@ const (
 	// flickers the header (if that mistake is visual-only) or silently
 	// resets the gesture's elapsed-time progress (if it also touches
 	// quitHoldStart) — both are worse than a release taking up to this
-	// long to visibly register. Checked on the existing resize-poll ticker
-	// (resizePollInterval) rather than a dedicated timer — imprecision on
-	// the order of one poll tick is negligible against a threshold this
+	// long to visibly register. Checked on the main loop's ticker, which
+	// runs at animationFrameInterval for the whole hold (App.animating),
+	// rather than a dedicated timer — imprecision on
+	// the order of one tick is negligible against a threshold this
 	// size. 600ms is empirically confirmed against real key-repeat
 	// behavior, not just a conservative guess: an interim attempt at
 	// 300ms measurably reintroduced the header-flicker failure mode this
@@ -142,6 +156,11 @@ type App struct {
 	Preview views.Preview
 
 	badgeSkip spinner.MinDurationSkip
+
+	// idxWasDone is whether the background index was done as of the
+	// previous tick, so Run refreshes quick open's matches once on the
+	// index finishing rather than re-matching the whole index every tick.
+	idxWasDone bool
 
 	// quitHoldStart is when the currently-in-progress hold-to-quit
 	// gesture (SPEC.md §5.2) began holding `q`, zero when no hold is in
@@ -244,6 +263,10 @@ func (a *App) handleFSChange() {
 	newlyErrored := tree.RefreshTree(a.root, a.rootPath, a.ignorer)
 	a.Browser.Selected = tree.NearestSurviving(a.Browser.Selected)
 	a.idx.Rebuild(a.rootPath, a.ignorer)
+	// Rebuild has just reset the index to not-done. Record that here
+	// rather than waiting for the next tick to observe it: a fast
+	// rebuild could finish before then, and Run would miss the edge.
+	a.idxWasDone = false
 	a.badgeSkip.Reset()
 	a.syncWatches()
 	if len(newlyErrored) > 0 {
@@ -324,7 +347,8 @@ func (a *App) Run() error {
 	// layout can be recomputed and redrawn on a short periodic cadence
 	// even without an explicit resize signal (the primary target,
 	// terminal multiplexers, don't reliably deliver one).
-	ticker := time.NewTicker(resizePollInterval)
+	tickInterval := resizePollInterval
+	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
 
 	var watchEvents <-chan struct{}
@@ -374,10 +398,14 @@ func (a *App) Run() error {
 			a.checkQuitHoldRelease()
 			// Also catches the background index (re)build finishing
 			// while quick open is open with an unchanged query, so
-			// matches don't go stale until the next keystroke.
-			if a.overlay == views.OverlayQuickOpen {
+			// matches don't go stale until the next keystroke. Only on
+			// the not-done-to-done edge: re-matching an unchanged
+			// query against an unchanged index finds nothing new.
+			_, idxDone := a.idx.Snapshot()
+			if idxDone && !a.idxWasDone && a.overlay == views.OverlayQuickOpen {
 				a.QuickOpen.RefreshMatches()
 			}
+			a.idxWasDone = idxDone
 			// Same idea for content search (SPEC.md §9.1): a query typed
 			// before the index finished is held pending (Results stays
 			// nil) until it's done, then run once here rather than on
@@ -389,8 +417,68 @@ func (a *App) Run() error {
 			}
 			a.draw()
 		}
+		if want := a.tickInterval(time.Now()); want != tickInterval {
+			tickInterval = want
+			ticker.Reset(tickInterval)
+		}
 	}
 	return nil
+}
+
+// tickInterval picks the main loop's tick cadence for the frame just
+// drawn (SPEC.md §6.2): animationFrameInterval while anything on screen
+// is animating, resizePollInterval otherwise. Evaluated after each
+// draw, so the frame that clears an expired animation is still drawn at
+// the fast cadence and only the ticks after it slow down.
+func (a *App) tickInterval(now time.Time) time.Duration {
+	if a.animating(now) {
+		return animationFrameInterval
+	}
+	return resizePollInterval
+}
+
+// animating reports whether anything currently on screen is
+// time-driven (SPEC.md §5.3): the hold-to-quit fade (whose release
+// detection also gets more responsive at the faster tick), a toast, the
+// corner badge, or the active view's own flashes, spinners, and pending
+// background results (each view's Animating method). The badge counts
+// from the moment the index starts building, not just once its spinner
+// is visible, so the loop is already ticking fast when the spinner's
+// perceptibility threshold passes.
+func (a *App) animating(now time.Time) bool {
+	if !a.quitHoldStart.IsZero() || a.toastMessage != "" {
+		return true
+	}
+	if a.badgeAnimating() {
+		return true
+	}
+	switch a.overlay {
+	case views.OverlayBrowser:
+		return a.Browser.Animating(now)
+	case views.OverlayQuickOpen:
+		return a.QuickOpen.Animating(now)
+	case views.OverlaySearch:
+		return a.Search.Animating(now)
+	default:
+		// OverlayNone and OverlayOpenFiles both draw the preview.
+		return a.Preview.Animating(now)
+	}
+}
+
+// badgeAnimating reports whether the corner badge (SPEC.md §5.2) is
+// either waiting on the index or still showing, using the same
+// decision drawBadge does.
+func (a *App) badgeAnimating() bool {
+	sinceDone, done := a.idx.SinceDone()
+	if !done {
+		return true
+	}
+	_, _, ok := spinner.BadgeDecision(
+		a.idx.Elapsed(), sinceDone, done, spinner.DebugAlwaysShow, a.badgeSkip,
+		spinnerThreshold, spinnerMinDisplayDuration, toastDisplayDuration, toastFadeDuration,
+		spinnerFPS, completionMessage,
+	)
+	return ok
 }
 
 // helpToggleKey is the sole key that opens/closes the help overlay
