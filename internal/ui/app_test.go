@@ -232,29 +232,39 @@ func simulateQHold(a *App, end time.Time, initialDelay, interval time.Duration, 
 	}
 }
 
+// Repeat timing measured on the reference setup (Ghostty inside Zellij,
+// macOS key-repeat settings): a 499ms initial delay, then repeats every
+// ~83ms with ~3ms of jitter.
+const (
+	refInitialDelay   = 499 * time.Millisecond
+	refRepeatInterval = 83 * time.Millisecond
+)
+
 // TestQuitHoldReleaseGapFor guards the adaptive release threshold
-// (SPEC.md §5.2): the generous fixed gap until two steady repeat
-// intervals have been sampled, then a multiple of the largest one,
+// (SPEC.md §5.2): generous before the first repeat, then a multiple of
+// the measured repeat interval (this hold's, else the previous hold's),
 // clamped between the floor and the generous gap.
 func TestQuitHoldReleaseGapFor(t *testing.T) {
 	tests := []struct {
-		name        string
-		events      int
-		maxInterval time.Duration
-		want        time.Duration
+		name             string
+		events           int
+		holdInterval     time.Duration
+		previousInterval time.Duration
+		want             time.Duration
 	}{
 		{name: "press only", events: 1, want: quitHoldReleaseGap},
-		{name: "first repeat only, still inside initial delay", events: 2, want: quitHoldReleaseGap},
-		{name: "one steady sample is not enough", events: 3, maxInterval: 90 * time.Millisecond, want: quitHoldReleaseGap},
-		{name: "typical repeat rate", events: 4, maxInterval: 90 * time.Millisecond, want: 270 * time.Millisecond},
-		{name: "fast repeat rate hits the floor", events: 10, maxInterval: 30 * time.Millisecond, want: quitHoldMinReleaseGap},
-		{name: "bunched intervals near zero hit the floor", events: 10, maxInterval: time.Millisecond, want: quitHoldMinReleaseGap},
-		{name: "slow repeat rate is capped", events: 10, maxInterval: 300 * time.Millisecond, want: quitHoldReleaseGap},
+		{name: "press only ignores previous hold", events: 1, previousInterval: refRepeatInterval, want: quitHoldReleaseGap},
+		{name: "first repeat, nothing measured yet", events: 2, want: quitHoldReleaseGap},
+		{name: "first repeat bridges with previous hold", events: 2, previousInterval: refRepeatInterval, want: 166 * time.Millisecond},
+		{name: "one steady sample is enough", events: 3, holdInterval: refRepeatInterval, want: 166 * time.Millisecond},
+		{name: "this hold's sample wins over previous", events: 3, holdInterval: 100 * time.Millisecond, previousInterval: refRepeatInterval, want: 200 * time.Millisecond},
+		{name: "fast repeat rate hits the floor", events: 10, holdInterval: 30 * time.Millisecond, want: quitHoldMinReleaseGap},
+		{name: "slow repeat rate is capped", events: 10, holdInterval: 400 * time.Millisecond, want: quitHoldReleaseGap},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := quitHoldReleaseGapFor(tt.events, tt.maxInterval); got != tt.want {
-				t.Errorf("quitHoldReleaseGapFor(%d, %v) = %v, want %v", tt.events, tt.maxInterval, got, tt.want)
+			if got := quitHoldReleaseGapFor(tt.events, tt.holdInterval, tt.previousInterval); got != tt.want {
+				t.Errorf("quitHoldReleaseGapFor(%d, %v, %v) = %v, want %v", tt.events, tt.holdInterval, tt.previousInterval, got, tt.want)
 			}
 		})
 	}
@@ -263,12 +273,12 @@ func TestQuitHoldReleaseGapFor(t *testing.T) {
 // TestProgressQuitHoldExcludesInitialDelayFromInterval guards that the
 // press-to-first-repeat gap, the terminal's initial repeat delay, never
 // counts as a steady interval: if it did, the adaptive threshold would
-// always be inflated back toward the generous gap.
+// always be inflated back to the generous gap.
 func TestProgressQuitHoldExcludesInitialDelayFromInterval(t *testing.T) {
 	a := &App{}
-	simulateQHold(a, time.Now(), 500*time.Millisecond, 90*time.Millisecond, 3)
-	if a.quitHoldMaxInterval != 90*time.Millisecond {
-		t.Fatalf("quitHoldMaxInterval = %v, want 90ms (the steady interval, not the 500ms initial delay)", a.quitHoldMaxInterval)
+	simulateQHold(a, time.Now(), refInitialDelay, refRepeatInterval, 3)
+	if a.quitHoldMaxInterval != refRepeatInterval {
+		t.Fatalf("quitHoldMaxInterval = %v, want %v (the steady interval, not the initial delay)", a.quitHoldMaxInterval, refRepeatInterval)
 	}
 }
 
@@ -287,13 +297,28 @@ func TestProgressQuitHoldKeepsLargestInterval(t *testing.T) {
 	}
 }
 
+// TestProgressQuitHoldSkipsBunchedIntervals guards that events arriving
+// bunched together (e.g. flushed at once through a multiplexer) aren't
+// mistaken for a near-zero repeat rate, which would shrink the
+// threshold to the floor on a terminal that actually repeats slowly.
+func TestProgressQuitHoldSkipsBunchedIntervals(t *testing.T) {
+	a := &App{}
+	start := time.Now().Add(-time.Second)
+	a.progressQuitHold(start)
+	a.progressQuitHold(start.Add(refInitialDelay))
+	a.progressQuitHold(start.Add(refInitialDelay + 2*time.Millisecond))
+	if a.quitHoldMaxInterval != 0 {
+		t.Fatalf("quitHoldMaxInterval = %v after a bunched 2ms interval, want it left unsampled", a.quitHoldMaxInterval)
+	}
+}
+
 // TestCheckQuitHoldReleaseUsesAdaptiveGap guards the user-visible point
-// of the adaptive threshold: once repeats are flowing steadily, a
-// release registers after a few repeat intervals rather than the full
-// generous gap, both for an unconfirmed hold (reset) and a confirmed one
-// (quit), while a gap shorter than that threshold leaves the hold alone.
+// of the adaptive threshold at the reference repeat rate (threshold 2 *
+// 83ms = 166ms): once a steady interval is known, a release registers
+// after a couple of repeat intervals rather than the full generous gap,
+// both for an unconfirmed hold (reset) and a confirmed one (quit), while
+// a shorter gap leaves the hold alone.
 func TestCheckQuitHoldReleaseUsesAdaptiveGap(t *testing.T) {
-	const interval = 90 * time.Millisecond // threshold: 3 * 90ms = 270ms
 	tests := []struct {
 		name         string
 		sinceLastKey time.Duration
@@ -301,15 +326,15 @@ func TestCheckQuitHoldReleaseUsesAdaptiveGap(t *testing.T) {
 		wantHeld     bool
 		wantQuit     bool
 	}{
-		{name: "gap under threshold keeps hold", sinceLastKey: 200 * time.Millisecond, wantHeld: true},
-		{name: "gap over threshold resets hold", sinceLastKey: 300 * time.Millisecond, wantHeld: false},
-		{name: "confirmed hold under threshold doesn't quit", sinceLastKey: 200 * time.Millisecond, confirmed: true, wantHeld: true},
-		{name: "confirmed hold over threshold quits", sinceLastKey: 300 * time.Millisecond, confirmed: true, wantHeld: true, wantQuit: true},
+		{name: "gap under threshold keeps hold", sinceLastKey: 120 * time.Millisecond, wantHeld: true},
+		{name: "gap over threshold resets hold", sinceLastKey: 200 * time.Millisecond, wantHeld: false},
+		{name: "confirmed hold under threshold doesn't quit", sinceLastKey: 120 * time.Millisecond, confirmed: true, wantHeld: true},
+		{name: "confirmed hold over threshold quits", sinceLastKey: 200 * time.Millisecond, confirmed: true, wantHeld: true, wantQuit: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			a := &App{}
-			simulateQHold(a, time.Now().Add(-tt.sinceLastKey), 400*time.Millisecond, interval, 3)
+			simulateQHold(a, time.Now().Add(-tt.sinceLastKey), refInitialDelay, refRepeatInterval, 1)
 			a.quitConfirmed = tt.confirmed
 			a.checkQuitHoldRelease()
 			if held := !a.quitHoldStart.IsZero(); held != tt.wantHeld {
@@ -322,16 +347,48 @@ func TestCheckQuitHoldReleaseUsesAdaptiveGap(t *testing.T) {
 	}
 }
 
-// TestResetQuitHoldClearsRepeatMeasurement guards that a new hold
-// measures its own repeat rate from scratch: a previous hold's samples
-// must not carry over and shorten the next hold's threshold before it
-// has seen any repeats of its own.
-func TestResetQuitHoldClearsRepeatMeasurement(t *testing.T) {
+// TestCancelJustAfterFirstRepeat guards the case that motivated
+// carrying the repeat interval between holds: releasing mid-fade lands
+// right around the first repeat, before this hold has a steady sample of
+// its own. On a session's first hold that still waits the generous gap
+// (nothing has been measured yet); on a later hold, the previous hold's
+// interval lets the release register just as quickly as later in a hold.
+func TestCancelJustAfterFirstRepeat(t *testing.T) {
+	const sinceFirstRepeat = 200 * time.Millisecond
+
+	first := &App{}
+	simulateQHold(first, time.Now().Add(-sinceFirstRepeat), refInitialDelay, refRepeatInterval, 0)
+	first.checkQuitHoldRelease()
+	if first.quitHoldStart.IsZero() {
+		t.Fatal("first hold of the session reset 200ms after its first repeat; want the generous gap, since no interval is known yet")
+	}
+
+	later := &App{}
+	simulateQHold(later, time.Now().Add(-5*time.Second), refInitialDelay, refRepeatInterval, 5)
+	later.resetQuitHold()
+	simulateQHold(later, time.Now().Add(-sinceFirstRepeat), refInitialDelay, refRepeatInterval, 0)
+	later.checkQuitHoldRelease()
+	if !later.quitHoldStart.IsZero() {
+		t.Fatal("later hold still held 200ms after its first repeat; want the previous hold's interval to set a tight threshold")
+	}
+}
+
+// TestResetQuitHoldKeepsOnlyRepeatInterval guards what a reset clears:
+// the hold's own progress and samples, but not the measured repeat
+// interval carried to the next hold, and never the pre-repeat window's
+// generous gap, which no measurement can safely shorten.
+func TestResetQuitHoldKeepsOnlyRepeatInterval(t *testing.T) {
 	a := &App{}
-	simulateQHold(a, time.Now(), 400*time.Millisecond, 90*time.Millisecond, 3)
+	simulateQHold(a, time.Now(), refInitialDelay, refRepeatInterval, 3)
 	a.resetQuitHold()
+	if a.quitHoldEvents != 0 || a.quitHoldMaxInterval != 0 {
+		t.Fatalf("after reset: events = %d, hold interval = %v; want both cleared", a.quitHoldEvents, a.quitHoldMaxInterval)
+	}
+	if a.quitRepeatInterval != refRepeatInterval {
+		t.Fatalf("after reset: carried interval = %v, want %v kept", a.quitRepeatInterval, refRepeatInterval)
+	}
 	a.progressQuitHold(time.Now())
-	if got := quitHoldReleaseGapFor(a.quitHoldEvents, a.quitHoldMaxInterval); got != quitHoldReleaseGap {
-		t.Fatalf("release gap after reset and a fresh press = %v, want the generous %v", got, quitHoldReleaseGap)
+	if got := quitHoldReleaseGapFor(a.quitHoldEvents, a.quitHoldMaxInterval, a.quitRepeatInterval); got != quitHoldReleaseGap {
+		t.Fatalf("release gap after a fresh press = %v, want the generous %v until the first repeat", got, quitHoldReleaseGap)
 	}
 }

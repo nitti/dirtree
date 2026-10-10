@@ -81,19 +81,30 @@ const (
 	// restarts the hold, which a 300ms fixed threshold measurably did on
 	// real hardware.
 	//
-	// So the threshold adapts to what this hold has actually shown
-	// (quitHoldReleaseGapFor). Until two steady repeat-to-repeat intervals
-	// have been observed, it stays at quitHoldReleaseGap, the 600ms value
-	// empirically confirmed safe across the initial delay. After that it
-	// becomes quitHoldReleaseFactor times the largest steady interval seen
-	// so far, floored at quitHoldMinReleaseGap and capped at
-	// quitHoldReleaseGap. Measuring rather than guessing is what makes the
-	// tight threshold safe on a slow-repeating terminal, and using the
-	// largest interval means jitter or bunched delivery (e.g. through a
-	// multiplexer) can only lengthen it. The floor keeps an unusually
-	// fast repeat rate, or a burst whose intervals measure near zero,
-	// from shrinking the threshold to something a single event-loop
-	// hiccup could exceed.
+	// So the threshold adapts to the repeat rate actually measured
+	// (quitHoldReleaseGapFor). Before the first repeat arrives it is
+	// quitHoldReleaseGap, the 600ms value empirically confirmed safe
+	// across the initial delay: until then a held key and a released one
+	// look identical, so nothing shorter is safe. Once a steady
+	// repeat-to-repeat interval is known, it becomes quitHoldReleaseFactor
+	// times that interval, floored at quitHoldMinReleaseGap and capped at
+	// quitHoldReleaseGap. The interval is this hold's largest sample once
+	// it has one (from its second repeat on); between the first and
+	// second repeat it falls back to the previous hold's measurement,
+	// since the repeat rate is an OS setting that doesn't change between
+	// holds. That bridge matters because releasing mid-fade lands right
+	// around the first repeat (measured on the reference setup, Ghostty
+	// in Zellij: 499ms initial delay, then 83ms ±3ms repeats), and
+	// without it that release waited the full 600ms after the first repeat.
+	//
+	// Measuring rather than guessing is what makes the tight threshold
+	// safe on a slow-repeating terminal, and using the largest interval
+	// means jitter can only lengthen it. Intervals under
+	// quitHoldMinRepeatSample are events that arrived bunched together
+	// (e.g. flushed at once through a multiplexer), not a real repeat
+	// rate, so they aren't sampled. The floor keeps an unusually fast
+	// repeat rate from shrinking the threshold to something a single
+	// event-loop hiccup could exceed.
 	//
 	// This one threshold is the single source of truth for "is `q` still
 	// down": checkQuitHoldRelease resets the hold (or, once confirmed,
@@ -104,9 +115,10 @@ const (
 	// loop's ticker, which runs at animationFrameInterval for the whole
 	// hold (App.animating), so detection lags the threshold by at most
 	// one ~33ms tick.
-	quitHoldReleaseGap    = 600 * time.Millisecond
-	quitHoldReleaseFactor = 3
-	quitHoldMinReleaseGap = 150 * time.Millisecond
+	quitHoldReleaseGap      = 600 * time.Millisecond
+	quitHoldReleaseFactor   = 2
+	quitHoldMinReleaseGap   = 150 * time.Millisecond
+	quitHoldMinRepeatSample = 20 * time.Millisecond
 )
 
 // App holds all interactive state for a running session.
@@ -181,6 +193,9 @@ type App struct {
 	// quitHoldMaxInterval is the largest steady repeat-to-repeat interval
 	// among them (excluding the press-to-first-repeat initial delay),
 	// which quitHoldReleaseGapFor turns into the release threshold.
+	// quitRepeatInterval carries the latest hold's measurement over to
+	// the next one; unlike the other quitHold* fields, resetQuitHold
+	// leaves it alone.
 	// quitConfirmed is set once the hold has been held for the full
 	// quitHoldDuration: the app doesn't quit the instant that happens,
 	// only once a release is subsequently detected (or, resetQuitHold is
@@ -192,6 +207,7 @@ type App struct {
 	quitHoldLastKey     time.Time
 	quitHoldEvents      int
 	quitHoldMaxInterval time.Duration
+	quitRepeatInterval  time.Duration
 	quitConfirmed       bool
 
 	quit bool
@@ -602,12 +618,14 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 // spent queued behind a slow draw doesn't distort the repeat intervals
 // the release threshold is measured from. Events 1 and 2 are the press
 // and the first repeat, whose gap is the terminal's initial repeat
-// delay, so steady intervals are only sampled from event 3 on.
+// delay, so steady intervals are only sampled from event 3 on, and
+// bunched intervals under quitHoldMinRepeatSample are skipped.
 func (a *App) progressQuitHold(at time.Time) {
 	if a.quitHoldStart.IsZero() {
 		a.quitHoldStart = at
-	} else if a.quitHoldEvents >= 2 {
-		a.quitHoldMaxInterval = max(a.quitHoldMaxInterval, at.Sub(a.quitHoldLastKey))
+	} else if gap := at.Sub(a.quitHoldLastKey); a.quitHoldEvents >= 2 && gap >= quitHoldMinRepeatSample {
+		a.quitHoldMaxInterval = max(a.quitHoldMaxInterval, gap)
+		a.quitRepeatInterval = a.quitHoldMaxInterval
 	}
 	a.quitHoldEvents++
 	a.quitHoldLastKey = at
@@ -618,15 +636,22 @@ func (a *App) progressQuitHold(at time.Time) {
 
 // quitHoldReleaseGapFor returns the release threshold for a hold that
 // has seen events `q` events, the largest steady interval among them
-// being maxInterval: the generous quitHoldReleaseGap until two steady
-// intervals have been sampled (events >= 4), then quitHoldReleaseFactor
-// times maxInterval, clamped to [quitHoldMinReleaseGap,
-// quitHoldReleaseGap]. See quitHoldReleaseGap's doc comment for why.
-func quitHoldReleaseGapFor(events int, maxInterval time.Duration) time.Duration {
-	if events < 4 {
+// being holdInterval (0 if none sampled yet), with previousInterval the
+// last hold's measurement (0 if none). Before any repeat (events < 2) it
+// is the generous quitHoldReleaseGap. After that it is
+// quitHoldReleaseFactor times holdInterval, or previousInterval while
+// holdInterval is still unknown, clamped to [quitHoldMinReleaseGap,
+// quitHoldReleaseGap]; with neither known it stays generous. See
+// quitHoldReleaseGap's doc comment for why.
+func quitHoldReleaseGapFor(events int, holdInterval, previousInterval time.Duration) time.Duration {
+	interval := holdInterval
+	if interval == 0 {
+		interval = previousInterval
+	}
+	if events < 2 || interval == 0 {
 		return quitHoldReleaseGap
 	}
-	return min(max(quitHoldReleaseFactor*maxInterval, quitHoldMinReleaseGap), quitHoldReleaseGap)
+	return min(max(quitHoldReleaseFactor*interval, quitHoldMinReleaseGap), quitHoldReleaseGap)
 }
 
 // resetQuitHold cancels an in-progress, not-yet-confirmed hold-to-quit
@@ -657,7 +682,7 @@ func (a *App) checkQuitHoldRelease() {
 	if a.quitHoldStart.IsZero() {
 		return
 	}
-	if time.Since(a.quitHoldLastKey) >= quitHoldReleaseGapFor(a.quitHoldEvents, a.quitHoldMaxInterval) {
+	if time.Since(a.quitHoldLastKey) >= quitHoldReleaseGapFor(a.quitHoldEvents, a.quitHoldMaxInterval, a.quitRepeatInterval) {
 		if a.quitConfirmed {
 			a.quit = true
 			return
