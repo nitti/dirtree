@@ -97,7 +97,7 @@ func (a *App) draw() {
 // last parked it (often the top-left corner) even while a field is
 // actively receiving keystrokes.
 func (a *App) updateCursor(w, h int) {
-	x, y, ok := a.cursorPos(h)
+	x, y, ok := a.cursorPos()
 	if !ok {
 		a.shared.Canvas.HideCursor()
 		return
@@ -116,7 +116,7 @@ func (a *App) updateCursor(w, h int) {
 // layout for that field's input row exactly, so the cursor always lands
 // just past the last typed character. ok is false when no text-entry
 // field is active.
-func (a *App) cursorPos(h int) (x, y int, ok bool) {
+func (a *App) cursorPos() (x, y int, ok bool) {
 	switch a.overlay {
 	case views.OverlayQuickOpen:
 		return len([]rune("> " + a.QuickOpen.Query)), 1, true
@@ -141,7 +141,7 @@ func (a *App) cursorPos(h int) (x, y int, ok bool) {
 			if e := a.Preview.Files.DisplayedEntry(); e != nil && e.Tier == preview.TierBinary {
 				label = "goto offset: 0x"
 			}
-			return len([]rune(label + a.Preview.GotoInput)), h - 1, true
+			return len([]rune(label + a.Preview.GotoInput)), 1, true
 		}
 	}
 	return 0, 0, false

@@ -189,19 +189,18 @@ func TestHelpLegendGroupsOrderAndCount(t *testing.T) {
 		}
 	})
 
-	t.Run("primary preview, file displayed, goto prompt open: three groups", func(t *testing.T) {
+	t.Run("primary preview, file displayed, goto prompt open: goto legend in file title bar group", func(t *testing.T) {
 		a := newTestApp(t, 60, 15)
 		if res := a.files.Open(path, 1<<20); res.Outcome != openfiles.Opened {
 			t.Fatalf("Open failed: %s", res.Message)
 		}
 		a.Preview.GotoPromptOpen = true
 		groups := a.helpLegendGroups()
-		if len(groups) != 3 {
-			t.Fatalf("got %d groups, want 3 (main, file title bar, goto prompt)", len(groups))
+		if len(groups) != 2 {
+			t.Fatalf("got %d groups, want 2 (main, file title bar showing the goto prompt)", len(groups))
 		}
-		gotoLegend, ok := a.Preview.GotoPromptLegend()
-		if !ok || &groups[2][0] != &gotoLegend[0] {
-			t.Error("groups[2] should be GotoPromptLegend")
+		if groups[1][0].Text != "[return] jump" {
+			t.Errorf("groups[1] = %v, want the goto prompt's legend", groups[1])
 		}
 	})
 
