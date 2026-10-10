@@ -19,6 +19,11 @@
 - Do not perform unrelated refactors unless explicitly requested.
 - Flag assumptions and open questions early when requirements are ambiguous — the spec was written by someone who wasn't watching the implementation session, so gaps are expected and should be surfaced, not silently guessed around.
 
+## Workflow
+
+- Never commit or push directly to `main`. Make every change on a new branch and open a pull request for it, even small ones.
+- Keep one focused change per branch/PR, matching the "small, focused changes" rule above.
+
 ## Testing
 
 - Every acceptance criterion in `specs/TESTING.md` must have a corresponding automated test. Group tests by the spec section they verify (matching `specs/TESTING.md`'s own grouping) so it's easy to audit coverage against the checklist.
