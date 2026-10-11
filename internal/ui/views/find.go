@@ -120,7 +120,7 @@ func (v *Preview) performFind(query string) {
 // synchronous (TierHighlighted) path and syncFindScan's asynchronous
 // (TierPlainText) one, once a match set actually exists either way.
 func (v *Preview) seedFindCurrent(e *openfiles.Entry) {
-	startLine := currentTopLine(e) - 1
+	startLine := e.TopLine() - 1
 	idx := 0
 	for i, m := range e.FindMatches {
 		if m.Line >= startLine {

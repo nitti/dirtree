@@ -1033,3 +1033,85 @@ func TestReloadCancelsAndClearsInFlightFindScan(t *testing.T) {
 		t.Fatalf("expected reload to cancel and clear an in-flight find scan, got %v", e.FindScan)
 	}
 }
+
+// --- Session persistence (TESTING.md "Session persistence (§6.5)") ---
+
+func TestRestoreAppendsWithoutDisplayingOrStreaming(t *testing.T) {
+	dir := t.TempDir()
+	a := writeFile(t, dir, "a.txt", []byte("a\n"))
+	b := writeFile(t, dir, "b.txt", []byte("b\n"))
+
+	l := New()
+	for _, p := range []string{a, b} {
+		if res := l.Restore(p, preview.DefaultByteCap); res.Outcome != Opened {
+			t.Fatalf("expected opened result, got %+v", res)
+		}
+	}
+	if len(l.Entries) != 2 || l.Entries[0].Path != a || l.Entries[1].Path != b {
+		t.Fatalf("expected entries in restore order, got %v", l.Entries)
+	}
+	if l.Displayed != -1 {
+		t.Fatalf("expected nothing displayed, got %d", l.Displayed)
+	}
+	for _, e := range l.Entries {
+		if e.Stream != nil {
+			t.Fatalf("expected no background stream before display for %s", e.Path)
+		}
+	}
+
+	l.Display(1)
+	if l.Entries[1].Stream == nil {
+		t.Fatal("expected displaying a restored entry to start its background stream")
+	}
+	if l.Entries[0].Stream != nil {
+		t.Fatal("expected the undisplayed entry to still have no stream")
+	}
+}
+
+func TestRestoreFailsForUnreadablePath(t *testing.T) {
+	l := New()
+	res := l.Restore(filepath.Join(t.TempDir(), "gone.txt"), preview.DefaultByteCap)
+	if res.Outcome != Failed || res.Message == "" {
+		t.Fatalf("expected failed result with a message, got %+v", res)
+	}
+	if len(l.Entries) != 0 {
+		t.Fatalf("expected no entry created, got %d", len(l.Entries))
+	}
+}
+
+func TestRestoreSkipsDuplicatePath(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "a.txt", []byte("a\n"))
+	l := New()
+	l.Restore(path, preview.DefaultByteCap)
+	l.Restore(path, preview.DefaultByteCap)
+	if len(l.Entries) != 1 {
+		t.Fatalf("expected one entry, got %d", len(l.Entries))
+	}
+}
+
+// TestRemoveDisplayedStartsSuccessorStream guards Remove's hand-off to a
+// restored entry that has never been displayed: it becomes displayed,
+// so it needs its background pass started like any other display.
+func TestRemoveDisplayedStartsSuccessorStream(t *testing.T) {
+	dir := t.TempDir()
+	l := New()
+	l.Restore(writeFile(t, dir, "a.txt", []byte("a\n")), preview.DefaultByteCap)
+	l.Restore(writeFile(t, dir, "b.txt", []byte("b\n")), preview.DefaultByteCap)
+	l.Display(0)
+
+	l.Remove(0)
+	if l.Displayed != 0 || l.Entries[0].Stream == nil {
+		t.Fatalf("expected the promoted entry displayed with a stream, got displayed=%d stream=%v", l.Displayed, l.Entries[0].Stream)
+	}
+}
+
+func TestTopLinePrefersPendingRestoreLine(t *testing.T) {
+	e := &Entry{RestoreLine: 42}
+	if got := e.TopLine(); got != 42 {
+		t.Fatalf("expected pending RestoreLine 42, got %d", got)
+	}
+	e.RestoreLine = 0
+	if got := e.TopLine(); got != 1 {
+		t.Fatalf("expected 1 for a never-laid-out entry, got %d", got)
+	}
+}

@@ -60,6 +60,12 @@ type Entry struct {
 	// displayed again.
 	Scroll int
 
+	// RestoreLine is a 1-based source line carried over from a previous
+	// session (SPEC.md §6.5), to scroll to once this entry's content is
+	// ready and it's next laid out — the scroll target can't be resolved
+	// to a display row before then. 0 means nothing is pending.
+	RestoreLine int
+
 	// Rows/FirstRow/RowsWidth cache the last-computed line-wrap for this
 	// entry (SPEC.md §2.1's "recomputed whenever the available width
 	// changes"); RowsWidth is the width the cache was computed for, 0
@@ -180,9 +186,14 @@ const ResidentCap = 4
 // residency purposes, evicting the least-recently-displayed entry's
 // Lines/Segs once more than ResidentCap entries have been displayed.
 // Called every time an entry becomes displayed — newly opened, reused
-// by path, or switched to — so the resident set always reflects actual
-// recent viewing, not list order or open order.
+// by path, switched to, or promoted by Remove — so the resident set
+// always reflects actual recent viewing, not list order or open order.
+// Also starts e's background pass if it hasn't been yet (Restore
+// defers it to here).
 func (l *List) touchResident(e *Entry) {
+	if e.Stream == nil && e.Tier != preview.TierBinary {
+		e.Stream = preview.StartStream(e.Path, e.Tier)
+	}
 	for i, r := range l.resident {
 		if r == e {
 			l.resident = append(l.resident[:i], l.resident[i+1:]...)
@@ -297,6 +308,18 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 		return OpenResult{Outcome: Failed, Message: preview.ErrText(err)}
 	}
 
+	e := newEntry(path, binary)
+	l.Entries = append(l.Entries, e)
+	l.Displayed = len(l.Entries) - 1
+	l.touchResident(e)
+	return OpenResult{Outcome: Opened, Entry: e}
+}
+
+// newEntry builds an entry for a path ReadCapped has already found
+// readable, with its tier decided but its background pass not yet
+// started — touchResident starts that once the entry is first
+// displayed.
+func newEntry(path string, binary bool) *Entry {
 	e := &Entry{Path: path, FindCurrent: -1, HexFindCurrent: -1}
 	var size int64
 	if info, err := os.Stat(path); err == nil {
@@ -308,12 +331,44 @@ func (l *List) Open(path string, capBytes int64) OpenResult {
 		e.Tier = preview.TierBinary
 	} else {
 		e.Tier = preview.TierFor(size)
-		e.Stream = preview.StartStream(path, e.Tier)
 	}
+	return e
+}
+
+// Restore appends an entry for path the way Open does — including
+// failing, with no entry created, if the file can't be read — but
+// without displaying it, and without starting its background pass
+// until it's first displayed (SPEC.md §6.5). Reopening a previous
+// session's files this way means a long saved list doesn't read and
+// highlight every one of them at startup, holding all of their content
+// outside ResidentCap's bound, only to show one. A path that's already
+// open is left alone and reported as opened.
+func (l *List) Restore(path string, capBytes int64) OpenResult {
+	for _, e := range l.Entries {
+		if e.Path == path {
+			return OpenResult{Outcome: Opened, Entry: e}
+		}
+	}
+	_, binary, err := preview.ReadCapped(path, capBytes)
+	if err != nil {
+		return OpenResult{Outcome: Failed, Message: preview.ErrText(err)}
+	}
+	e := newEntry(path, binary)
 	l.Entries = append(l.Entries, e)
-	l.Displayed = len(l.Entries) - 1
-	l.touchResident(e)
 	return OpenResult{Outcome: Opened, Entry: e}
+}
+
+// TopLine returns the 1-based source line at the top of e's viewport
+// as of its last-computed wrap, or RestoreLine if a restored position
+// hasn't been applied yet — 1 for an entry that's never been laid out.
+func (e *Entry) TopLine() int {
+	if e.RestoreLine > 0 {
+		return e.RestoreLine
+	}
+	if e.Rows != nil && e.Scroll >= 0 && e.Scroll < len(e.Rows) {
+		return e.WindowStartLine + e.Rows[e.Scroll].SourceLine + 1
+	}
+	return e.WindowStartLine + 1
 }
 
 // Reload checks every open entry against current disk state (SPEC.md
@@ -466,6 +521,7 @@ func (l *List) Remove(i int) (newSelected int) {
 	switch {
 	case wasDisplayed:
 		l.Displayed = newIdx
+		l.touchResident(l.Entries[newIdx])
 	case l.Displayed > i:
 		l.Displayed--
 	}

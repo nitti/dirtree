@@ -13,7 +13,9 @@ package ui
 
 import (
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -182,6 +184,11 @@ type App struct {
 	quitConfirmed   bool
 
 	quit bool
+
+	// sessionPath is where RestoreSession loaded the open-files list
+	// from and where Run saves it back on exit (SPEC.md §6.5); "" means
+	// the session isn't persisted at all.
+	sessionPath string
 }
 
 // New builds a new App rooted at rootPath. It does not touch the
@@ -273,16 +280,17 @@ func (a *App) handleFSChange() {
 		a.Browser.FlagErrorFlashes(newlyErrored)
 	}
 	if reloaded := a.files.Reload(previewByteCap); len(reloaded) > 0 {
-		msg, boldRanges := reloadToastMessage(reloaded)
+		msg, boldRanges := namesToastMessage(reloaded, " reloaded (changed on disk)")
 		a.showToast(msg, boldRanges...)
 	}
 }
 
-// reloadToastMessage formats the names of one or more just-reloaded
-// open files (SPEC.md §6.1a) into the transient notification text,
+// namesToastMessage formats one or more file names followed by suffix
+// into transient notification text — e.g. just-reloaded open files
+// (SPEC.md §6.1a), or saved ones that couldn't be reopened (§6.5) —
 // along with the rune ranges each name occupies so the caller can
 // render them bold for easier visual scanning.
-func reloadToastMessage(names []string) (string, [][2]int) {
+func namesToastMessage(names []string, suffix string) (string, [][2]int) {
 	var b strings.Builder
 	ranges := make([][2]int, 0, len(names))
 	for i, name := range names {
@@ -293,7 +301,7 @@ func reloadToastMessage(names []string) (string, [][2]int) {
 		b.WriteString(name)
 		ranges = append(ranges, [2]int{start, len([]rune(b.String()))})
 	}
-	b.WriteString(" reloaded (changed on disk)")
+	b.WriteString(suffix)
 	return b.String(), ranges
 }
 
@@ -351,6 +359,14 @@ func (a *App) Run() error {
 	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
 
+	// SPEC.md §6.5: a closed terminal or pane (SIGHUP) or an external
+	// kill (SIGTERM) ends the session the same way quitting does, so the
+	// open-files list is still saved — and the terminal still restored
+	// by screen.Fini — rather than the process dying mid-loop.
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGHUP, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
 	var watchEvents <-chan struct{}
 	if a.watcher != nil {
 		watchEvents = a.watcher.Events
@@ -381,6 +397,8 @@ func (a *App) Run() error {
 				a.QuickOpen.RefreshMatches()
 			}
 			a.draw()
+		case <-signals:
+			a.quit = true
 		case out := <-a.Search.Done:
 			a.Search.ApplyOutcome(out)
 			a.draw()
@@ -422,6 +440,7 @@ func (a *App) Run() error {
 			ticker.Reset(tickInterval)
 		}
 	}
+	a.saveSession()
 	return nil
 }
 

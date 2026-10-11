@@ -91,8 +91,9 @@ func (v *Preview) scroll(delta int) {
 		return
 	}
 	width := v.computedWidth()
+	v.applyRestoreLine(e, width)
 	if e.Tier == preview.TierPlainText {
-		cur := currentTopLine(e)
+		cur := e.TopLine()
 		target := clamp(cur+delta, 1, bestLineCount(e))
 		if target == cur {
 			v.bumpEdge(e, delta)
@@ -151,8 +152,29 @@ func (v *Preview) ScrollToLine(e *openfiles.Entry, n int) {
 	if !contentReady(e) {
 		return
 	}
+	e.RestoreLine = 0
 	width := v.computedWidth()
 	n = clamp(n, 1, bestLineCount(e))
+	if e.Tier == preview.TierPlainText {
+		v.ensureWindow(e, width, n)
+	} else {
+		v.ensureWrapped(e, width)
+	}
+	v.setScrollToLine(e, n)
+}
+
+// applyRestoreLine scrolls e to the source line a previous session left
+// it at (SPEC.md §6.5), if one is still pending, laying it out at width
+// first. Called once e's content is ready — the earliest a source line
+// can be resolved to a display row — from both drawing and scrolling,
+// whichever reaches it first, so a scroll key pressed in between moves
+// relative to the restored position rather than being overridden by it.
+func (v *Preview) applyRestoreLine(e *openfiles.Entry, width int) {
+	if e.RestoreLine == 0 {
+		return
+	}
+	n := clamp(e.RestoreLine, 1, bestLineCount(e))
+	e.RestoreLine = 0
 	if e.Tier == preview.TierPlainText {
 		v.ensureWindow(e, width, n)
 	} else {
@@ -174,17 +196,6 @@ func (v *Preview) setScrollToLine(e *openfiles.Entry, n int) {
 
 func (v *Preview) maxScroll(e *openfiles.Entry, viewportHeight int) int {
 	return max(len(e.Rows)-viewportHeight, 0)
-}
-
-// currentTopLine returns the 1-based source line currently at the top of
-// e's viewport, derived from e.Scroll's row within e's currently-loaded
-// window — used to compute a TierPlainText entry's scroll target in
-// source-line units (§8).
-func currentTopLine(e *openfiles.Entry) int {
-	if e.Rows != nil && e.Scroll >= 0 && e.Scroll < len(e.Rows) {
-		return e.WindowStartLine + e.Rows[e.Scroll].SourceLine + 1
-	}
-	return e.WindowStartLine + 1
 }
 
 // bestLineCount returns the best currently-known total line count for e:
