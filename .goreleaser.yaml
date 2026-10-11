@@ -52,9 +52,14 @@ homebrew_casks:
     directory: Casks
     homepage: "https://github.com/nitti/dirtree"
     description: "Terminal directory-tree browser: progressive-disclosure navigation, fuzzy-finder jump mode, syntax-highlighted preview"
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/dirtree"]
-          end
+    # The binary is unsigned, so clear the quarantine flag macOS sets on
+    # downloads; otherwise Gatekeeper refuses to run it. Written as a
+    # custom_block because Homebrew 7 deprecates Ruby `postflight` blocks
+    # (what GoReleaser's `hooks.post.install` generates) in favor of the
+    # declarative `postflight_steps` DSL, which GoReleaser can't emit yet.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{" }}staged_path{{ "}}" }}/dirtree"]
+        end
+      end
