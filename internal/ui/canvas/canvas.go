@@ -39,18 +39,10 @@ var (
 	// the legend or dropping its keybinding hint — the entry is still
 	// legible, just visually deprioritized against the rest of the row.
 	StyleHeaderDim = StyleHeader.Dim(true)
-	// StyleHeaderQuit replaces StyleHeader while the hold-to-quit
-	// gesture (SPEC.md §5.2) is in progress: a saturated red background
-	// deliberately breaks from the rest of the header/title bar's
-	// otherwise subdued palette, since this is the one moment the app
-	// is about to discard the session's state and is worth demanding
-	// attention rather than staying quiet about it — the sole
-	// intentional exception to §5.3's "subtle, not flashy" default.
-	StyleHeaderQuit = tcell.StyleDefault.Background(tcell.ColorRed).Foreground(tcell.ColorWhite).Bold(true)
-	StyleFileTitle  = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
-	StyleError      = tcell.StyleDefault.Foreground(tcell.ColorRed)
-	StyleBadge      = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
-	StyleFindMatch  = tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
+	StyleFileTitle = tcell.StyleDefault.Background(tcell.ColorDarkSlateGray).Foreground(tcell.ColorWhite)
+	StyleError     = tcell.StyleDefault.Foreground(tcell.ColorRed)
+	StyleBadge     = tcell.StyleDefault.Background(tcell.ColorOrange).Foreground(tcell.ColorBlack)
+	StyleFindMatch = tcell.StyleDefault.Background(tcell.ColorYellow).Foreground(tcell.ColorBlack)
 	// StyleFindCurrent marks in-file find's active match (§2.4), and
 	// doubles as the "this query unambiguously identifies exactly one
 	// row" highlight for quick open (§4.2) and jump to file (§4.3) —
@@ -448,56 +440,12 @@ func (c *Canvas) DrawHeaderMode(w int, label string, entries []LegendEntry) {
 	}
 }
 
-// DrawHeaderQuitting draws the hold-to-quit gesture's header/title bar
-// variant (SPEC.md §5.2): the full row in StyleHeaderQuit with message
-// right-aligned, its left edge fading away over hiddenPrefix columns —
-// the same "anchored, directional motion" fade convention DrawCornerBadge
-// and internal/toast use (§5.3), just applied to the whole row's width
-// rather than to a corner string's own rune count, so the row's right
-// edge (where message sits) stays anchored while its left edge visibly
-// erodes as the hold progresses. Columns below hiddenPrefix are left
-// untouched, so whatever the caller already cleared/drew there (a blank
-// frame, per draw()'s per-frame Clear) shows through.
-func (c *Canvas) DrawHeaderQuitting(w int, message string, hiddenPrefix int) {
-	for x := hiddenPrefix; x < w; x++ {
-		c.Screen.SetContent(x, 0, ' ', nil, StyleHeaderQuit)
-	}
-	msg := []rune(message)
-	start := w - len(msg)
-	for i, r := range msg {
-		x := start + i
-		if x >= hiddenPrefix && x < w {
-			c.Screen.SetContent(x, 0, r, nil, StyleHeaderQuit)
-		}
-	}
-}
-
-// DrawQuittingDim dims every already-drawn cell in a rectangle (applying
-// the same StyleDim attribute StyleHeaderDim etc. already use elsewhere)
-// for as long as the hold-to-quit gesture is in progress, the content-area
-// counterpart to the header bar's own row-0 erosion — a plain on/off dim
-// rather than a gradual blend, since no color-interpolation primitive
-// exists anywhere in this codebase and one isn't worth inventing solely
-// for this. Reads back whatever the caller already drew via Get so
-// existing styling (syntax highlighting, the file title bar) dims in
-// place rather than being erased.
-func (c *Canvas) DrawQuittingDim(x0, y0, w, h int) {
-	for y := y0; y < y0+h; y++ {
-		for x := x0; x < x0+w; x++ {
-			str, style, _ := c.Screen.Get(x, y)
-			r, _ := utf8.DecodeRuneInString(str)
-			c.Screen.SetContent(x, y, r, nil, style.Dim(true))
-		}
-	}
-}
-
 // FlashRow briefly reverses a single already-drawn row's video (fg/bg
 // swapped per cell, via the same Reverse attribute StyleSelected already
 // uses for cursor-position highlighting) — used for the scroll-edge
 // "bump" flash (SPEC.md §2.1) when Up/Down/Page Up/Page Down is pressed
 // while already at the top or bottom of the document. Reads back
-// whatever the caller already drew via Get, the same technique
-// DrawQuittingDim uses, so a highlighted row's per-token syntax colors
+// whatever the caller already drew via Get, so a highlighted row's per-token syntax colors
 // still show through (swapped, not replaced) rather than being flattened
 // to one flat highlight color.
 func (c *Canvas) FlashRow(x0, y, w int) {

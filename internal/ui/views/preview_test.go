@@ -38,16 +38,14 @@ func TestGotoLineBlockedOnlyWhenStreamPresentAndNotDone(t *testing.T) {
 	}
 }
 
-// TestHandleKeyQReturnsActionQuitKey guards the primary preview view's
-// half of the hold-to-quit gesture (SPEC.md §5.2): `q` never quits by
-// itself — it only reports ActionQuitKey so App's dispatcher can
-// progress its own hold timer, actually quitting only once `q` has been
-// held continuously for the full hold duration.
-func TestHandleKeyQReturnsActionQuitKey(t *testing.T) {
+// TestHandleKeyQReturnsActionQuit guards that `q` at the primary
+// preview view reports ActionQuit for App's dispatcher to act on
+// (SPEC.md §7).
+func TestHandleKeyQReturnsActionQuit(t *testing.T) {
 	v := &Preview{Shared: &Shared{Files: openfiles.New()}}
 	ev := tcell.NewEventKey(tcell.KeyRune, 'q', tcell.ModNone)
-	if got := v.HandleKey(ev); got != ActionQuitKey {
-		t.Fatalf("HandleKey('q') = %v, want ActionQuitKey", got)
+	if got := v.HandleKey(ev); got != ActionQuit {
+		t.Fatalf("HandleKey('q') = %v, want ActionQuit", got)
 	}
 }
 

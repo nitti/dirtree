@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
 	"github.com/nitti/dirtree/internal/preview"
 	"github.com/nitti/dirtree/internal/spinner"
 	"github.com/nitti/dirtree/internal/toast"
@@ -19,14 +18,6 @@ import (
 // check (below) can find it in the fitted legend text without
 // duplicating the literal.
 const switchFilesLegendText = "[tab] switch files"
-
-// quitHoldWord is the "HOLD" inside previewLegend's quit entry
-// ("[HOLD q] quit"), broken out as its own constant so
-// boldHoldInQuitLegend's substring search doesn't duplicate the
-// literal. Capitalized (unlike the rest of the legend, which is
-// lowercase) so it reads as an imperative emphasis on the one entry
-// that isn't a simple single-keypress binding.
-const quitHoldWord = "HOLD"
 
 var (
 	// previewLegend is the primary preview view's app-wide legend
@@ -41,12 +32,8 @@ var (
 		{Text: "[o] quick open", Priority: 2},
 		{Text: "[b] browse", Priority: 1},
 		{Text: "[s] search", Priority: 2},
-		{Text: "[HOLD q] quit", Priority: 1},
+		{Text: "[q] quit", Priority: 1},
 	}
-	// quitHoldMessage is drawn right-aligned on the header/title bar in
-	// place of the usual root path/legend while the hold-to-quit
-	// gesture (SPEC.md §5.2) is in progress.
-	quitHoldMessage = "quitting..."
 )
 
 // draw renders one frame.
@@ -74,9 +61,6 @@ func (a *App) draw() {
 	default:
 		a.drawPreviewHeader(w)
 		a.Preview.Draw(0, 1, w, h-1, true)
-		if !a.quitHoldStart.IsZero() {
-			a.shared.Canvas.DrawQuittingDim(0, 1, w, h-1)
-		}
 	}
 	a.drawBadge(w, h)
 	a.drawToast(w, h)
@@ -271,21 +255,6 @@ func shellAbbreviate(path string) string {
 // rather than leaving four keys visibly advertised that this key press
 // won't do anything.
 func (a *App) drawPreviewHeader(w int) {
-	// The quitting variant shows for exactly as long as quitHoldStart is
-	// non-zero (SPEC.md §5.2) — the same "is `q` still down" state
-	// checkQuitHoldRelease itself maintains via quitHoldReleaseGap, not a
-	// separate, shorter threshold computed independently here. An earlier
-	// attempt at a shorter, visual-only recency check made the header
-	// flicker throughout an entire genuine hold whenever the terminal's
-	// real auto-repeat interval happened to exceed that guessed
-	// threshold; tying the header to the exact same state the functional
-	// release check maintains means the header is visible for precisely
-	// as long as the app itself believes the key is down, no more, no
-	// less, regardless of any particular terminal's repeat timing.
-	if !a.quitHoldStart.IsZero() {
-		a.drawQuitHoldHeader(w)
-		return
-	}
 	if a.shared.HelpVisible {
 		a.shared.Canvas.DrawHeaderMode(w, a.rootLabel(), canvas.HideKeysLegend)
 		return
@@ -296,57 +265,9 @@ func (a *App) drawPreviewHeader(w int) {
 	}
 	if len(a.shared.Files.Entries) == 0 {
 		a.shared.Canvas.DrawHeaderDimmed(w, a.rootLabel(), previewLegend, switchFilesLegendText)
-		a.boldHoldInQuitLegend(w)
 		return
 	}
 	a.shared.Canvas.DrawHeaderMode(w, a.rootLabel(), previewLegend)
-	a.boldHoldInQuitLegend(w)
-}
-
-// boldHoldInQuitLegend re-draws "HOLD" (within previewLegend's quit
-// entry, "[HOLD q] quit") in canvas.StyleHeaderMode, layered on top of
-// an already-drawn header/title bar row — calling out that quitting
-// takes holding the key down, not a single tap, the one entry in this
-// legend whose mechanic differs from every other single-press
-// keybinding shown alongside it. Only called from the two
-// drawPreviewHeader branches where the legend renders at (at least
-// partly) normal weight; the whole-legend-dimmed open-files-overlay
-// case and the help overlay's HideKeysLegend replacement (which has no
-// quit entry at all) skip it themselves.
-func (a *App) boldHoldInQuitLegend(w int) {
-	text, _ := canvas.LegendFit(w, a.rootLabel(), previewLegend)
-	a.boldQuitHoldWord(0, 0, text, canvas.StyleHeaderMode)
-}
-
-// boldQuitHoldWord re-draws quitHoldWord ("HOLD") within text at row
-// y0 (starting at column x0), in style, if present — a no-op
-// otherwise. Factored out so the header/title bar (boldHoldInQuitLegend,
-// above) and the keys overview popup (drawHelp, help.go) apply the
-// exact same emphasis to the same previewLegend entry through their
-// two different draw paths, instead of each hand-rolling its own
-// substring search that could drift out of sync.
-func (a *App) boldQuitHoldWord(x0, y0 int, text string, style tcell.Style) {
-	runes, target := []rune(text), []rune(quitHoldWord)
-	for i := 0; i+len(target) <= len(runes); i++ {
-		if string(runes[i:i+len(target)]) == quitHoldWord {
-			a.shared.Canvas.DrawText(x0+i, y0, len(target), quitHoldWord, style)
-			return
-		}
-	}
-}
-
-// drawQuitHoldHeader replaces the header/title bar with the hold-to-quit
-// gesture's attention-grabbing variant (SPEC.md §5.2) while `q` is held:
-// the whole row in canvas.StyleHeaderQuit with quitHoldMessage
-// right-aligned, fading away left-to-right (toast.Decide, reusing §5.3's
-// fade convention with a zero display duration so it starts fading
-// immediately) over quitHoldDuration as the hold progresses — releasing
-// early, anywhere in the fade, aborts the gesture the same as releasing
-// before it started, so the visible fade is a direct read of how much
-// longer the key must stay down.
-func (a *App) drawQuitHoldHeader(w int) {
-	_, hidden := toast.Decide(time.Since(a.quitHoldStart), 0, quitHoldDuration, w)
-	a.shared.Canvas.DrawHeaderQuitting(w, quitHoldMessage, hidden)
 }
 
 // drawBadge renders the bottom-right delayed-loading indicator badge

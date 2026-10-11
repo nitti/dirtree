@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -62,8 +61,7 @@ func findSpan(t *testing.T, text, target string) (start, end int) {
 // files" legend entry's dim-when-empty behavior: with no open files,
 // its own columns render in canvas.StyleHeaderDim while the rest of
 // the legend stays canvas.StyleHeader (aside from the root label,
-// bolded, and "hold" within the quit entry, also bolded — both
-// unrelated to this feature and covered by their own tests); with at
+// bolded — unrelated to this feature and covered by its own test); with at
 // least one file open, the entire legend (including that entry)
 // renders in the plain canvas.StyleHeader, matching the row's behavior
 // before this feature.
@@ -82,18 +80,15 @@ func TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty(t *testing.T) {
 
 	text := canvas.LegendText(w, a.rootLabel(), previewLegend)
 	leftStart, leftEnd := findSpan(t, text, a.rootLabel())
-	holdStart, holdEnd := findSpan(t, text, quitHoldWord)
 	targetStart, targetEnd := findSpan(t, text, switchFilesLegendText)
 	for x := range w {
 		style := cellStyle(sim, x, 0)
 		switch {
 		case x >= leftStart && x < leftEnd && style != canvas.StyleHeaderMode:
 			t.Errorf("empty list: column %d (inside root label) has style %v, want StyleHeaderMode", x, style)
-		case x >= holdStart && x < holdEnd && style != canvas.StyleHeaderMode:
-			t.Errorf("empty list: column %d (inside %q) has style %v, want StyleHeaderMode", x, quitHoldWord, style)
 		case x >= targetStart && x < targetEnd && style != canvas.StyleHeaderDim:
 			t.Errorf("empty list: column %d (inside %q) has style %v, want StyleHeaderDim", x, switchFilesLegendText, style)
-		case (x < leftStart || x >= leftEnd) && (x < holdStart || x >= holdEnd) && (x < targetStart || x >= targetEnd) && style != canvas.StyleHeader:
+		case (x < leftStart || x >= leftEnd) && (x < targetStart || x >= targetEnd) && style != canvas.StyleHeader:
 			t.Errorf("empty list: column %d has style %v, want StyleHeader", x, style)
 		}
 	}
@@ -117,141 +112,10 @@ func TestDrawPreviewHeaderDimsSwitchFilesWhenEmpty(t *testing.T) {
 			if style != canvas.StyleHeaderMode {
 				t.Errorf("non-empty list: column %d (inside root label) has style %v, want StyleHeaderMode", x, style)
 			}
-		case x >= holdStart && x < holdEnd:
-			if style != canvas.StyleHeaderMode {
-				t.Errorf("non-empty list: column %d (inside %q) has style %v, want StyleHeaderMode", x, quitHoldWord, style)
-			}
 		default:
 			if style != canvas.StyleHeader {
 				t.Errorf("non-empty list: column %d has style %v, want plain StyleHeader (nothing dimmed)", x, style)
 			}
-		}
-	}
-}
-
-// TestDrawQuitHoldHeaderFadesLeftToRight guards the hold-to-quit
-// gesture's header/title bar variant (SPEC.md §5.2): at the start of
-// the hold nothing has faded yet, partway through the hold the row's
-// left edge has faded while quitHoldMessage's right-anchored text
-// still stands, and by the end of quitHoldDuration the entire row has
-// faded, all in canvas.StyleHeaderQuit rather than the normal header
-// style.
-func TestDrawQuitHoldHeaderFadesLeftToRight(t *testing.T) {
-	sim := tcell.NewSimulationScreen("")
-	if err := sim.Init(); err != nil {
-		t.Fatal(err)
-	}
-	w, h := 60, 5
-	sim.SetSize(w, h)
-
-	a := &App{rootPath: "/root", shared: &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)}}
-
-	blankRow := func() bool {
-		return strings.TrimSpace(rowText(sim, 0, w)) == ""
-	}
-
-	a.quitHoldStart = time.Now()
-	a.quitHoldLastKey = time.Now()
-	a.shared.Canvas.Clear()
-	a.drawPreviewHeader(w)
-	sim.Show()
-	for x := range w {
-		if style := cellStyle(sim, x, 0); style != canvas.StyleHeaderQuit {
-			t.Errorf("hold start: column %d has style %v, want StyleHeaderQuit", x, style)
-		}
-	}
-	if blankRow() {
-		t.Fatal("hold start: row is entirely blank, want the quitting message visible")
-	}
-
-	a.quitHoldStart = time.Now().Add(-quitHoldDuration / 2)
-	a.quitHoldLastKey = time.Now()
-	a.shared.Canvas.Clear()
-	a.drawPreviewHeader(w)
-	sim.Show()
-	row := rowText(sim, 0, w)
-	if row[0] != ' ' {
-		t.Errorf("hold midpoint: column 0 = %q, want faded (blank)", row[0])
-	}
-	if !strings.Contains(row, quitHoldMessage) {
-		t.Errorf("hold midpoint: row %q missing right-anchored %q", row, quitHoldMessage)
-	}
-
-	a.quitHoldStart = time.Now().Add(-quitHoldDuration)
-	a.quitHoldLastKey = time.Now()
-	a.shared.Canvas.Clear()
-	a.drawPreviewHeader(w)
-	sim.Show()
-	if !blankRow() {
-		t.Errorf("hold complete: row %q, want fully faded (blank)", rowText(sim, 0, w))
-	}
-}
-
-// TestDrawPreviewHeaderShowsQuitVariantOnFirstQEvent guards the
-// responsiveness priority for this gesture (SPEC.md §5.2): the header
-// shows the quitting variant immediately on the very first `q` event,
-// not only once a second one arrives — a deliberate tradeoff of a
-// possible brief flicker on a slow-auto-repeating terminal in exchange
-// for the header never lagging behind an actual key press.
-func TestDrawPreviewHeaderShowsQuitVariantOnFirstQEvent(t *testing.T) {
-	sim := tcell.NewSimulationScreen("")
-	if err := sim.Init(); err != nil {
-		t.Fatal(err)
-	}
-	w, h := 60, 5
-	sim.SetSize(w, h)
-
-	a := &App{
-		rootPath:        "/root",
-		shared:          &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)},
-		quitHoldStart:   time.Now(),
-		quitHoldLastKey: time.Now(),
-	}
-	a.drawPreviewHeader(w)
-	sim.Show()
-
-	for x := range w {
-		if style := cellStyle(sim, x, 0); style != canvas.StyleHeaderQuit {
-			t.Fatalf("column %d has style %v after a single `q` event, want StyleHeaderQuit shown immediately", x, style)
-		}
-	}
-}
-
-// TestDrawPreviewHeaderStaysVisibleAcrossOrdinaryRepeatGap guards the
-// fix for a real flicker bug (SPEC.md §5.2): the header's own show/hide
-// tracks quitHoldStart directly, with no separate, shorter recency
-// threshold of its own — an earlier design added one to make the header
-// feel snappier, but it flickered throughout an entire genuine hold on
-// any terminal whose real auto-repeat interval exceeded that guessed
-// threshold, since drawPreviewHeader would hide the header between
-// repeat events on a purely cosmetic timer unrelated to whether the key
-// was actually still down. Simulating a substantial but ordinary gap
-// since the last `q` event (well under quitHoldReleaseGap, so the
-// gesture itself is still considered held) must leave the header shown.
-func TestDrawPreviewHeaderStaysVisibleAcrossOrdinaryRepeatGap(t *testing.T) {
-	sim := tcell.NewSimulationScreen("")
-	if err := sim.Init(); err != nil {
-		t.Fatal(err)
-	}
-	w, h := 60, 5
-	sim.SetSize(w, h)
-
-	a := &App{
-		rootPath: "/root",
-		shared:   &views.Shared{Files: openfiles.New(), Canvas: canvas.New(sim)},
-		// quitHoldStart is "now" (no fade progress to worry about) —
-		// this test is purely about whether the header shows at all
-		// despite a substantial gap since the last `q` event, not about
-		// fade correctness (covered separately).
-		quitHoldStart:   time.Now(),
-		quitHoldLastKey: time.Now().Add(-(quitHoldReleaseGap / 2)),
-	}
-	a.drawPreviewHeader(w)
-	sim.Show()
-
-	for x := range w {
-		if style := cellStyle(sim, x, 0); style != canvas.StyleHeaderQuit {
-			t.Fatalf("column %d has style %v, want StyleHeaderQuit to stay visible across an ordinary gap between repeat events", x, style)
 		}
 	}
 }
@@ -335,7 +199,7 @@ func TestPreviewLegendOrder(t *testing.T) {
 		"[o] quick open",
 		"[b] browse",
 		"[s] search",
-		"[HOLD q] quit",
+		"[q] quit",
 	}
 	if len(previewLegend) != len(want) {
 		t.Fatalf("previewLegend has %d entries, want %d", len(previewLegend), len(want))
