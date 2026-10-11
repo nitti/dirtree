@@ -101,9 +101,11 @@ func Save(path string, s State) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name()) // no-op once renamed
+	// Removing the temp file is a no-op once it's been renamed, and on
+	// a failure path the original error is the one worth returning.
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
