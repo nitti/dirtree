@@ -341,8 +341,9 @@ func (v *Preview) drawContent(x0, y0, w, h int) {
 
 	gw := gutterWidth(e)
 	contentWidth := max(w-gw, 1)
+	v.applyRestoreLine(e, contentWidth)
 	if e.Tier == preview.TierPlainText {
-		v.ensureWindow(e, contentWidth, currentTopLine(e))
+		v.ensureWindow(e, contentWidth, e.TopLine())
 	} else {
 		v.ensureWrapped(e, contentWidth)
 	}

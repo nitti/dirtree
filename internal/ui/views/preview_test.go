@@ -557,7 +557,7 @@ func TestTierPlainTextScrollMovesBySourceLine(t *testing.T) {
 	v.drawContent(0, 0, 60, 10)
 
 	v.scroll(3)
-	if got := currentTopLine(e); got != 4 {
+	if got := e.TopLine(); got != 4 {
 		t.Fatalf("expected top line 4 after scrolling 3, got %d", got)
 	}
 }
@@ -672,7 +672,7 @@ func TestTierPlainTextGotoLineJumpsViaWindow(t *testing.T) {
 	v := newTestPreview(files, 60, 10)
 
 	v.ScrollToLine(e, 7)
-	if got := currentTopLine(e); got != 7 {
+	if got := e.TopLine(); got != 7 {
 		t.Fatalf("expected top line 7 after ScrollToLine(7), got %d", got)
 	}
 	if e.Lines[e.Scroll] != "line 7" {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/nitti/dirtree/internal/session"
 	"github.com/nitti/dirtree/internal/ui"
 )
 
@@ -42,6 +43,11 @@ func main() {
 	}
 
 	app := ui.New(abs)
+	// Without a home directory there's nowhere to keep the session
+	// (SPEC.md §6.5), so the app just runs without persisting it.
+	if sessionPath, err := session.FilePath(abs); err == nil {
+		app.RestoreSession(sessionPath)
+	}
 	if err := app.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "dirtree: %v\n", err)
 		os.Exit(1)
